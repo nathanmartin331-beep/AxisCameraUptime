@@ -1,7 +1,6 @@
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
-import createPgSession from "connect-pg-simple";
-import { Pool } from "pg";
+import FileStore from "session-file-store";
 import passport from "./auth";
 import authRoutes from "./authRoutes";
 import { registerRoutes } from "./routes";
@@ -9,19 +8,15 @@ import { setupVite, serveStatic, log } from "./vite";
 import { startCameraMonitoring } from "./cameraMonitor";
 
 const app = express();
-const PgSession = createPgSession(session);
+const SessionFileStore = FileStore(session);
 
-// PostgreSQL connection pool for sessions
-const pgPool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
-
-// Session configuration
+// Session configuration with file-based storage
 app.use(
   session({
-    store: new PgSession({
-      pool: pgPool,
-      tableName: "sessions",
+    store: new SessionFileStore({
+      path: "./sessions",
+      ttl: 30 * 24 * 60 * 60, // 30 days in seconds
+      retries: 0,
     }),
     secret: process.env.SESSION_SECRET || "your-secret-key-change-in-production",
     resave: false,
