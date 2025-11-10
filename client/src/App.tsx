@@ -13,61 +13,41 @@ import Cameras from "@/pages/Cameras";
 import NetworkScan from "@/pages/NetworkScan";
 import Reports from "@/pages/Reports";
 import Settings from "@/pages/Settings";
-import Login from "@/pages/Login";
-import Register from "@/pages/Register";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
 
 function Router() {
-  const { isAuthenticated, isLoading } = useAuth();
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center">
-          <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Loading...</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <Switch>
-      {!isAuthenticated ? (
-        <>
-          <Route path="/login" component={Login} />
-          <Route path="/register" component={Register} />
-          <Route path="/" component={Login} />
-        </>
-      ) : (
-        <>
-          <Route path="/" component={Dashboard} />
-          <Route path="/cameras" component={Cameras} />
-          <Route path="/cameras/:id" component={CameraDetail} />
-          <Route path="/scan" component={NetworkScan} />
-          <Route path="/reports" component={Reports} />
-          <Route path="/settings" component={Settings} />
-        </>
-      )}
+      <Route path="/" component={Dashboard} />
+      <Route path="/cameras" component={Cameras} />
+      <Route path="/cameras/:id" component={CameraDetail} />
+      <Route path="/scan" component={NetworkScan} />
+      <Route path="/reports" component={Reports} />
+      <Route path="/settings" component={Settings} />
       <Route component={NotFound} />
     </Switch>
   );
 }
 
 function AppContent() {
-  const { user, isAuthenticated } = useAuth();
+  const { user, isLoading, isAuthenticated } = useAuth();
   const style = {
     "--sidebar-width": "16rem",
   };
 
-  if (!isAuthenticated) {
+  // Show loading spinner while authentication is in progress
+  if (isLoading || !isAuthenticated) {
     return (
-      <>
-        <Router />
-        <Toaster />
-      </>
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-muted-foreground">
+            {isLoading ? "Initializing..." : "Authenticating..."}
+          </p>
+        </div>
+      </div>
     );
   }
 
@@ -89,7 +69,7 @@ function AppContent() {
                   onClick={async () => {
                     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
                     await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
-                    window.location.href = "/login";
+                    window.location.href = "/";
                   }}
                   data-testid="button-logout"
                 >

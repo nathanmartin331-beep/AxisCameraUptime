@@ -155,7 +155,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/cameras/uptime/batch", requireAuth, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const cameras = await storage.getCamerasByUserId(userId);
       const days = req.query.days ? parseInt(req.query.days as string) : 30;
 
@@ -178,7 +178,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/uptime/events", requireAuth, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const cameras = await storage.getCamerasByUserId(userId);
       const days = req.query.days ? parseInt(req.query.days as string) : 30;
 
@@ -232,7 +232,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Dashboard summary route
   app.get("/api/dashboard/summary", requireAuth, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const cameras = await storage.getCamerasByUserId(userId);
 
       const totalCameras = cameras.length;
@@ -320,7 +320,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const cameras = parseCSV(csvContent);
 
       // Import cameras for the current user
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const imported = [];
 
       for (const camera of cameras) {
@@ -350,7 +350,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // CSV export routes
   app.get("/api/cameras/export", requireAuth, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const cameras = await storage.getCamerasByUserId(userId);
 
       const { generateCameraCSV } = await import("./csvUtils");
@@ -367,7 +367,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/cameras/export/uptime", requireAuth, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const cameras = await storage.getCamerasByUserId(userId);
 
       // Calculate uptime for each camera

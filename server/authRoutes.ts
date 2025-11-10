@@ -4,6 +4,8 @@ import { hashPassword, requireAuth } from "./auth";
 import { storage } from "./storage";
 import { insertUserSchema } from "@shared/schema";
 import { z } from "zod";
+import { getDefaultCredentials } from "./defaultUser";
+import bcrypt from "bcryptjs";
 
 const router = Router();
 
@@ -57,6 +59,40 @@ router.post("/register", async (req, res) => {
   }
 });
 
+// Auto-login endpoint (for local network deployment)
+router.post("/auto-login", async (req, res) => {
+  // Check if already logged in
+  if (req.isAuthenticated()) {
+    return res.json(req.user);
+  }
+
+  try {
+    // Get default user from database (regardless of password)
+    const credentials = getDefaultCredentials();
+    const user = await storage.getUserByEmail(credentials.email);
+    
+    if (!user) {
+      return res.status(500).json({ message: "Default user not found" });
+    }
+
+    // Directly create session without password authentication
+    // This allows auto-login to work even after password change
+    req.login(user, (loginErr) => {
+      if (loginErr) {
+        return res.status(500).json({ message: "Auto-login session creation failed" });
+      }
+      // Return safe user without password
+      console.log("User before destructuring:", user);
+      const { password, ...safeUser } = user;
+      console.log("Safe user after destructuring:", safeUser);
+      res.json(safeUser);
+    });
+  } catch (error) {
+    console.error("Auto-login error:", error);
+    res.status(500).json({ message: "Auto-login failed" });
+  }
+});
+
 // Login
 router.post("/login", (req, res, next) => {
   passport.authenticate("local", (err: any, user: any, info: any) => {
@@ -88,6 +124,45 @@ router.post("/logout", (req, res) => {
 // Get current user
 router.get("/me", requireAuth, (req, res) => {
   res.json(req.user);
+});
+
+// Change password
+router.post("/change-password", requireAuth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const userId = (req.user as any).id;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: "Current password and new password are required" });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({ message: "New password must be at least 8 characters long" });
+    }
+
+    // Get user with password
+    const user = await storage.getUserById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Verify current password
+    const isValid = await bcrypt.compare(currentPassword, user.password);
+    if (!isValid) {
+      return res.status(401).json({ message: "Current password is incorrect" });
+    }
+
+    // Hash new password
+    const hashedPassword = await hashPassword(newPassword);
+
+    // Update password
+    await storage.updateUser(userId, { password: hashedPassword });
+
+    res.json({ message: "Password changed successfully" });
+  } catch (error) {
+    console.error("Change password error:", error);
+    res.status(500).json({ message: "Failed to change password" });
+  }
 });
 
 export default router;
