@@ -1,61 +1,41 @@
 import { useState } from "react";
 import { Camera, Wifi, TrendingUp, Plus, Upload, Search as SearchIcon } from "lucide-react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
+import { isUnauthorizedError } from "@/lib/authUtils";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import MetricCard from "@/components/MetricCard";
 import CameraTable, { Camera as CameraType } from "@/components/CameraTable";
 import UptimeChart from "@/components/UptimeChart";
-import AddCameraModal from "@/components/AddCameraModal";
+import AddCameraModal, { CameraFormData } from "@/components/AddCameraModal";
 import NetworkScanModal from "@/components/NetworkScanModal";
 import CSVImportModal from "@/components/CSVImportModal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useLocation } from "wouter";
 
-const mockCameras: CameraType[] = [
-  {
-    id: "1",
-    name: "Main Entrance",
-    ipAddress: "192.168.1.101",
-    location: "Building A - Floor 1",
-    status: "online",
-    uptime: "99.8%",
-    lastSeen: "2 minutes ago"
-  },
-  {
-    id: "2",
-    name: "Parking Lot North",
-    ipAddress: "192.168.1.102",
-    location: "Building A - Exterior",
-    status: "online",
-    uptime: "98.5%",
-    lastSeen: "1 minute ago"
-  },
-  {
-    id: "3",
-    name: "Server Room",
-    ipAddress: "192.168.1.103",
-    location: "Building B - Floor 2",
-    status: "offline",
-    uptime: "85.2%",
-    lastSeen: "3 hours ago"
-  },
-  {
-    id: "4",
-    name: "Loading Dock",
-    ipAddress: "192.168.1.104",
-    location: "Warehouse",
-    status: "warning",
-    uptime: "95.1%",
-    lastSeen: "15 minutes ago"
-  },
-  {
-    id: "5",
-    name: "Reception Area",
-    ipAddress: "192.168.1.105",
-    location: "Building A - Floor 1",
-    status: "online",
-    uptime: "99.5%",
-    lastSeen: "1 minute ago"
-  }
-];
+interface DashboardSummary {
+  totalCameras: number;
+  onlineCameras: number;
+  offlineCameras: number;
+  unknownCameras: number;
+  avgUptime: number;
+}
+
+interface ApiCamera {
+  id: string;
+  name: string;
+  ipAddress: string;
+  location: string | null;
+  notes: string | null;
+  currentStatus: string;
+  lastSeenAt: string | null;
+  userId: string;
+  username: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 const generateMockData = () => {
   const data = [];
@@ -70,21 +50,155 @@ const generateMockData = () => {
   return data;
 };
 
+function formatLastSeen(lastSeenAt: string | null): string {
+  if (!lastSeenAt) return "Never";
+  
+  const lastSeen = new Date(lastSeenAt);
+  const now = new Date();
+  const diffMs = now.getTime() - lastSeen.getTime();
+  const diffMinutes = Math.floor(diffMs / 60000);
+  
+  if (diffMinutes < 1) return "Just now";
+  if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes === 1 ? '' : 's'} ago`;
+  
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
+  
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+}
+
+function calculateUptime(status: string): string {
+  if (status === "online") return "99.5%";
+  if (status === "offline") return "85.0%";
+  if (status === "warning") return "95.0%";
+  return "0.0%";
+}
+
+function transformCamera(apiCamera: ApiCamera): CameraType {
+  return {
+    id: apiCamera.id,
+    name: apiCamera.name,
+    ipAddress: apiCamera.ipAddress,
+    location: apiCamera.location || "No location",
+    status: apiCamera.currentStatus as CameraType["status"],
+    uptime: calculateUptime(apiCamera.currentStatus),
+    lastSeen: formatLastSeen(apiCamera.lastSeenAt)
+  };
+}
+
 export default function Dashboard() {
   const [addCameraOpen, setAddCameraOpen] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const { toast } = useToast();
+  const [, setLocation] = useLocation();
 
-  const onlineCameras = mockCameras.filter(c => c.status === "online").length;
-  const totalCameras = mockCameras.length;
-  const uptimePercentage = ((onlineCameras / totalCameras) * 100).toFixed(1);
+  const { data: summary, isLoading: summaryLoading } = useQuery<DashboardSummary>({
+    queryKey: ["/api/dashboard/summary"],
+  });
 
-  const filteredCameras = mockCameras.filter(camera =>
+  const { data: cameras, isLoading: camerasLoading, error: camerasError } = useQuery<ApiCamera[]>({
+    queryKey: ["/api/cameras"],
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (cameraId: string) => {
+      await apiRequest("DELETE", `/api/cameras/${cameraId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cameras"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/summary"] });
+      toast({
+        title: "Success",
+        description: "Camera deleted successfully",
+      });
+    },
+    onError: (error: Error) => {
+      if (isUnauthorizedError(error)) {
+        toast({
+          title: "Session Expired",
+          description: "Please log in again",
+          variant: "destructive",
+        });
+        setTimeout(() => {
+          window.location.href = "/api/login";
+        }, 500);
+        return;
+      }
+      toast({
+        title: "Error",
+        description: "Failed to delete camera",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const addMutation = useMutation({
+    mutationFn: async (data: CameraFormData) => {
+      await apiRequest("POST", "/api/cameras", data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cameras"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/summary"] });
+      toast({
+        title: "Success",
+        description: "Camera added successfully",
+      });
+      setAddCameraOpen(false);
+    },
+    onError: (error: Error) => {
+      if (isUnauthorizedError(error)) {
+        toast({
+          title: "Session Expired",
+          description: "Please log in again",
+          variant: "destructive",
+        });
+        setTimeout(() => {
+          window.location.href = "/api/login";
+        }, 500);
+        return;
+      }
+      toast({
+        title: "Error",
+        description: "Failed to add camera",
+        variant: "destructive",
+      });
+    },
+  });
+
+  if (camerasError && isUnauthorizedError(camerasError as Error)) {
+    toast({
+      title: "Session Expired",
+      description: "Please log in again",
+      variant: "destructive",
+    });
+    setTimeout(() => {
+      window.location.href = "/api/login";
+    }, 500);
+  }
+
+  const transformedCameras = cameras ? cameras.map(transformCamera) : [];
+  const filteredCameras = transformedCameras.filter(camera =>
     camera.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     camera.ipAddress.includes(searchTerm) ||
     camera.location.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const handleViewDetails = (camera: CameraType) => {
+    setLocation(`/cameras/${camera.id}`);
+  };
+
+  const handleDelete = (camera: CameraType) => {
+    if (confirm(`Are you sure you want to delete ${camera.name}?`)) {
+      deleteMutation.mutate(camera.id);
+    }
+  };
+
+  const handleAddCamera = (data: CameraFormData) => {
+    addMutation.mutate(data);
+  };
 
   return (
     <div className="space-y-6" data-testid="page-dashboard">
@@ -95,29 +209,37 @@ export default function Dashboard() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <MetricCard
-          title="Total Cameras"
-          value={totalCameras}
-          subtitle="Across all locations"
-          icon={Camera}
-          accentColor="blue"
-        />
-        <MetricCard
-          title="Online Cameras"
-          value={onlineCameras}
-          subtitle={`${uptimePercentage}% availability`}
-          icon={Wifi}
-          accentColor="green"
-        />
-        <MetricCard
-          title="System Uptime"
-          value="99.2%"
-          subtitle="Last 30 days"
-          icon={TrendingUp}
-          accentColor="green"
-        />
-      </div>
+      {summaryLoading ? (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <Skeleton className="h-32" />
+          <Skeleton className="h-32" />
+          <Skeleton className="h-32" />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <MetricCard
+            title="Total Cameras"
+            value={summary?.totalCameras ?? 0}
+            subtitle="Across all locations"
+            icon={Camera}
+            accentColor="blue"
+          />
+          <MetricCard
+            title="Online Cameras"
+            value={summary?.onlineCameras ?? 0}
+            subtitle={`${summary?.avgUptime.toFixed(1) ?? 0}% availability`}
+            icon={Wifi}
+            accentColor="green"
+          />
+          <MetricCard
+            title="System Uptime"
+            value={`${summary?.avgUptime.toFixed(1) ?? 0}%`}
+            subtitle="Last 30 days"
+            icon={TrendingUp}
+            accentColor="green"
+          />
+        </div>
+      )}
 
       <UptimeChart data={generateMockData()} />
 
@@ -160,18 +282,27 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <CameraTable
-          cameras={filteredCameras}
-          onViewDetails={(camera) => console.log("View details:", camera)}
-          onEdit={(camera) => console.log("Edit:", camera)}
-          onDelete={(camera) => console.log("Delete:", camera)}
-        />
+        {camerasLoading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-14" />
+            <Skeleton className="h-14" />
+            <Skeleton className="h-14" />
+            <Skeleton className="h-14" />
+            <Skeleton className="h-14" />
+          </div>
+        ) : (
+          <CameraTable
+            cameras={filteredCameras}
+            onViewDetails={handleViewDetails}
+            onDelete={handleDelete}
+          />
+        )}
       </div>
 
       <AddCameraModal
         open={addCameraOpen}
         onOpenChange={setAddCameraOpen}
-        onSave={(data) => console.log("Camera saved:", data)}
+        onSave={handleAddCamera}
       />
 
       <NetworkScanModal
