@@ -102,7 +102,13 @@ export default function UptimeChart({
         totalUptime = dayEnd - dayStart;
       }
     } else if (sortedEvents.length > 0) {
-      let currentStatus = priorEvent ? priorEvent.status : "offline";
+      let currentStatus: string;
+      if (priorEvent) {
+        currentStatus = priorEvent.status;
+      } else {
+        currentStatus = sortedEvents[0].status === "online" ? "offline" : "online";
+      }
+      
       let currentTime = dayStart;
 
       for (let i = 0; i < sortedEvents.length; i++) {
