@@ -25,7 +25,7 @@ export default function UptimeChart({
 }: UptimeChartProps) {
   const [selectedDays, setSelectedDays] = useState(days);
 
-  const { data: events, isLoading } = useQuery<any[]>({
+  const { data: eventData, isLoading } = useQuery<any>({
     queryKey: cameraId === "all" 
       ? ["/api/uptime/events", selectedDays]
       : ["/api/cameras", cameraId, "events", selectedDays],
@@ -47,9 +47,12 @@ export default function UptimeChart({
     enabled: true,
   });
 
-  const uptimeData: UptimeDataPoint[] = generateUptimeData(events || [], selectedDays);
+  const events = eventData?.events || [];
+  const priorEvent = eventData?.priorEvent || (eventData?.priorEvents && eventData.priorEvents[0]) || null;
+  
+  const uptimeData: UptimeDataPoint[] = generateUptimeData(events, selectedDays, priorEvent);
 
-  function generateUptimeData(events: any[], days: number): UptimeDataPoint[] {
+  function generateUptimeData(events: any[], days: number, initialPriorEvent?: any): UptimeDataPoint[] {
     const data: UptimeDataPoint[] = [];
     const now = new Date();
     const sortedEvents = [...events].sort((a, b) => 
@@ -71,7 +74,7 @@ export default function UptimeChart({
 
       const priorEvent = sortedEvents.filter(e => 
         new Date(e.timestamp).getTime() < date.getTime()
-      ).pop();
+      ).pop() || (i === days - 1 ? initialPriorEvent : undefined);
       
       const uptime = calculateDayUptime(dayEvents, date, nextDate, priorEvent);
       
