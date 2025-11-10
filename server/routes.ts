@@ -1,31 +1,21 @@
-// Reference: blueprint:javascript_log_in_with_replit for auth setup
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
+import { requireAuth } from "./auth";
 import { encryptPassword } from "./encryption";
 import { insertCameraSchema } from "@shared/schema";
+import type { SafeUser } from "./storage";
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Auth middleware
-  await setupAuth(app);
-
-  // Auth routes - Reference: blueprint:javascript_log_in_with_replit
-  app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const user = await storage.getUser(userId);
-      res.json(user);
-    } catch (error) {
-      console.error("Error fetching user:", error);
-      res.status(500).json({ message: "Failed to fetch user" });
-    }
-  });
+  // Get current user helper
+  function getUserId(req: any): string {
+    return (req.user as SafeUser).id;
+  }
 
   // Camera CRUD routes
-  app.get("/api/cameras", isAuthenticated, async (req: any, res) => {
+  app.get("/api/cameras", requireAuth, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = getUserId(req);
       const cameras = await storage.getCamerasByUserId(userId);
       
       // Don't send encrypted passwords to frontend
@@ -37,7 +27,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/cameras/:id", isAuthenticated, async (req: any, res) => {
+  app.get("/api/cameras/:id", requireAuth, async (req: any, res) => {
     try {
       const camera = await storage.getCameraById(req.params.id);
       
@@ -46,7 +36,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Verify ownership
-      if (camera.userId !== req.user.claims.sub) {
+      if (camera.userId !== getUserId(req)) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
@@ -58,9 +48,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/cameras", isAuthenticated, async (req: any, res) => {
+  app.post("/api/cameras", requireAuth, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = getUserId(req);
       const validatedData = insertCameraSchema.parse(req.body);
 
       // Encrypt password before storing
@@ -80,7 +70,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch("/api/cameras/:id", isAuthenticated, async (req: any, res) => {
+  app.patch("/api/cameras/:id", requireAuth, async (req: any, res) => {
     try {
       const camera = await storage.getCameraById(req.params.id);
       
@@ -88,7 +78,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Camera not found" });
       }
 
-      if (camera.userId !== req.user.claims.sub) {
+      if (camera.userId !== getUserId(req)) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
@@ -108,7 +98,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/cameras/:id", isAuthenticated, async (req: any, res) => {
+  app.delete("/api/cameras/:id", requireAuth, async (req: any, res) => {
     try {
       const camera = await storage.getCameraById(req.params.id);
       
@@ -116,7 +106,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Camera not found" });
       }
 
-      if (camera.userId !== req.user.claims.sub) {
+      if (camera.userId !== getUserId(req)) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
@@ -129,7 +119,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Uptime events routes
-  app.get("/api/cameras/:id/events", isAuthenticated, async (req: any, res) => {
+  app.get("/api/cameras/:id/events", requireAuth, async (req: any, res) => {
     try {
       const camera = await storage.getCameraById(req.params.id);
       
@@ -137,7 +127,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Camera not found" });
       }
 
-      if (camera.userId !== req.user.claims.sub) {
+      if (camera.userId !== getUserId(req)) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
@@ -163,7 +153,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/cameras/uptime/batch", isAuthenticated, async (req: any, res) => {
+  app.get("/api/cameras/uptime/batch", requireAuth, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const cameras = await storage.getCamerasByUserId(userId);
@@ -186,7 +176,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/uptime/events", isAuthenticated, async (req: any, res) => {
+  app.get("/api/uptime/events", requireAuth, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const cameras = await storage.getCamerasByUserId(userId);
@@ -218,7 +208,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/cameras/:id/uptime", isAuthenticated, async (req: any, res) => {
+  app.get("/api/cameras/:id/uptime", requireAuth, async (req: any, res) => {
     try {
       const camera = await storage.getCameraById(req.params.id);
       
@@ -226,7 +216,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Camera not found" });
       }
 
-      if (camera.userId !== req.user.claims.sub) {
+      if (camera.userId !== getUserId(req)) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
@@ -240,7 +230,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Dashboard summary route
-  app.get("/api/dashboard/summary", isAuthenticated, async (req: any, res) => {
+  app.get("/api/dashboard/summary", requireAuth, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const cameras = await storage.getCamerasByUserId(userId);
@@ -274,7 +264,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Manual camera check trigger
-  app.post("/api/cameras/:id/check", isAuthenticated, async (req: any, res) => {
+  app.post("/api/cameras/:id/check", requireAuth, async (req: any, res) => {
     try {
       const camera = await storage.getCameraById(req.params.id);
       
@@ -282,7 +272,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Camera not found" });
       }
 
-      if (camera.userId !== req.user.claims.sub) {
+      if (camera.userId !== getUserId(req)) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
@@ -295,7 +285,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Network scanning routes
-  app.post("/api/scan/subnet", isAuthenticated, async (req: any, res) => {
+  app.post("/api/scan/subnet", requireAuth, async (req: any, res) => {
     try {
       const { subnet, startRange, endRange } = req.body;
 
@@ -318,7 +308,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // CSV import route
-  app.post("/api/cameras/import", isAuthenticated, async (req: any, res) => {
+  app.post("/api/cameras/import", requireAuth, async (req: any, res) => {
     try {
       const { csvContent } = req.body;
 
@@ -358,7 +348,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // CSV export routes
-  app.get("/api/cameras/export", isAuthenticated, async (req: any, res) => {
+  app.get("/api/cameras/export", requireAuth, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const cameras = await storage.getCamerasByUserId(userId);
@@ -375,7 +365,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/cameras/export/uptime", isAuthenticated, async (req: any, res) => {
+  app.get("/api/cameras/export/uptime", requireAuth, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const cameras = await storage.getCamerasByUserId(userId);
