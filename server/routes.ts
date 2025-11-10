@@ -226,6 +226,119 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Network scanning routes
+  app.post("/api/scan/subnet", isAuthenticated, async (req: any, res) => {
+    try {
+      const { subnet, startRange, endRange } = req.body;
+
+      if (!subnet || !startRange || !endRange) {
+        return res.status(400).json({ message: "Missing required parameters" });
+      }
+
+      const { scanSubnet } = await import("./networkScanner");
+      const results = await scanSubnet(subnet, startRange, endRange);
+
+      res.json({
+        total: results.length,
+        found: results.filter((r) => r.isAxis).length,
+        results: results.filter((r) => r.isAxis),
+      });
+    } catch (error: any) {
+      console.error("Error scanning subnet:", error);
+      res.status(500).json({ message: error.message || "Failed to scan subnet" });
+    }
+  });
+
+  // CSV import route
+  app.post("/api/cameras/import", isAuthenticated, async (req: any, res) => {
+    try {
+      const { csvContent } = req.body;
+
+      if (!csvContent) {
+        return res.status(400).json({ message: "Missing CSV content" });
+      }
+
+      const { parseCSV } = await import("./csvUtils");
+      const cameras = parseCSV(csvContent);
+
+      // Import cameras for the current user
+      const userId = req.user.claims.sub;
+      const imported = [];
+
+      for (const camera of cameras) {
+        const encryptedPassword = await encryptPassword(camera.password);
+        const newCamera = await storage.createCamera({
+          userId,
+          name: camera.name,
+          ipAddress: camera.ipAddress,
+          username: camera.username,
+          encryptedPassword,
+          location: camera.location,
+          notes: camera.notes,
+        });
+        imported.push(newCamera);
+      }
+
+      res.json({
+        message: `Successfully imported ${imported.length} cameras`,
+        count: imported.length,
+      });
+    } catch (error: any) {
+      console.error("Error importing cameras:", error);
+      res.status(400).json({ message: error.message || "Failed to import cameras" });
+    }
+  });
+
+  // CSV export routes
+  app.get("/api/cameras/export", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const cameras = await storage.getCamerasByUserId(userId);
+
+      const { generateCameraCSV } = await import("./csvUtils");
+      const csv = generateCameraCSV(cameras);
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", "attachment; filename=cameras.csv");
+      res.send(csv);
+    } catch (error) {
+      console.error("Error exporting cameras:", error);
+      res.status(500).json({ message: "Failed to export cameras" });
+    }
+  });
+
+  app.get("/api/cameras/export/uptime", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const cameras = await storage.getCamerasByUserId(userId);
+
+      // Calculate uptime for each camera
+      const cameraData = await Promise.all(
+        cameras.map(async (camera) => {
+          const uptime = await storage.calculateUptimePercentage(camera.id, 30);
+          return {
+            name: camera.name,
+            ipAddress: camera.ipAddress,
+            uptime,
+          };
+        })
+      );
+
+      const { generateUptimeReportCSV } = await import("./csvUtils");
+      const csv = generateUptimeReportCSV(cameraData);
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader(
+        "Content-Disposition",
+        "attachment; filename=uptime-report.csv"
+      );
+      res.send(csv);
+    } catch (error) {
+      console.error("Error exporting uptime report:", error);
+      res.status(500).json({ message: "Failed to export uptime report" });
+    }
+  });
+
   const httpServer = createServer(app);
 
   return httpServer;
