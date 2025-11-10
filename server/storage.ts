@@ -27,8 +27,12 @@ export interface IStorage {
   getSafeUser(id: string): Promise<SafeUser | undefined>;
   // Note: getUserByEmail returns full user (with password) for authentication only
   getUserByEmail(email: string): Promise<User | undefined>;
+  // Note: getUserById returns full user (with password) for password change operations
+  getUserById(id: string): Promise<User | undefined>;
   // Note: createUser expects password to be pre-hashed with bcrypt
   createUser(user: InsertUser): Promise<SafeUser>;
+  // Note: updateUser allows updating user fields including password
+  updateUser(id: string, data: Partial<InsertUser>): Promise<SafeUser>;
 
   // Camera operations
   createCamera(camera: InsertCamera): Promise<Camera>;
@@ -74,6 +78,20 @@ export class DatabaseStorage implements IStorage {
   async getUserByEmail(email: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.email, email));
     return user;
+  }
+
+  async getUserById(id: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
+  }
+
+  async updateUser(id: string, data: Partial<InsertUser>): Promise<SafeUser> {
+    const [updated] = await db
+      .update(users)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(users.id, id))
+      .returning();
+    return sanitizeUser(updated);
   }
 
   async createUser(userData: InsertUser): Promise<SafeUser> {

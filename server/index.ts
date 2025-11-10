@@ -6,6 +6,7 @@ import authRoutes from "./authRoutes";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { startCameraMonitoring } from "./cameraMonitor";
+import { ensureDefaultUser } from "./defaultUser";
 
 const app = express();
 const SessionFileStore = FileStore(session);
@@ -30,13 +31,7 @@ app.use(
   })
 );
 
-// Initialize Passport
-app.use(passport.initialize());
-app.use(passport.session());
-
-// Mount auth routes
-app.use("/api/auth", authRoutes);
-
+// Body parser middleware - MUST come before routes
 declare module 'http' {
   interface IncomingMessage {
     rawBody: unknown
@@ -48,6 +43,13 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ extended: false }));
+
+// Initialize Passport
+app.use(passport.initialize());
+app.use(passport.session());
+
+// Mount auth routes
+app.use("/api/auth", authRoutes);
 
 app.use((req, res, next) => {
   const start = Date.now();
@@ -108,8 +110,11 @@ app.use((req, res, next) => {
     port,
     host: "0.0.0.0",
     reusePort: true,
-  }, () => {
+  }, async () => {
     log(`serving on port ${port}`);
+    
+    // Ensure default user exists for auto-login
+    await ensureDefaultUser();
     
     // Start camera monitoring service
     startCameraMonitoring();
