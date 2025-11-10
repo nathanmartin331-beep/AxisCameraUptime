@@ -52,6 +52,9 @@ export default function UptimeChart({
   function generateUptimeData(events: any[], days: number): UptimeDataPoint[] {
     const data: UptimeDataPoint[] = [];
     const now = new Date();
+    const sortedEvents = [...events].sort((a, b) => 
+      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
     
     for (let i = days - 1; i >= 0; i--) {
       const date = new Date(now);
@@ -61,12 +64,16 @@ export default function UptimeChart({
       const nextDate = new Date(date);
       nextDate.setDate(nextDate.getDate() + 1);
       
-      const dayEvents = events.filter(e => {
+      const dayEvents = sortedEvents.filter(e => {
         const eventDate = new Date(e.timestamp);
         return eventDate >= date && eventDate < nextDate;
       });
+
+      const priorEvent = sortedEvents.filter(e => 
+        new Date(e.timestamp).getTime() < date.getTime()
+      ).pop();
       
-      const uptime = calculateDayUptime(dayEvents, date, nextDate);
+      const uptime = calculateDayUptime(dayEvents, date, nextDate, priorEvent);
       
       data.push({
         date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
@@ -77,38 +84,44 @@ export default function UptimeChart({
     return data;
   }
 
-  function calculateDayUptime(dayEvents: any[], startDate: Date, endDate: Date): number {
-    if (dayEvents.length === 0) {
-      return 100;
-    }
-
+  function calculateDayUptime(dayEvents: any[], startDate: Date, endDate: Date, priorEvent?: any): number {
     let totalUptime = 0;
-    const dayDuration = endDate.getTime() - startDate.getTime();
+    const now = new Date();
+    const dayEnd = endDate.getTime() > now.getTime() ? now.getTime() : endDate.getTime();
+    const dayStart = startDate.getTime();
 
     const sortedEvents = [...dayEvents].sort((a, b) => 
       new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
 
-    const now = new Date();
-    const dayEnd = endDate.getTime() > now.getTime() ? now.getTime() : endDate.getTime();
+    if (sortedEvents.length === 0 && priorEvent) {
+      if (priorEvent.status === "online") {
+        totalUptime = dayEnd - dayStart;
+      }
+    } else if (sortedEvents.length > 0) {
+      let currentStatus = priorEvent ? priorEvent.status : "offline";
+      let currentTime = dayStart;
 
-    for (let i = 0; i < sortedEvents.length; i++) {
-      const event = sortedEvents[i];
-      const eventTime = Math.max(new Date(event.timestamp).getTime(), startDate.getTime());
-      
-      let nextEventTime;
-      if (i < sortedEvents.length - 1) {
-        nextEventTime = Math.min(new Date(sortedEvents[i + 1].timestamp).getTime(), dayEnd);
-      } else {
-        nextEventTime = dayEnd;
+      for (let i = 0; i < sortedEvents.length; i++) {
+        const event = sortedEvents[i];
+        const eventTime = Math.max(new Date(event.timestamp).getTime(), dayStart);
+
+        if (currentStatus === "online") {
+          totalUptime += Math.max(0, eventTime - currentTime);
+        }
+
+        currentStatus = event.status;
+        currentTime = eventTime;
       }
 
-      if (event.status === "online") {
-        totalUptime += Math.max(0, nextEventTime - eventTime);
+      if (currentStatus === "online") {
+        totalUptime += Math.max(0, dayEnd - currentTime);
       }
+    } else {
+      totalUptime = dayEnd - dayStart;
     }
 
-    const actualDuration = dayEnd - startDate.getTime();
+    const actualDuration = dayEnd - dayStart;
     return actualDuration > 0 ? (totalUptime / actualDuration) * 100 : 0;
   }
 
