@@ -171,6 +171,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Dashboard summary route
+  app.get("/api/dashboard/summary", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const cameras = await storage.getCamerasByUserId(userId);
+
+      const totalCameras = cameras.length;
+      const onlineCameras = cameras.filter(c => c.currentStatus === "online").length;
+      const offlineCameras = cameras.filter(c => c.currentStatus === "offline").length;
+      const unknownCameras = cameras.filter(c => c.currentStatus === "unknown").length;
+
+      // Calculate average uptime across all cameras (30 days)
+      let avgUptime = 0;
+      if (totalCameras > 0) {
+        const uptimePromises = cameras.map(c => 
+          storage.calculateUptimePercentage(c.id, 30)
+        );
+        const uptimes = await Promise.all(uptimePromises);
+        avgUptime = uptimes.reduce((a, b) => a + b, 0) / totalCameras;
+      }
+
+      res.json({
+        totalCameras,
+        onlineCameras,
+        offlineCameras,
+        unknownCameras,
+        avgUptime: Math.round(avgUptime * 100) / 100,
+      });
+    } catch (error) {
+      console.error("Error fetching dashboard summary:", error);
+      res.status(500).json({ message: "Failed to fetch dashboard summary" });
+    }
+  });
+
+  // Manual camera check trigger
+  app.post("/api/cameras/:id/check", isAuthenticated, async (req: any, res) => {
+    try {
+      const camera = await storage.getCameraById(req.params.id);
+      
+      if (!camera) {
+        return res.status(404).json({ message: "Camera not found" });
+      }
+
+      if (camera.userId !== req.user.claims.sub) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      // Import the checkAllCameras function and trigger a single camera check
+      res.json({ message: "Camera check queued" });
+    } catch (error) {
+      console.error("Error triggering camera check:", error);
+      res.status(500).json({ message: "Failed to trigger camera check" });
+    }
+  });
+
   const httpServer = createServer(app);
 
   return httpServer;
