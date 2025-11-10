@@ -150,6 +150,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/cameras/uptime/batch", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const cameras = await storage.getCamerasByUserId(userId);
+      const days = req.query.days ? parseInt(req.query.days as string) : 30;
+
+      const uptimeData = await Promise.all(
+        cameras.map(async (camera) => {
+          const uptime = await storage.calculateUptimePercentage(camera.id, days);
+          return {
+            cameraId: camera.id,
+            uptime,
+          };
+        })
+      );
+
+      res.json(uptimeData);
+    } catch (error) {
+      console.error("Error fetching batch uptime:", error);
+      res.status(500).json({ message: "Failed to fetch batch uptime" });
+    }
+  });
+
+  app.get("/api/uptime/events", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const cameras = await storage.getCamerasByUserId(userId);
+      const days = req.query.days ? parseInt(req.query.days as string) : 30;
+
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - days);
+
+      const allEvents = await Promise.all(
+        cameras.map((camera) => 
+          storage.getUptimeEventsInRange(camera.id, startDate, new Date())
+        )
+      );
+
+      const flatEvents = allEvents.flat();
+      res.json(flatEvents);
+    } catch (error) {
+      console.error("Error fetching uptime events:", error);
+      res.status(500).json({ message: "Failed to fetch uptime events" });
+    }
+  });
+
   app.get("/api/cameras/:id/uptime", isAuthenticated, async (req: any, res) => {
     try {
       const camera = await storage.getCameraById(req.params.id);
