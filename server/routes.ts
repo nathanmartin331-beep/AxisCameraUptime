@@ -141,8 +141,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Forbidden" });
       }
 
-      const limit = req.query.limit ? parseInt(req.query.limit) : 100;
-      const events = await storage.getUptimeEventsByCameraId(req.params.id, limit);
+      const days = req.query.days ? parseInt(req.query.days as string) : 30;
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - days);
+
+      const events = await storage.getUptimeEventsInRange(
+        req.params.id,
+        startDate,
+        new Date()
+      );
+      
       res.json(events);
     } catch (error) {
       console.error("Error fetching events:", error);
