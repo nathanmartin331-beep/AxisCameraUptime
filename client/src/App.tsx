@@ -9,6 +9,10 @@ import { AppSidebar } from "@/components/AppSidebar";
 import { useAuth } from "@/hooks/useAuth";
 import Dashboard from "@/pages/Dashboard";
 import CameraDetail from "@/pages/CameraDetail";
+import Cameras from "@/pages/Cameras";
+import NetworkScan from "@/pages/NetworkScan";
+import Reports from "@/pages/Reports";
+import Settings from "@/pages/Settings";
 import Landing from "@/pages/Landing";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
@@ -35,7 +39,11 @@ function Router() {
       ) : (
         <>
           <Route path="/" component={Dashboard} />
+          <Route path="/cameras" component={Cameras} />
           <Route path="/cameras/:id" component={CameraDetail} />
+          <Route path="/scan" component={NetworkScan} />
+          <Route path="/reports" component={Reports} />
+          <Route path="/settings" component={Settings} />
         </>
       )}
       <Route component={NotFound} />
