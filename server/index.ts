@@ -1,9 +1,46 @@
 import express, { type Request, Response, NextFunction } from "express";
+import session from "express-session";
+import createPgSession from "connect-pg-simple";
+import { Pool } from "pg";
+import passport from "./auth";
+import authRoutes from "./authRoutes";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { startCameraMonitoring } from "./cameraMonitor";
 
 const app = express();
+const PgSession = createPgSession(session);
+
+// PostgreSQL connection pool for sessions
+const pgPool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+// Session configuration
+app.use(
+  session({
+    store: new PgSession({
+      pool: pgPool,
+      tableName: "sessions",
+    }),
+    secret: process.env.SESSION_SECRET || "your-secret-key-change-in-production",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+    },
+  })
+);
+
+// Initialize Passport
+app.use(passport.initialize());
+app.use(passport.session());
+
+// Mount auth routes
+app.use("/api/auth", authRoutes);
 
 declare module 'http' {
   interface IncomingMessage {
