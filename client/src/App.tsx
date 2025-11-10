@@ -13,7 +13,8 @@ import Cameras from "@/pages/Cameras";
 import NetworkScan from "@/pages/NetworkScan";
 import Reports from "@/pages/Reports";
 import Settings from "@/pages/Settings";
-import Landing from "@/pages/Landing";
+import Login from "@/pages/Login";
+import Register from "@/pages/Register";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
@@ -35,7 +36,11 @@ function Router() {
   return (
     <Switch>
       {!isAuthenticated ? (
-        <Route path="/" component={Landing} />
+        <>
+          <Route path="/login" component={Login} />
+          <Route path="/register" component={Register} />
+          <Route path="/" component={Login} />
+        </>
       ) : (
         <>
           <Route path="/" component={Dashboard} />
@@ -81,7 +86,11 @@ function AppContent() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => window.location.href = "/api/logout"}
+                  onClick={async () => {
+                    await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+                    await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+                    window.location.href = "/login";
+                  }}
                   data-testid="button-logout"
                 >
                   <LogOut className="w-4 h-4 mr-2" />
