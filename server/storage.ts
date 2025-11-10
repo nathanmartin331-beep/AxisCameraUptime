@@ -210,7 +210,15 @@ export class DatabaseStorage implements IStorage {
       new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
 
-    let currentStatus = priorEvent ? priorEvent.status : "offline";
+    let currentStatus: string;
+    if (priorEvent) {
+      currentStatus = priorEvent.status;
+    } else if (sortedEvents.length > 0) {
+      currentStatus = sortedEvents[0].status === "online" ? "offline" : "online";
+    } else {
+      currentStatus = "online";
+    }
+
     let currentTime = startDate.getTime();
 
     for (const event of sortedEvents) {
