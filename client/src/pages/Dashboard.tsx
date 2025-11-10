@@ -37,18 +37,10 @@ interface ApiCamera {
   updatedAt: string;
 }
 
-const generateMockData = () => {
-  const data = [];
-  for (let i = 30; i >= 0; i--) {
-    const date = new Date();
-    date.setDate(date.getDate() - i);
-    data.push({
-      date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      uptime: 95 + Math.random() * 5
-    });
-  }
-  return data;
-};
+interface CameraUptime {
+  cameraId: string;
+  uptime: number;
+}
 
 function formatLastSeen(lastSeenAt: string | null): string {
   if (!lastSeenAt) return "Never";
@@ -68,21 +60,15 @@ function formatLastSeen(lastSeenAt: string | null): string {
   return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
 }
 
-function calculateUptime(status: string): string {
-  if (status === "online") return "99.5%";
-  if (status === "offline") return "85.0%";
-  if (status === "warning") return "95.0%";
-  return "0.0%";
-}
-
-function transformCamera(apiCamera: ApiCamera): CameraType {
+function transformCamera(apiCamera: ApiCamera, uptimeMap: Map<string, number>): CameraType {
+  const uptime = uptimeMap.get(apiCamera.id) ?? 0;
   return {
     id: apiCamera.id,
     name: apiCamera.name,
     ipAddress: apiCamera.ipAddress,
     location: apiCamera.location || "No location",
     status: apiCamera.currentStatus as CameraType["status"],
-    uptime: calculateUptime(apiCamera.currentStatus),
+    uptime: `${uptime.toFixed(1)}%`,
     lastSeen: formatLastSeen(apiCamera.lastSeenAt)
   };
 }
@@ -101,6 +87,11 @@ export default function Dashboard() {
 
   const { data: cameras, isLoading: camerasLoading, error: camerasError } = useQuery<ApiCamera[]>({
     queryKey: ["/api/cameras"],
+  });
+
+  const { data: cameraUptimes } = useQuery<CameraUptime[]>({
+    queryKey: ["/api/cameras/uptime/batch"],
+    enabled: !!cameras && cameras.length > 0,
   });
 
   const deleteMutation = useMutation({
@@ -179,7 +170,12 @@ export default function Dashboard() {
     }, 500);
   }
 
-  const transformedCameras = cameras ? cameras.map(transformCamera) : [];
+  const uptimeMap = new Map<string, number>();
+  cameraUptimes?.forEach((item) => {
+    uptimeMap.set(item.cameraId, item.uptime);
+  });
+
+  const transformedCameras = cameras ? cameras.map(c => transformCamera(c, uptimeMap)) : [];
   const filteredCameras = transformedCameras.filter(camera =>
     camera.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     camera.ipAddress.includes(searchTerm) ||
@@ -241,7 +237,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      <UptimeChart data={generateMockData()} />
+      <UptimeChart cameraId="all" days={30} />
 
       <div className="space-y-4">
         <div className="flex items-center justify-between gap-4">

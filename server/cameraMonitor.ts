@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { storage } from "./storage";
 import { db } from "./db";
 import { cameras } from "@shared/schema";
+import { decryptPassword } from "./encryption";
 
 interface SystemReadyResponse {
   systemReady: boolean;
@@ -76,10 +77,12 @@ async function checkAllCameras() {
       const startTime = Date.now();
 
       try {
+        const decryptedPassword = await decryptPassword(camera.encryptedPassword);
+        
         const result = await pollCamera(
           camera.ipAddress,
           camera.username,
-          camera.encryptedPassword // Note: In production, decrypt this first
+          decryptedPassword
         );
 
         const responseTime = Date.now() - startTime;
