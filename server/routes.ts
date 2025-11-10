@@ -150,8 +150,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         startDate,
         new Date()
       );
+
+      const priorEvents = await storage.getUptimeEventsByCameraId(req.params.id, 1);
+      const priorEvent = priorEvents.find(e => 
+        new Date(e.timestamp).getTime() < startDate.getTime()
+      );
       
-      res.json(events);
+      res.json({
+        events,
+        priorEvent: priorEvent || null,
+      });
     } catch (error) {
       console.error("Error fetching events:", error);
       res.status(500).json({ message: "Failed to fetch events" });
@@ -190,14 +198,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - days);
 
-      const allEvents = await Promise.all(
-        cameras.map((camera) => 
-          storage.getUptimeEventsInRange(camera.id, startDate, new Date())
-        )
+      const allEventsAndPrior = await Promise.all(
+        cameras.map(async (camera) => {
+          const events = await storage.getUptimeEventsInRange(camera.id, startDate, new Date());
+          const priorEvents = await storage.getUptimeEventsByCameraId(camera.id, 1);
+          const priorEvent = priorEvents.find(e => 
+            new Date(e.timestamp).getTime() < startDate.getTime()
+          );
+          return { events, priorEvent };
+        })
       );
 
-      const flatEvents = allEvents.flat();
-      res.json(flatEvents);
+      const flatEvents = allEventsAndPrior.flatMap(item => item.events);
+      const priorEvents = allEventsAndPrior
+        .map(item => item.priorEvent)
+        .filter(Boolean);
+      
+      res.json({
+        events: flatEvents,
+        priorEvents,
+      });
     } catch (error) {
       console.error("Error fetching uptime events:", error);
       res.status(500).json({ message: "Failed to fetch uptime events" });

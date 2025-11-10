@@ -11,7 +11,7 @@ import {
   type InsertUptimeEvent,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, gte, sql } from "drizzle-orm";
+import { eq, and, desc, gte, lte, sql } from "drizzle-orm";
 
 export interface IStorage {
   // User operations (required for Replit Auth)
@@ -154,7 +154,8 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(uptimeEvents.cameraId, cameraId),
-          gte(uptimeEvents.timestamp, startDate)
+          gte(uptimeEvents.timestamp, startDate),
+          lte(uptimeEvents.timestamp, endDate)
         )
       )
       .orderBy(uptimeEvents.timestamp);
