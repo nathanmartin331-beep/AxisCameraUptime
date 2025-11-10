@@ -37,6 +37,10 @@ export interface IStorage {
     cameraId: string,
     limit?: number
   ): Promise<UptimeEvent[]>;
+  getLatestEventBefore(
+    cameraId: string,
+    beforeDate: Date
+  ): Promise<UptimeEvent | undefined>;
   getUptimeEventsInRange(
     cameraId: string,
     startDate: Date,
@@ -143,6 +147,24 @@ export class DatabaseStorage implements IStorage {
       .limit(limit);
   }
 
+  async getLatestEventBefore(
+    cameraId: string,
+    beforeDate: Date
+  ): Promise<UptimeEvent | undefined> {
+    const [event] = await db
+      .select()
+      .from(uptimeEvents)
+      .where(
+        and(
+          eq(uptimeEvents.cameraId, cameraId),
+          lte(uptimeEvents.timestamp, beforeDate)
+        )
+      )
+      .orderBy(desc(uptimeEvents.timestamp))
+      .limit(1);
+    return event;
+  }
+
   async getUptimeEventsInRange(
     cameraId: string,
     startDate: Date,
@@ -165,19 +187,48 @@ export class DatabaseStorage implements IStorage {
     cameraId: string,
     days: number
   ): Promise<number> {
+    const endDate = new Date();
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
 
     const events = await this.getUptimeEventsInRange(
       cameraId,
       startDate,
-      new Date()
+      endDate
     );
 
-    if (events.length === 0) return 0;
+    const priorEvent = await this.getLatestEventBefore(cameraId, startDate);
 
-    const onlineEvents = events.filter((e) => e.status === "online");
-    return (onlineEvents.length / events.length) * 100;
+    if (events.length === 0 && !priorEvent) {
+      return 100;
+    }
+
+    let totalUptime = 0;
+    const totalDuration = endDate.getTime() - startDate.getTime();
+
+    const sortedEvents = [...events].sort((a, b) => 
+      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+
+    let currentStatus = priorEvent ? priorEvent.status : "offline";
+    let currentTime = startDate.getTime();
+
+    for (const event of sortedEvents) {
+      const eventTime = new Date(event.timestamp).getTime();
+
+      if (currentStatus === "online") {
+        totalUptime += eventTime - currentTime;
+      }
+
+      currentStatus = event.status;
+      currentTime = eventTime;
+    }
+
+    if (currentStatus === "online") {
+      totalUptime += endDate.getTime() - currentTime;
+    }
+
+    return totalDuration > 0 ? (totalUptime / totalDuration) * 100 : 0;
   }
 }
 

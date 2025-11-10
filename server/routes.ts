@@ -151,10 +151,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         new Date()
       );
 
-      const priorEvents = await storage.getUptimeEventsByCameraId(req.params.id, 1);
-      const priorEvent = priorEvents.find(e => 
-        new Date(e.timestamp).getTime() < startDate.getTime()
-      );
+      const priorEvent = await storage.getLatestEventBefore(req.params.id, startDate);
       
       res.json({
         events,
@@ -201,10 +198,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const allEventsAndPrior = await Promise.all(
         cameras.map(async (camera) => {
           const events = await storage.getUptimeEventsInRange(camera.id, startDate, new Date());
-          const priorEvents = await storage.getUptimeEventsByCameraId(camera.id, 1);
-          const priorEvent = priorEvents.find(e => 
-            new Date(e.timestamp).getTime() < startDate.getTime()
-          );
+          const priorEvent = await storage.getLatestEventBefore(camera.id, startDate);
           return { events, priorEvent };
         })
       );
