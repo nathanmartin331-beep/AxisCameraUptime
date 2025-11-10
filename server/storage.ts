@@ -1,10 +1,9 @@
-// Reference: blueprint:javascript_log_in_with_replit for auth methods
 import {
   users,
   cameras,
   uptimeEvents,
   type User,
-  type UpsertUser,
+  type InsertUser,
   type Camera,
   type InsertCamera,
   type UptimeEvent,
@@ -13,10 +12,23 @@ import {
 import { db } from "./db";
 import { eq, and, desc, gte, lte, sql } from "drizzle-orm";
 
+// Safe user type without password (for API responses)
+export type SafeUser = Omit<User, 'password'>;
+
+// Helper function to strip password from user object
+function sanitizeUser(user: User): SafeUser {
+  const { password, ...safeUser } = user;
+  return safeUser;
+}
+
 export interface IStorage {
-  // User operations (required for Replit Auth)
-  getUser(id: string): Promise<User | undefined>;
-  upsertUser(user: UpsertUser): Promise<User>;
+  // User operations (local authentication)
+  // Note: getSafeUser returns user without password field for API responses
+  getSafeUser(id: string): Promise<SafeUser | undefined>;
+  // Note: getUserByEmail returns full user (with password) for authentication only
+  getUserByEmail(email: string): Promise<User | undefined>;
+  // Note: createUser expects password to be pre-hashed with bcrypt
+  createUser(user: InsertUser): Promise<SafeUser>;
 
   // Camera operations
   createCamera(camera: InsertCamera): Promise<Camera>;
@@ -54,24 +66,19 @@ export interface IStorage {
 
 export class DatabaseStorage implements IStorage {
   // User operations
-  async getUser(id: string): Promise<User | undefined> {
+  async getSafeUser(id: string): Promise<SafeUser | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user ? sanitizeUser(user) : undefined;
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email));
     return user;
   }
 
-  async upsertUser(userData: UpsertUser): Promise<User> {
-    const [user] = await db
-      .insert(users)
-      .values(userData)
-      .onConflictDoUpdate({
-        target: users.id,
-        set: {
-          ...userData,
-          updatedAt: new Date(),
-        },
-      })
-      .returning();
-    return user;
+  async createUser(userData: InsertUser): Promise<SafeUser> {
+    const [user] = await db.insert(users).values(userData).returning();
+    return sanitizeUser(user);
   }
 
   // Camera operations
