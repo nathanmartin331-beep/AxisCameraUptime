@@ -3,6 +3,9 @@ import { storage } from "./storage";
 import { db } from "./db";
 import { cameras } from "@shared/schema";
 import { decryptPassword } from "./encryption";
+import { detectCameraModel } from "./services/cameraDetection";
+import { detectionCache } from "./services/detectionCache";
+import { eq } from "drizzle-orm";
 
 interface SystemReadyResponse {
   systemReady: boolean;
@@ -15,17 +18,41 @@ interface VideoCheckResponse {
   responseTime: number;
 }
 
+/**
+ * Get appropriate video endpoint based on camera model
+ * Different camera series may use different endpoints
+ */
+function getVideoEndpoint(camera: any): string {
+  // Default endpoint for most cameras
+  const defaultEndpoint = "/axis-cgi/jpg/image.cgi";
+
+  // If no model detected yet, use default
+  if (!camera.model) return defaultEndpoint;
+
+  // Model-specific endpoint selection
+  const series = camera.series;
+
+  // M-series multi-sensor cameras may need camera parameter
+  if (series === 'M' && camera.numberOfViews && camera.numberOfViews > 1) {
+    return "/axis-cgi/jpg/image.cgi?camera=1"; // Default to first sensor
+  }
+
+  // All other models use standard endpoint
+  return defaultEndpoint;
+}
+
 export async function checkVideoStream(
   ipAddress: string,
   username: string,
   password: string,
+  endpoint: string = "/axis-cgi/jpg/image.cgi",
   timeout: number = 5000
 ): Promise<VideoCheckResponse> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
-    const url = `http://${ipAddress}/axis-cgi/jpg/image.cgi`;
+    const url = `http://${ipAddress}${endpoint}`;
     const startTime = Date.now();
 
     const authHeader = Buffer.from(`${username}:${password}`).toString('base64');
@@ -198,6 +225,59 @@ async function checkAllCameras() {
         );
 
         const responseTime = Date.now() - startTime;
+
+        // Lazy model detection (non-blocking)
+        // Only detect if model is not already known
+        if (!camera.model) {
+          // Check cache first to avoid redundant API calls
+          const cached = detectionCache.get(camera.ipAddress, camera.username);
+
+          if (cached) {
+            // Use cached result
+            try {
+              // TODO: Backend developer - Add storage.updateCameraModel() method
+              // For now, update directly via Drizzle
+              await db.update(cameras)
+                .set({
+                  model: cached.model,
+                  series: cached.series,
+                  numberOfViews: cached.numberOfViews,
+                  capabilities: cached.capabilities,
+                  updatedAt: new Date(),
+                })
+                .where(eq(cameras.id, camera.id));
+
+              console.log(`[Monitor] ✓ Using cached model for ${camera.name}: ${cached.model} (${cached.series}-series)`);
+            } catch (err: any) {
+              console.warn(`[Monitor] ⚠ Failed to update cached model for ${camera.name}: ${err.message}`);
+            }
+          } else {
+            // Detect model asynchronously (don't block polling cycle)
+            detectCameraModel(camera.ipAddress, camera.username, decryptedPassword)
+              .then(async (detection) => {
+                // Store in cache
+                detectionCache.set(camera.ipAddress, camera.username, detection);
+
+                // Update database
+                // TODO: Backend developer - Add storage.updateCameraModel() method
+                // For now, update directly via Drizzle
+                await db.update(cameras)
+                  .set({
+                    model: detection.model,
+                    series: detection.series,
+                    numberOfViews: detection.numberOfViews,
+                    capabilities: detection.capabilities,
+                    updatedAt: new Date(),
+                  })
+                  .where(eq(cameras.id, camera.id));
+
+                console.log(`[Monitor] ✓ Detected model for ${camera.name}: ${detection.model} (${detection.series}-series)`);
+              })
+              .catch((err) => {
+                console.warn(`[Monitor] ⚠ Model detection failed for ${camera.name}: ${err.message}`);
+              });
+          }
+        }
 
         // Detect reboot by comparing boot IDs
         const rebooted =

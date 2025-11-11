@@ -11,7 +11,7 @@ import {
   type InsertUptimeEvent,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, gte, lte, sql } from "drizzle-orm";
+import { eq, and, desc, gte, lte, sql, isNull } from "drizzle-orm";
 
 // Safe user type without password (for API responses)
 export type SafeUser = Omit<User, 'password'>;
@@ -20,6 +20,40 @@ export type SafeUser = Omit<User, 'password'>;
 function sanitizeUser(user: User): SafeUser {
   const { password, ...safeUser } = user;
   return safeUser;
+}
+
+/**
+ * Type for camera model information
+ */
+export interface CameraModelInfo {
+  model: string;
+  modelDetectedAt: Date;
+  capabilities: Record<string, any>;
+}
+
+/**
+ * Type for model update data
+ */
+export interface ModelUpdateData {
+  model: string;
+  capabilities?: Record<string, any>;
+}
+
+/**
+ * Deep merge two objects (for capability merging)
+ */
+function deepMerge(target: any, source: any): any {
+  const output = { ...target };
+
+  for (const key in source) {
+    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+      output[key] = deepMerge(target[key] || {}, source[key]);
+    } else {
+      output[key] = source[key];
+    }
+  }
+
+  return output;
 }
 
 export interface IStorage {
@@ -54,6 +88,69 @@ export interface IStorage {
     videoStatus: string,
     lastVideoCheck?: Date
   ): Promise<void>;
+
+  // Model and capability operations
+  /**
+   * Update camera model information after detection
+   * @param cameraId - Camera ID
+   * @param modelData - Model name and optional capabilities
+   * @returns Updated camera or undefined if not found
+   */
+  updateCameraModel(
+    cameraId: string,
+    modelData: ModelUpdateData
+  ): Promise<Camera | undefined>;
+
+  /**
+   * Retrieve camera model information
+   * @param cameraId - Camera ID
+   * @returns Model info or null if not detected
+   */
+  getCameraModel(cameraId: string): Promise<CameraModelInfo | null>;
+
+  /**
+   * Find cameras that need model detection
+   * @param userId - Optional user ID filter
+   * @returns Array of cameras without model information
+   */
+  getCamerasWithoutModel(userId?: string): Promise<Camera[]>;
+
+  /**
+   * Update camera capabilities (merge or replace)
+   * @param cameraId - Camera ID
+   * @param capabilities - New capabilities
+   * @param merge - If true, deep merge with existing; if false, replace
+   * @returns Updated camera or undefined if not found
+   */
+  updateCameraCapabilities(
+    cameraId: string,
+    capabilities: Record<string, any>,
+    merge?: boolean
+  ): Promise<Camera | undefined>;
+
+  /**
+   * Query cameras by model name
+   * @param modelName - Model name (case-insensitive)
+   * @param userId - Optional user ID filter
+   * @returns Array of cameras with matching model
+   */
+  getCamerasByModel(
+    modelName: string,
+    userId?: string
+  ): Promise<Camera[]>;
+
+  /**
+   * Find cameras with specific capability
+   * @param capabilityName - Capability key name
+   * @param capabilityValue - Optional value to match
+   * @param userId - Optional user ID filter
+   * @returns Array of cameras with matching capability
+   */
+  getCamerasByCapability(
+    capabilityName: string,
+    capabilityValue?: any,
+    userId?: string
+  ): Promise<Camera[]>;
 
   // Uptime event operations
   createUptimeEvent(event: InsertUptimeEvent): Promise<UptimeEvent>;
@@ -181,6 +278,196 @@ export class DatabaseStorage implements IStorage {
         updatedAt: new Date(),
       })
       .where(eq(cameras.id, id));
+  }
+
+  // Model and capability operations
+  async updateCameraModel(
+    cameraId: string,
+    modelData: ModelUpdateData
+  ): Promise<Camera | undefined> {
+    try {
+      const updateData: any = {
+        model: modelData.model,
+        modelDetectedAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      // Add capabilities if provided
+      if (modelData.capabilities) {
+        updateData.capabilities = modelData.capabilities;
+      }
+
+      const [updated] = await db
+        .update(cameras)
+        .set(updateData)
+        .where(eq(cameras.id, cameraId))
+        .returning();
+
+      return updated;
+    } catch (error) {
+      console.error(`Error updating camera model for ${cameraId}:`, error);
+      throw new Error(`Failed to update camera model: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async getCameraModel(cameraId: string): Promise<CameraModelInfo | null> {
+    try {
+      const [camera] = await db
+        .select({
+          model: cameras.model,
+          modelDetectedAt: cameras.modelDetectedAt,
+          capabilities: cameras.capabilities,
+        })
+        .from(cameras)
+        .where(eq(cameras.id, cameraId));
+
+      if (!camera || !camera.model) {
+        return null;
+      }
+
+      return {
+        model: camera.model,
+        modelDetectedAt: camera.modelDetectedAt || new Date(),
+        capabilities: camera.capabilities || {},
+      };
+    } catch (error) {
+      console.error(`Error getting camera model for ${cameraId}:`, error);
+      throw new Error(`Failed to get camera model: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async getCamerasWithoutModel(userId?: string): Promise<Camera[]> {
+    try {
+      let query = db
+        .select()
+        .from(cameras)
+        .where(isNull(cameras.model))
+        .orderBy(cameras.createdAt);
+
+      // Apply user filter if provided
+      if (userId) {
+        query = db
+          .select()
+          .from(cameras)
+          .where(
+            and(
+              isNull(cameras.model),
+              eq(cameras.userId, userId)
+            )
+          )
+          .orderBy(cameras.createdAt);
+      }
+
+      return await query;
+    } catch (error) {
+      console.error('Error getting cameras without model:', error);
+      throw new Error(`Failed to get cameras without model: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async updateCameraCapabilities(
+    cameraId: string,
+    capabilities: Record<string, any>,
+    merge: boolean = true
+  ): Promise<Camera | undefined> {
+    try {
+      let finalCapabilities = capabilities;
+
+      // If merging, get existing capabilities first
+      if (merge) {
+        const [existing] = await db
+          .select({ capabilities: cameras.capabilities })
+          .from(cameras)
+          .where(eq(cameras.id, cameraId));
+
+        if (existing && existing.capabilities) {
+          finalCapabilities = deepMerge(existing.capabilities, capabilities);
+        }
+      }
+
+      const [updated] = await db
+        .update(cameras)
+        .set({
+          capabilities: finalCapabilities,
+          updatedAt: new Date(),
+        })
+        .where(eq(cameras.id, cameraId))
+        .returning();
+
+      return updated;
+    } catch (error) {
+      console.error(`Error updating camera capabilities for ${cameraId}:`, error);
+      throw new Error(`Failed to update camera capabilities: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async getCamerasByModel(
+    modelName: string,
+    userId?: string
+  ): Promise<Camera[]> {
+    try {
+      let query = db
+        .select()
+        .from(cameras)
+        .where(sql`LOWER(${cameras.model}) = LOWER(${modelName})`)
+        .orderBy(cameras.name);
+
+      // Apply user filter if provided
+      if (userId) {
+        query = db
+          .select()
+          .from(cameras)
+          .where(
+            and(
+              sql`LOWER(${cameras.model}) = LOWER(${modelName})`,
+              eq(cameras.userId, userId)
+            )
+          )
+          .orderBy(cameras.name);
+      }
+
+      return await query;
+    } catch (error) {
+      console.error(`Error getting cameras by model ${modelName}:`, error);
+      throw new Error(`Failed to get cameras by model: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async getCamerasByCapability(
+    capabilityName: string,
+    capabilityValue?: any,
+    userId?: string
+  ): Promise<Camera[]> {
+    try {
+      // SECURITY FIX: Use parameterized JSON path construction to prevent SQL injection
+      // Build the JSON path securely by parameterizing the capability name
+      const jsonPath = `$.${capabilityName.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+
+      let whereClause;
+
+      if (capabilityValue !== undefined) {
+        // Check for specific capability value using parameterized query
+        const valueParam = JSON.stringify(capabilityValue);
+        whereClause = sql`json_extract(${cameras.capabilities}, ${jsonPath}) = ${valueParam}`;
+      } else {
+        // Check for capability existence (not null) using parameterized query
+        whereClause = sql`json_extract(${cameras.capabilities}, ${jsonPath}) IS NOT NULL`;
+      }
+
+      // Add user filter if provided
+      if (userId) {
+        whereClause = and(whereClause, eq(cameras.userId, userId));
+      }
+
+      return await db
+        .select()
+        .from(cameras)
+        .where(whereClause)
+        .orderBy(cameras.name);
+    } catch (error) {
+      console.error(`Error getting cameras by capability ${capabilityName}:`, error);
+      throw new Error(`Failed to get cameras by capability: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 
   // Uptime event operations

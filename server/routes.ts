@@ -25,8 +25,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/cameras", requireAuth, async (req: any, res) => {
     try {
       const userId = getUserId(req);
-      const cameras = await storage.getCamerasByUserId(userId);
-      
+      const { model, hasPTZ, hasAudio } = req.query;
+
+      let cameras;
+
+      // Filter by model
+      if (model && typeof model === 'string') {
+        cameras = await storage.getCamerasByModel(userId, model);
+      }
+      // Filter by PTZ capability
+      else if (hasPTZ === 'true') {
+        cameras = await storage.getCamerasByCapability(userId, 'hasPTZ');
+      }
+      // Filter by audio capability
+      else if (hasAudio === 'true') {
+        cameras = await storage.getCamerasByCapability(userId, 'hasAudio');
+      }
+      // Default: return all cameras
+      else {
+        cameras = await storage.getCamerasByUserId(userId);
+      }
+
       // Don't send encrypted passwords to frontend
       const safeCameras = cameras.map(({ encryptedPassword, ...camera }) => camera);
       res.json(safeCameras);
@@ -293,7 +312,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/cameras/:id/check", requireAuth, async (req: any, res) => {
     try {
       const camera = await storage.getCameraById(req.params.id);
-      
+
       if (!camera) {
         return res.status(404).json({ message: "Camera not found" });
       }
@@ -307,6 +326,144 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error triggering camera check:", error);
       res.status(500).json({ message: "Failed to trigger camera check" });
+    }
+  });
+
+  // Model Management Endpoints
+
+  // POST /api/cameras/:id/detect-model - Manually trigger model detection
+  app.post("/api/cameras/:id/detect-model", requireAuth, async (req: any, res) => {
+    try {
+      const userId = getUserId(req);
+      const cameraId = req.params.id;
+
+      // Get camera
+      const camera = await storage.getCameraById(cameraId);
+      if (!camera) {
+        return res.status(404).json({ message: "Camera not found" });
+      }
+
+      // Verify ownership
+      if (camera.userId !== userId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      // Decrypt password
+      const { decryptPassword } = await import("./encryption");
+      const password = await decryptPassword(camera.encryptedPassword);
+
+      // Detect model
+      const { detectCameraModel } = await import("./services/cameraDetection");
+      const result = await detectCameraModel(
+        camera.ipAddress,
+        camera.username,
+        password
+      );
+
+      // Update camera
+      await storage.updateCameraModel(cameraId, result);
+
+      res.json({
+        success: true,
+        model: result.model,
+        series: result.series,
+        capabilities: result.capabilities,
+      });
+    } catch (error: any) {
+      console.error("Model detection error:", error);
+      res.status(500).json({
+        success: false,
+        message: error.message || "Failed to detect camera model"
+      });
+    }
+  });
+
+  // GET /api/cameras/:id/capabilities - Get camera capabilities
+  app.get("/api/cameras/:id/capabilities", requireAuth, async (req: any, res) => {
+    try {
+      const userId = getUserId(req);
+      const cameraId = req.params.id;
+
+      // Verify camera exists and user owns it
+      const camera = await storage.getCameraById(cameraId);
+      if (!camera) {
+        return res.status(404).json({ message: "Camera not found" });
+      }
+
+      if (camera.userId !== userId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      const model = await storage.getCameraModel(cameraId);
+      if (!model) {
+        return res.status(404).json({ message: "Camera model not detected yet" });
+      }
+
+      res.json(model);
+    } catch (error: any) {
+      console.error("Error fetching camera capabilities:", error);
+      res.status(500).json({ message: error.message || "Failed to fetch capabilities" });
+    }
+  });
+
+  // GET /api/models - List all supported models
+  app.get("/api/models", requireAuth, async (req: any, res) => {
+    try {
+      const { getAllModels, getModelsBySeries } = await import("./models/cameraModels");
+
+      const { series } = req.query;
+
+      if (series && typeof series === 'string') {
+        const validSeries = ['P', 'Q', 'M', 'F'];
+        if (!validSeries.includes(series.toUpperCase())) {
+          return res.status(400).json({ message: "Invalid series. Must be one of: P, Q, M, F" });
+        }
+        const models = getModelsBySeries(series.toUpperCase() as 'P' | 'Q' | 'M' | 'F');
+        return res.json(models);
+      }
+
+      const models = getAllModels();
+      res.json(models);
+    } catch (error: any) {
+      console.error("Error fetching models:", error);
+      res.status(500).json({ message: error.message || "Failed to fetch models" });
+    }
+  });
+
+  // GET /api/cameras/stats/models - Get model statistics
+  app.get("/api/cameras/stats/models", requireAuth, async (req: any, res) => {
+    try {
+      const userId = getUserId(req);
+
+      const allCameras = await storage.getCamerasByUserId(userId);
+
+      // Count by model
+      const modelCounts: Record<string, number> = {};
+      const seriesCounts: Record<string, number> = { P: 0, Q: 0, M: 0, F: 0 };
+      let detectedCount = 0;
+
+      allCameras.forEach(camera => {
+        if (camera.model) {
+          modelCounts[camera.model] = (modelCounts[camera.model] || 0) + 1;
+          detectedCount++;
+
+          if (camera.series) {
+            seriesCounts[camera.series] = (seriesCounts[camera.series] || 0) + 1;
+          }
+        }
+      });
+
+      res.json({
+        total: allCameras.length,
+        detected: detectedCount,
+        undetected: allCameras.length - detectedCount,
+        detectionRate: allCameras.length > 0 ? (detectedCount / allCameras.length) : 0,
+        byModel: modelCounts,
+        bySeries: seriesCounts,
+      });
+    } catch (error: any) {
+      console.error("Error fetching model statistics:", error);
+      res.status(500).json({ message: error.message || "Failed to fetch model statistics" });
     }
   });
 
