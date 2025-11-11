@@ -7,9 +7,10 @@ import { insertCameraSchema, type Camera } from "@shared/schema";
 import type { SafeUser } from "./storage";
 import { z } from "zod";
 
-// Dedicated schema for CSV import validation (includes plain password instead of encrypted)
-const importCameraSchema = insertCameraSchema
-  .omit({ encryptedPassword: true })
+// Schema for accepting plain password from frontend (used for both manual add and CSV import)
+// Frontend doesn't send userId or encryptedPassword - userId comes from session, password is encrypted server-side
+const createCameraSchema = insertCameraSchema
+  .omit({ encryptedPassword: true, userId: true })
   .extend({
     password: z.string().min(1, "Password is required"),
   });
@@ -59,13 +60,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/cameras", requireAuth, async (req: any, res) => {
     try {
       const userId = getUserId(req);
-      const validatedData = insertCameraSchema.parse(req.body);
+      
+      // Use createCameraSchema to accept plain password
+      const validatedData = createCameraSchema.parse(req.body);
 
       // Encrypt password before storing
-      const encryptedPassword = await encryptPassword(validatedData.encryptedPassword);
+      const encryptedPassword = await encryptPassword(validatedData.password);
 
+      // Remove plaintext password and add encrypted version
+      const { password, ...cameraData } = validatedData;
+      
       const camera = await storage.createCamera({
-        ...validatedData,
+        ...cameraData,
         userId,
         encryptedPassword,
       });
@@ -74,6 +80,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json(safeCamera);
     } catch (error: any) {
       console.error("Error creating camera:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
       res.status(400).json({ message: error.message || "Failed to create camera" });
     }
   });
@@ -92,9 +101,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const updates = { ...req.body };
       
-      // Encrypt password if it's being updated
-      if (updates.encryptedPassword) {
-        updates.encryptedPassword = await encryptPassword(updates.encryptedPassword);
+      // Encrypt password if it's being updated (accept plain password)
+      if (updates.password) {
+        updates.encryptedPassword = await encryptPassword(updates.password);
+        delete updates.password; // Remove plaintext password
       }
 
       const updated = await storage.updateCamera(req.params.id, updates);
@@ -315,6 +325,84 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Network scan with CIDR notation (for frontend NetworkScan page)
+  app.post("/api/cameras/scan", requireAuth, async (req: any, res) => {
+    try {
+      const scanRequestSchema = z.object({
+        subnet: z.string().min(1, "Subnet is required"),
+      });
+
+      const { subnet } = scanRequestSchema.parse(req.body);
+
+      // Parse CIDR notation (e.g., "192.168.1.0/24")
+      const [networkAddress, prefixLengthStr] = subnet.split('/');
+      
+      if (!networkAddress || !prefixLengthStr) {
+        return res.status(400).json({ message: "Invalid CIDR notation. Expected format: 192.168.1.0/24" });
+      }
+
+      const prefixLength = parseInt(prefixLengthStr);
+      if (prefixLength < 16 || prefixLength > 30) {
+        return res.status(400).json({ message: "Prefix length must be between 16 and 30" });
+      }
+
+      // Parse IP address octets
+      const octets = networkAddress.split('.').map(o => parseInt(o));
+      if (octets.length !== 4 || octets.some(o => isNaN(o) || o < 0 || o > 255)) {
+        return res.status(400).json({ message: "Invalid IP address format" });
+      }
+
+      // For /24 networks, use first 3 octets as subnet base
+      // Scan from .1 to .254 (excluding network and broadcast)
+      let subnetBase: string;
+      let startRange: number;
+      let endRange: number;
+
+      if (prefixLength === 24) {
+        subnetBase = `${octets[0]}.${octets[1]}.${octets[2]}`;
+        startRange = 1;
+        endRange = 254;
+      } else {
+        // For other prefix lengths, calculate the range
+        const hostBits = 32 - prefixLength;
+        const totalHosts = Math.pow(2, hostBits);
+        const usableHosts = totalHosts - 2; // Exclude network and broadcast
+
+        if (prefixLength >= 24) {
+          subnetBase = `${octets[0]}.${octets[1]}.${octets[2]}`;
+          startRange = octets[3] + 1;
+          endRange = Math.min(startRange + usableHosts - 1, 254);
+        } else {
+          // For /16-/23, use first 3 octets and scan limited range
+          subnetBase = `${octets[0]}.${octets[1]}.${octets[2]}`;
+          startRange = 1;
+          endRange = Math.min(254, usableHosts);
+        }
+      }
+
+      console.log(`[API] Scanning CIDR ${subnet} → ${subnetBase}.${startRange}-${endRange}`);
+
+      const { scanSubnet } = await import("./networkScanner");
+      const results = await scanSubnet(subnetBase, startRange, endRange);
+
+      // Map results to frontend expected format
+      const cameras = results
+        .filter(r => r.isAxis)
+        .map(r => ({
+          ipAddress: r.ipAddress,
+          detected: r.isAxis,
+        }));
+
+      res.json({ cameras });
+    } catch (error: any) {
+      console.error("Error scanning network:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      res.status(500).json({ message: error.message || "Failed to scan network" });
+    }
+  });
+
   // CSV import route
   app.post("/api/cameras/import", requireAuth, async (req: any, res) => {
     try {
@@ -360,9 +448,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             continue;
           }
 
-          // Validate camera data using dedicated import schema
-          const validatedData = importCameraSchema.parse({
-            userId,
+          // Validate camera data using create schema (accepts plain password, userId comes from session)
+          const validatedData = createCameraSchema.parse({
             name: camera.name,
             ipAddress: camera.ipAddress,
             username: camera.username,
@@ -373,14 +460,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           // Encrypt password and create camera
           const encryptedPassword = await encryptPassword(validatedData.password);
+          const { password: _, ...cameraData } = validatedData;
+          
           const newCamera = await storage.createCamera({
-            userId: validatedData.userId,
-            name: validatedData.name,
-            ipAddress: validatedData.ipAddress,
-            username: validatedData.username,
+            userId, // From session, not validation
+            ...cameraData,
             encryptedPassword,
-            location: validatedData.location,
-            notes: validatedData.notes,
           });
           
           imported.push(newCamera);
