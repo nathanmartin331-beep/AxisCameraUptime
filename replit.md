@@ -35,6 +35,7 @@ Preferred communication style: Simple, everyday language.
 **Key Pages:**
 - Landing page (unauthenticated users)
 - Dashboard (camera overview with video health metrics, uptime charts, tri-state status badges, filtering, and exports)
+- **Customizable Dashboard** (drag-and-drop widget layout with reliability metrics for enterprise directors)
 - Cameras page (camera management with manual add and CSV import)
 - Network Scan page (subnet scanning for camera discovery)
 - Camera detail views (individual camera analytics, reboot history, video health status)
@@ -60,6 +61,19 @@ Preferred communication style: Simple, everyday language.
 - Dashboard "Video Issues" metric with amber accent when failures detected
 - Tooltips with remediation guidance for video failures
 - Video status displayed alongside system status in camera table
+
+**Customizable Dashboard (NEW):**
+- **Purpose:** Enterprise-grade analytics dashboard for security directors and reliability teams
+- **Widget System:** 12 widget types including MTTR, MTBF, Network Uptime, Total Incidents, SLA Compliance, Video Health, Incident Leaderboard, Site Rankings, Active Incidents, Camera Status, MTTR Trend, and Uptime Distribution
+- **Drag-and-Drop Layout:** Uses react-grid-layout for intuitive widget rearrangement and resizing
+- **Persistence:** Layout saved to PostgreSQL (JSONB) per user with 1-second debounced saves
+- **Widget Catalog:** Add/remove widgets from comprehensive catalog via modal dialog
+- **Default Layout:** New users start with 7 pre-configured widgets (Network Uptime, MTTR, MTBF, Total Incidents, Camera Status, Incident Leaderboard, Site Rankings)
+- **Responsive Grid:** Breakpoints for lg/md/sm/xs viewports with automatic reflowing
+- **Real-time Metrics:** All widgets fetch live data from reliability metrics calculations
+- **Multiple Instances:** Unique widget instance IDs allow multiple copies of same widget type
+- **Server Validation:** Zod schemas enforce finite Y coordinates and prevent malformed layouts
+- **Performance:** Debounced saves prevent API thrashing; Promise.all() for parallel metric calculations
 
 ### Backend Architecture
 
@@ -101,6 +115,10 @@ Preferred communication style: Simple, everyday language.
 - `/api/cameras/:id/events` - Uptime event history
 - `/api/cameras/:id/uptime` - Calculated uptime percentages
 - `/api/cameras/test` - Test camera credentials before saving
+- **`/api/dashboard/layout`** - Dashboard widget layout persistence (GET/POST)
+- **`/api/metrics/network`** - Network-wide reliability metrics (MTTR, MTBF, uptime, incidents)
+- **`/api/metrics/sla`** - SLA compliance calculations
+- **`/api/metrics/sites`** - Per-site reliability rankings
 
 **Security Implementation:**
 - Plain passwords accepted from frontend, encrypted immediately server-side using bcryptjs
@@ -137,6 +155,15 @@ Preferred communication style: Simple, everyday language.
 - timestamp, bootId, metadata (JSONB for extensibility)
 - Indexed on cameraId + timestamp for efficient range queries
 
+**dashboardLayouts** - User customizable dashboard layouts
+- id (serial primary key)
+- userId (foreign key → users, unique constraint - one layout per user)
+- layout (JSONB - stores widget array with coordinates)
+  - Structure: `{ widgets: [{ id, type, x, y, w, h }, ...] }`
+  - Server validates Y coordinates are finite and positive
+- Timestamps: createdAt, updatedAt
+- Cascade delete on user deletion
+
 **Uptime Calculation Strategy:**
 - Events create time windows between state changes
 - Online duration = time between 'online' event and next 'offline'/'reboot' event
@@ -162,6 +189,8 @@ Preferred communication style: Simple, everyday language.
 - **shadcn/ui:** Pre-styled component implementations
 - **Recharts:** Data visualization for uptime charts
 - **Lucide React:** Icon system
+- **react-grid-layout:** Drag-and-drop grid system for customizable dashboard
+- **react-resizable:** Widget resizing for dashboard grid
 
 **Utility Libraries:**
 - **bcryptjs:** Password hashing (though noted: current implementation stores credentials encrypted, not for digest auth)
