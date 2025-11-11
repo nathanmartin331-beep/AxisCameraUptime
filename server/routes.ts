@@ -257,6 +257,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const onlineCameras = cameras.filter(c => c.currentStatus === "online").length;
       const offlineCameras = cameras.filter(c => c.currentStatus === "offline").length;
       const unknownCameras = cameras.filter(c => c.currentStatus === "unknown").length;
+      
+      // Video health metrics
+      const videoOk = cameras.filter(c => c.videoStatus === "video_ok").length;
+      const videoFailed = cameras.filter(c => c.videoStatus === "video_failed").length;
+      const videoUnknown = cameras.filter(c => !c.videoStatus || c.videoStatus === "unknown").length;
 
       // Calculate average uptime across all cameras (30 days)
       let avgUptime = 0;
@@ -273,6 +278,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         onlineCameras,
         offlineCameras,
         unknownCameras,
+        videoOk,
+        videoFailed,
+        videoUnknown,
         avgUptime: Math.round(avgUptime * 100) / 100,
       });
     } catch (error) {
