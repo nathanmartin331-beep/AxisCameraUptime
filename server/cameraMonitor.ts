@@ -34,33 +34,81 @@ async function pollCamera(
     clearTimeout(timeoutId);
     const responseTime = Date.now() - startTime;
 
+    // Check HTTP status
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
     const text = await response.text();
+    
+    // Log raw response for debugging (first time only per camera)
+    if (process.env.NODE_ENV === "development") {
+      console.log(`[VAPIX] Raw response from ${ipAddress}:\n${text.substring(0, 500)}`);
+    }
+
+    // Validate response contains expected VAPIX format
+    if (!text.includes("systemready=") && !text.includes("=")) {
+      throw new Error(`Invalid response format - not VAPIX systemready (got: ${text.substring(0, 100)})`);
+    }
 
     // Parse systemready response format:
     // systemready=yes
     // uptime=123456
     // bootid=abc123
-    const lines = text.split("\n");
-    const data: any = {};
+    const lines = text.split(/\r?\n/); // Handle both Unix and Windows line endings
+    const data: Record<string, string> = {};
 
     for (const line of lines) {
-      const [key, value] = line.split("=").map((s) => s.trim());
+      const trimmedLine = line.trim();
+      if (!trimmedLine || !trimmedLine.includes("=")) continue;
+      
+      const separatorIndex = trimmedLine.indexOf("=");
+      const key = trimmedLine.substring(0, separatorIndex).trim().toLowerCase();
+      const value = trimmedLine.substring(separatorIndex + 1).trim();
+      
       if (key && value) {
         data[key] = value;
       }
     }
 
+    // Validate required fields are present
+    if (!data.systemready) {
+      throw new Error(`Missing 'systemready' field in response. Got keys: ${Object.keys(data).join(", ")}`);
+    }
+
+    // Validate systemready value
+    const systemReady = data.systemready.toLowerCase();
+    if (systemReady !== "yes" && systemReady !== "no") {
+      throw new Error(`Invalid systemready value: '${data.systemready}' (expected 'yes' or 'no')`);
+    }
+
+    // Parse uptime (may not always be present)
+    let uptime = 0;
+    if (data.uptime) {
+      const parsedUptime = parseInt(data.uptime);
+      if (!isNaN(parsedUptime)) {
+        uptime = parsedUptime;
+      } else {
+        console.warn(`[VAPIX] Invalid uptime value for ${ipAddress}: '${data.uptime}'`);
+      }
+    }
+
+    // bootid is required for reboot detection
+    if (!data.bootid) {
+      console.warn(`[VAPIX] Missing bootid for ${ipAddress} - reboot detection will not work`);
+    }
+
     return {
-      systemReady: data.systemready === "yes",
-      uptime: parseInt(data.uptime || "0"),
+      systemReady: systemReady === "yes",
+      uptime,
       bootId: data.bootid || "",
     };
   } catch (error: any) {
     clearTimeout(timeoutId);
+    // Provide more context in error message
+    if (error.name === "AbortError") {
+      throw new Error(`Timeout after ${timeout}ms`);
+    }
     throw error;
   }
 }
