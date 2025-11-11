@@ -92,6 +92,7 @@ export const uptimeEvents = pgTable(
       .references(() => cameras.id, { onDelete: "cascade" }),
     timestamp: timestamp("timestamp").notNull().defaultNow(),
     status: varchar("status", { length: 20 }).notNull(),
+    videoStatus: varchar("video_status", { length: 20 }),
     uptimeSeconds: integer("uptime_seconds"),
     bootId: varchar("boot_id"),
     responseTimeMs: integer("response_time_ms"),
