@@ -10,7 +10,7 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
-import { Home, Camera, Wifi, FileText, Settings, LogOut } from "lucide-react";
+import { Home, Camera, Wifi, FileText, Settings, LogOut, LayoutDashboard } from "lucide-react";
 import { Link, useLocation } from "wouter";
 
 const menuItems = [
@@ -18,6 +18,11 @@ const menuItems = [
     title: "Dashboard",
     url: "/",
     icon: Home,
+  },
+  {
+    title: "Custom Dashboard",
+    url: "/custom-dashboard",
+    icon: LayoutDashboard,
   },
   {
     title: "Cameras",

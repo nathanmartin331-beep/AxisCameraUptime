@@ -13,6 +13,7 @@ import Cameras from "@/pages/Cameras";
 import NetworkScan from "@/pages/NetworkScan";
 import Reports from "@/pages/Reports";
 import Settings from "@/pages/Settings";
+import CustomizableDashboard from "@/pages/CustomizableDashboard";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
@@ -26,6 +27,7 @@ function Router() {
       <Route path="/scan" component={NetworkScan} />
       <Route path="/reports" component={Reports} />
       <Route path="/settings" component={Settings} />
+      <Route path="/custom-dashboard" component={CustomizableDashboard} />
       <Route component={NotFound} />
     </Switch>
   );
