@@ -405,6 +405,116 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Test existing camera connection - polls a user's own camera and returns validation results
+  app.post("/api/cameras/:id/test-connection", requireAuth, async (req: any, res) => {
+    try {
+      const cameraId = req.params.id;
+      const userId = getUserId(req);
+
+      // Get camera and verify ownership
+      const camera = await storage.getCameraById(cameraId);
+      
+      if (!camera) {
+        return res.status(404).json({ 
+          success: false,
+          error: "Camera not found" 
+        });
+      }
+
+      if (camera.userId !== userId) {
+        return res.status(403).json({ 
+          success: false,
+          error: "Forbidden - you don't own this camera" 
+        });
+      }
+
+      // Import and use the actual pollCamera function
+      const { decryptPassword } = await import("./encryption");
+      const decryptedPassword = await decryptPassword(camera.encryptedPassword);
+      
+      // Import pollCamera helper
+      const cameraMonitor = await import("./cameraMonitor");
+      const pollCamera = (cameraMonitor as any).pollCameraForTest || (async (ip: string, user: string, pass: string) => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        
+        try {
+          const url = `http://${ip}/axis-cgi/systemready.cgi`;
+          const startTime = Date.now();
+          const response = await fetch(url, {
+            signal: controller.signal,
+            headers: { "User-Agent": "AxisCameraMonitor/1.0" },
+          });
+          clearTimeout(timeoutId);
+          const responseTime = Date.now() - startTime;
+          const rawText = await response.text();
+          
+          const lines = rawText.split(/\r?\n/);
+          const data: Record<string, string> = {};
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.includes("=")) continue;
+            const idx = trimmed.indexOf("=");
+            const key = trimmed.substring(0, idx).trim().toLowerCase();
+            const value = trimmed.substring(idx + 1).trim();
+            if (key && value) data[key] = value;
+          }
+          
+          return { 
+            responseTime, 
+            httpStatus: response.status,
+            parsedData: data,
+            rawText: rawText.substring(0, 200), // Only first 200 chars for safety
+          };
+        } catch (err: any) {
+          clearTimeout(timeoutId);
+          throw err;
+        }
+      });
+
+      const result = await pollCamera(camera.ipAddress, camera.username, decryptedPassword);
+
+      // Return safe validation results (no full raw response)
+      res.json({
+        success: true,
+        cameraName: camera.name,
+        ipAddress: camera.ipAddress,
+        responseTime: result.responseTime,
+        httpStatus: result.httpStatus,
+        rawResponsePreview: result.rawText, // Only preview, not full response
+        parsedFields: result.parsedData,
+        validation: {
+          hasSystemReady: !!result.parsedData.systemready,
+          systemReadyValue: result.parsedData.systemready || null,
+          hasBootId: !!result.parsedData.bootid,
+          bootIdValue: result.parsedData.bootid || null,
+          hasUptime: !!result.parsedData.uptime,
+          uptimeValue: result.parsedData.uptime || null,
+          isValidAxisFormat: !!result.parsedData.systemready && 
+            (result.parsedData.systemready === "yes" || result.parsedData.systemready === "no"),
+        },
+        interpretation: {
+          isOnline: result.parsedData.systemready === "yes",
+          uptime: result.parsedData.uptime ? parseInt(result.parsedData.uptime) : null,
+          bootId: result.parsedData.bootid || null,
+          canDetectReboots: !!result.parsedData.bootid,
+        },
+      });
+    } catch (error: any) {
+      if (error.name === "AbortError") {
+        return res.json({
+          success: false,
+          error: "Timeout - camera did not respond within 10 seconds",
+        });
+      }
+      
+      res.json({
+        success: false,
+        error: error.message || "Failed to connect to camera",
+      });
+    }
+  });
+
   // CSV import route
   app.post("/api/cameras/import", requireAuth, async (req: any, res) => {
     try {
