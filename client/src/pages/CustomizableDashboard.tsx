@@ -71,15 +71,23 @@ export default function CustomizableDashboard() {
     },
   });
 
+  // Debounce layout saves to prevent API thrashing
+  const [saveTimeout, setSaveTimeout] = useState<NodeJS.Timeout | null>(null);
+
   const handleLayoutChange = (newLayout: Layout[]) => {
     // Update widget positions based on react-grid-layout changes
     const updatedWidgets = widgets.map((widget) => {
       const layoutItem = newLayout.find((item) => item.i === widget.id);
       if (layoutItem) {
+        // Normalize y value - replace Infinity with valid number
+        const normalizedY = layoutItem.y === Infinity || !isFinite(layoutItem.y) 
+          ? Math.max(0, ...widgets.map(w => w.y + w.h)) 
+          : layoutItem.y;
+        
         return {
           ...widget,
           x: layoutItem.x,
-          y: layoutItem.y,
+          y: normalizedY,
           w: layoutItem.w,
           h: layoutItem.h,
         };
@@ -88,13 +96,28 @@ export default function CustomizableDashboard() {
     });
 
     setWidgets(updatedWidgets);
-    saveLayoutMutation.mutate(updatedWidgets);
+    
+    // Debounce save for 1 second
+    if (saveTimeout) {
+      clearTimeout(saveTimeout);
+    }
+    
+    const timeout = setTimeout(() => {
+      saveLayoutMutation.mutate(updatedWidgets);
+    }, 1000);
+    
+    setSaveTimeout(timeout);
   };
 
   const handleAddWidget = (widgetType: string) => {
+    // Calculate Y position at bottom of current widgets
+    const maxY = widgets.length > 0 
+      ? Math.max(...widgets.map(w => w.y + w.h))
+      : 0;
+    
     const newWidget = createWidgetInstance(widgetType, { 
       x: 0, 
-      y: Infinity, // Add at bottom
+      y: maxY, // Add at bottom with valid Y value
       w: WIDGET_CATALOG.find(w => w.type === widgetType)?.defaultSize.w || 3,
       h: WIDGET_CATALOG.find(w => w.type === widgetType)?.defaultSize.h || 2,
     });
