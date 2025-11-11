@@ -15,6 +15,11 @@ interface UptimeResponse {
   days: number;
 }
 
+interface EventsResponse {
+  events: UptimeEvent[];
+  priorEvent: UptimeEvent | null;
+}
+
 export default function CameraDetail() {
   const params = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
@@ -26,9 +31,10 @@ export default function CameraDetail() {
     enabled: !!cameraId,
   });
 
-  const { data: events, isLoading: eventsLoading } = useQuery<UptimeEvent[]>({
+  const { data: events, isLoading: eventsLoading } = useQuery<EventsResponse, Error, UptimeEvent[]>({
     queryKey: ["/api/cameras", cameraId, "events?limit=100"],
     enabled: !!cameraId,
+    select: (data) => data.events ?? [],
   });
 
   const { data: uptimeData, isLoading: uptimeLoading } = useQuery<UptimeResponse>({
