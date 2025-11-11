@@ -9,7 +9,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import StatusIndicator, { CameraStatus } from "./StatusIndicator";
-import { MoreVertical, Eye } from "lucide-react";
+import { MoreVertical, Eye, CheckCircle2, AlertTriangle, XCircle } from "lucide-react";
+import { 
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger 
+} from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,6 +29,7 @@ export interface Camera {
   ipAddress: string;
   location: string;
   status: CameraStatus;
+  videoStatus?: string;
   uptime: string;
   lastSeen: string;
 }
@@ -69,7 +76,54 @@ export default function CameraTable({
                 data-testid={`camera-row-${camera.id}`}
               >
                 <TableCell>
-                  <StatusIndicator status={camera.status} />
+                  <TooltipProvider>
+                    <div className="flex items-center gap-2">
+                      <StatusIndicator status={camera.status} />
+                      {camera.status === "online" && camera.videoStatus && (
+                        <Tooltip>
+                          <TooltipTrigger>
+                            {camera.videoStatus === "video_ok" ? (
+                              <Badge 
+                                variant="outline" 
+                                className="gap-1 border-status-online text-status-online"
+                                data-testid={`video-status-ok-${camera.id}`}
+                              >
+                                <CheckCircle2 className="w-3 h-3" />
+                                Video OK
+                              </Badge>
+                            ) : camera.videoStatus === "video_failed" ? (
+                              <Badge 
+                                variant="outline" 
+                                className="gap-1 border-status-away text-status-away"
+                                data-testid={`video-status-failed-${camera.id}`}
+                              >
+                                <AlertTriangle className="w-3 h-3" />
+                                Video Failed
+                              </Badge>
+                            ) : (
+                              <Badge 
+                                variant="outline" 
+                                className="gap-1"
+                                data-testid={`video-status-unknown-${camera.id}`}
+                              >
+                                Unknown
+                              </Badge>
+                            )}
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p className="text-sm">
+                              {camera.videoStatus === "video_ok" 
+                                ? "Video stream is healthy and delivering images"
+                                : camera.videoStatus === "video_failed"
+                                ? "Camera reachable but video stream unavailable. Confirm live view configuration, credentials, and that the JPEG snapshot API is enabled."
+                                : "Video status not yet checked"
+                              }
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
+                    </div>
+                  </TooltipProvider>
                 </TableCell>
                 <TableCell className="font-medium">{camera.name}</TableCell>
                 <TableCell>

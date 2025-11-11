@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Camera, Wifi, TrendingUp, Plus, Upload, Search as SearchIcon } from "lucide-react";
+import { Camera, Wifi, TrendingUp, Plus, Upload, Search as SearchIcon, AlertTriangle } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
@@ -20,6 +20,9 @@ interface DashboardSummary {
   onlineCameras: number;
   offlineCameras: number;
   unknownCameras: number;
+  videoOk: number;
+  videoFailed: number;
+  videoUnknown: number;
   avgUptime: number;
 }
 
@@ -30,6 +33,8 @@ interface ApiCamera {
   location: string | null;
   notes: string | null;
   currentStatus: string;
+  videoStatus?: string;
+  lastVideoCheck?: string | null;
   lastSeenAt: string | null;
   userId: string;
   username: string;
@@ -68,6 +73,7 @@ function transformCamera(apiCamera: ApiCamera, uptimeMap: Map<string, number>): 
     ipAddress: apiCamera.ipAddress,
     location: apiCamera.location || "No location",
     status: apiCamera.currentStatus as CameraType["status"],
+    videoStatus: apiCamera.videoStatus,
     uptime: `${uptime.toFixed(1)}%`,
     lastSeen: formatLastSeen(apiCamera.lastSeenAt)
   };
@@ -206,13 +212,14 @@ export default function Dashboard() {
       </div>
 
       {summaryLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <Skeleton className="h-32" />
           <Skeleton className="h-32" />
           <Skeleton className="h-32" />
           <Skeleton className="h-32" />
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <MetricCard
             title="Total Cameras"
             value={summary?.totalCameras ?? 0}
@@ -226,6 +233,13 @@ export default function Dashboard() {
             subtitle={`${summary?.avgUptime.toFixed(1) ?? 0}% availability`}
             icon={Wifi}
             accentColor="green"
+          />
+          <MetricCard
+            title="Video Issues"
+            value={summary?.videoFailed ?? 0}
+            subtitle={`${summary?.videoOk ?? 0} cameras streaming`}
+            icon={AlertTriangle}
+            accentColor={summary?.videoFailed && summary.videoFailed > 0 ? "amber" : "green"}
           />
           <MetricCard
             title="System Uptime"
