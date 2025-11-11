@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useQuery } from "@tanstack/react-query";
-import { Download, FileText, TrendingUp, TrendingDown } from "lucide-react";
+import { Download, FileText, TrendingUp, TrendingDown, MapPin } from "lucide-react";
 import { format } from "date-fns";
 import UptimeChart from "@/components/UptimeChart";
 
@@ -13,15 +13,34 @@ interface Camera {
   name: string;
   ipAddress: string;
   status: string;
+  location?: string;
 }
 
 export default function Reports() {
   const [timeRange, setTimeRange] = useState("30");
   const [selectedCamera, setSelectedCamera] = useState<string>("all");
+  const [locationFilter, setLocationFilter] = useState<string>("all");
 
   const { data: cameras = [] } = useQuery<Camera[]>({
     queryKey: ["/api/cameras"],
   });
+
+  // Get unique locations for filter dropdown
+  const uniqueLocations = useMemo(() => {
+    const locations = cameras
+      .map(camera => camera.location)
+      .filter((loc): loc is string => !!loc && loc.trim() !== "");
+    return Array.from(new Set(locations)).sort();
+  }, [cameras]);
+
+  // Filter cameras by location
+  const filteredCameras = useMemo(() => {
+    if (locationFilter === "all") return cameras;
+    if (locationFilter === "none") {
+      return cameras.filter(camera => !camera.location || camera.location.trim() === "");
+    }
+    return cameras.filter(camera => camera.location === locationFilter);
+  }, [cameras, locationFilter]);
 
   const { data: summary } = useQuery<any>({
     queryKey: ["/api/dashboard/summary", timeRange],
@@ -35,12 +54,16 @@ export default function Reports() {
   });
 
   const handleExportCSV = () => {
+    // Export only filtered cameras
+    const camerasToExport = filteredCameras;
+    
     const csvContent = [
-      ["Camera Name", "IP Address", "Status", "Uptime %", "Last Seen"].join(","),
-      ...cameras.map((camera) =>
+      ["Camera Name", "IP Address", "Location", "Status", "Uptime %", "Last Seen"].join(","),
+      ...camerasToExport.map((camera) =>
         [
           camera.name,
           camera.ipAddress,
+          camera.location || "N/A",
           camera.status,
           "N/A",
           "N/A"
@@ -51,8 +74,9 @@ export default function Reports() {
     const blob = new Blob([csvContent], { type: "text/csv" });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
+    const locationSuffix = locationFilter !== "all" ? `-${locationFilter.replace(/\s+/g, '-')}` : "";
+    a.download = `uptime-report${locationSuffix}-${format(new Date(), "yyyy-MM-dd")}.csv`;
     a.href = url;
-    a.download = `uptime-report-${format(new Date(), "yyyy-MM-dd")}.csv`;
     a.click();
   };
 
@@ -121,19 +145,46 @@ export default function Reports() {
 
       <Card>
         <CardHeader>
-          <div className="flex justify-between items-center gap-4">
+          <div className="space-y-4">
             <div>
               <CardTitle>Report Configuration</CardTitle>
-              <CardDescription>Select time range and camera for detailed analytics</CardDescription>
+              <CardDescription>
+                Filter by location, select camera and time range for detailed analytics
+              </CardDescription>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
+              <Select value={locationFilter} onValueChange={(value) => {
+                setLocationFilter(value);
+                setSelectedCamera("all"); // Reset camera selection when location changes
+              }}>
+                <SelectTrigger className="w-48" data-testid="select-location-filter">
+                  <MapPin className="w-4 h-4 mr-2" />
+                  <SelectValue placeholder="All Locations" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all" data-testid="location-option-all">All Locations</SelectItem>
+                  <SelectItem value="none" data-testid="location-option-none">No Location</SelectItem>
+                  {uniqueLocations.map((location) => (
+                    <SelectItem 
+                      key={location} 
+                      value={location}
+                      data-testid={`location-option-${location.replace(/\s+/g, '-').toLowerCase()}`}
+                    >
+                      {location}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
               <Select value={selectedCamera} onValueChange={setSelectedCamera}>
                 <SelectTrigger className="w-48" data-testid="select-camera">
                   <SelectValue placeholder="Select camera" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Cameras</SelectItem>
-                  {cameras.map((camera) => (
+                  <SelectItem value="all">
+                    All Cameras {locationFilter !== "all" && `(${filteredCameras.length})`}
+                  </SelectItem>
+                  {filteredCameras.map((camera) => (
                     <SelectItem key={camera.id} value={camera.id.toString()}>
                       {camera.name}
                     </SelectItem>
@@ -160,7 +211,11 @@ export default function Reports() {
             cameraId={selectedCamera === "all" ? "all" : selectedCamera}
             days={parseInt(timeRange)}
             title={`${timeRange}-Day Uptime Trend`}
-            description={selectedCamera === "all" ? "All cameras" : cameras.find(c => c.id.toString() === selectedCamera)?.name}
+            description={
+              selectedCamera === "all" 
+                ? `${filteredCameras.length} camera${filteredCameras.length !== 1 ? 's' : ''}${locationFilter !== "all" ? ` in ${locationFilter}` : ''}`
+                : filteredCameras.find(c => c.id.toString() === selectedCamera)?.name
+            }
           />
         </CardContent>
       </Card>
