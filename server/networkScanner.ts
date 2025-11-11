@@ -86,3 +86,50 @@ export async function scanSubnet(
 
   return results;
 }
+
+// New function to scan full IP ranges including multiple subnets
+export async function scanIPRange(
+  startIP: string,
+  endIP: string
+): Promise<ScanResult[]> {
+  const startOctets = startIP.split('.').map(n => parseInt(n));
+  const endOctets = endIP.split('.').map(n => parseInt(n));
+
+  // Convert to 32-bit integers for easy iteration
+  const ipToNumber = (octets: number[]) =>
+    (octets[0] << 24) + (octets[1] << 16) + (octets[2] << 8) + octets[3];
+  
+  const numberToIP = (num: number) => 
+    `${(num >>> 24) & 255}.${(num >>> 16) & 255}.${(num >>> 8) & 255}.${num & 255}`;
+
+  const startNum = ipToNumber(startOctets);
+  const endNum = ipToNumber(endOctets);
+  const totalIPs = endNum - startNum + 1;
+
+  console.log(`[Scanner] Scanning IP range ${startIP} to ${endIP} (${totalIPs} addresses)`);
+
+  const promises: Promise<ScanResult>[] = [];
+  
+  for (let ipNum = startNum; ipNum <= endNum; ipNum++) {
+    const ipAddress = numberToIP(ipNum);
+    promises.push(checkAxisCamera(ipAddress));
+  }
+
+  // Check all IPs in parallel with batching
+  const batchSize = 20;
+  const results: ScanResult[] = [];
+
+  for (let i = 0; i < promises.length; i += batchSize) {
+    const batch = promises.slice(i, i + batchSize);
+    const batchResults = await Promise.all(batch);
+    results.push(...batchResults);
+    
+    const progress = Math.min(i + batchSize, promises.length);
+    console.log(`[Scanner] Progress: ${progress} / ${totalIPs} IPs checked`);
+  }
+
+  const foundCameras = results.filter((r) => r.isAxis);
+  console.log(`[Scanner] Found ${foundCameras.length} Axis cameras out of ${totalIPs} scanned`);
+
+  return results;
+}

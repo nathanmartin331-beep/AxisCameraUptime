@@ -334,7 +334,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { subnet } = scanRequestSchema.parse(req.body);
 
-      // Parse CIDR notation (e.g., "192.168.1.0/24")
+      // Parse CIDR notation (e.g., "192.168.1.0/24", "172.16.0.0/16", "10.0.0.0/8")
       const [networkAddress, prefixLengthStr] = subnet.split('/');
       
       if (!networkAddress || !prefixLengthStr) {
@@ -342,8 +342,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const prefixLength = parseInt(prefixLengthStr);
-      if (prefixLength < 16 || prefixLength > 30) {
-        return res.status(400).json({ message: "Prefix length must be between 16 and 30" });
+      if (prefixLength < 8 || prefixLength > 30) {
+        return res.status(400).json({ message: "Prefix length must be between 8 and 30" });
       }
 
       // Parse IP address octets
@@ -352,38 +352,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid IP address format" });
       }
 
-      // For /24 networks, use first 3 octets as subnet base
-      // Scan from .1 to .254 (excluding network and broadcast)
-      let subnetBase: string;
-      let startRange: number;
-      let endRange: number;
+      // Calculate network address and broadcast address
+      const ipToNumber = (octets: number[]) =>
+        (octets[0] << 24) + (octets[1] << 16) + (octets[2] << 8) + octets[3];
+      
+      const numberToIP = (num: number) => 
+        `${(num >>> 24) & 255}.${(num >>> 16) & 255}.${(num >>> 8) & 255}.${num & 255}`;
 
-      if (prefixLength === 24) {
-        subnetBase = `${octets[0]}.${octets[1]}.${octets[2]}`;
-        startRange = 1;
-        endRange = 254;
-      } else {
-        // For other prefix lengths, calculate the range
-        const hostBits = 32 - prefixLength;
-        const totalHosts = Math.pow(2, hostBits);
-        const usableHosts = totalHosts - 2; // Exclude network and broadcast
+      const ipNum = ipToNumber(octets);
+      const hostBits = 32 - prefixLength;
+      const subnetMask = ~((1 << hostBits) - 1);
+      const networkNum = (ipNum & subnetMask) >>> 0; // Network address
+      const broadcastNum = (networkNum | ((1 << hostBits) - 1)) >>> 0; // Broadcast address
 
-        if (prefixLength >= 24) {
-          subnetBase = `${octets[0]}.${octets[1]}.${octets[2]}`;
-          startRange = octets[3] + 1;
-          endRange = Math.min(startRange + usableHosts - 1, 254);
-        } else {
-          // For /16-/23, use first 3 octets and scan limited range
-          subnetBase = `${octets[0]}.${octets[1]}.${octets[2]}`;
-          startRange = 1;
-          endRange = Math.min(254, usableHosts);
-        }
+      // Calculate usable host range (exclude network and broadcast)
+      const startIPNum = networkNum + 1;
+      const endIPNum = broadcastNum - 1;
+      const totalHosts = endIPNum - startIPNum + 1;
+
+      // Practical limit: max 10,000 IPs per scan to prevent extremely long operations
+      const MAX_SCAN_SIZE = 10000;
+      if (totalHosts > MAX_SCAN_SIZE) {
+        return res.status(400).json({ 
+          message: `Scan too large: ${totalHosts} hosts. Maximum ${MAX_SCAN_SIZE} hosts per scan. Use a smaller CIDR range (e.g., /20 or higher).` 
+        });
       }
 
-      console.log(`[API] Scanning CIDR ${subnet} → ${subnetBase}.${startRange}-${endRange}`);
+      const startIP = numberToIP(startIPNum);
+      const endIP = numberToIP(endIPNum);
 
-      const { scanSubnet } = await import("./networkScanner");
-      const results = await scanSubnet(subnetBase, startRange, endRange);
+      console.log(`[API] Scanning CIDR ${subnet}`);
+      console.log(`[API] Range: ${startIP} to ${endIP} (${totalHosts} hosts)`);
+
+      const { scanIPRange } = await import("./networkScanner");
+      const results = await scanIPRange(startIP, endIP);
 
       // Map results to frontend expected format
       const cameras = results
