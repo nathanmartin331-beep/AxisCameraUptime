@@ -2,6 +2,7 @@ import {
   users,
   cameras,
   uptimeEvents,
+  dashboardLayouts,
   type User,
   type InsertUser,
   type Camera,
@@ -258,6 +259,44 @@ export class DatabaseStorage implements IStorage {
       endDate,
       priorEvent?.status
     );
+  }
+
+  // Dashboard layout methods
+  async getDashboardLayout(userId: string) {
+    const result = await db
+      .select()
+      .from(dashboardLayouts)
+      .where(eq(dashboardLayouts.userId, userId))
+      .limit(1);
+
+    return result[0]?.layout || null;
+  }
+
+  async saveDashboardLayout(userId: string, layout: any) {
+    const existing = await db
+      .select()
+      .from(dashboardLayouts)
+      .where(eq(dashboardLayouts.userId, userId))
+      .limit(1);
+
+    if (existing.length > 0) {
+      // Update existing layout
+      await db
+        .update(dashboardLayouts)
+        .set({
+          layout,
+          updatedAt: new Date(),
+        })
+        .where(eq(dashboardLayouts.userId, userId));
+    } else {
+      // Create new layout
+      await db.insert(dashboardLayouts).values({
+        userId,
+        layout,
+      });
+    }
+
+    return layout;
   }
 }
 
