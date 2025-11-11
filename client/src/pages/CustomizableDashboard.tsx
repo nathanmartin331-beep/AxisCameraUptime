@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Responsive, WidthProvider, Layout } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
-import { Plus, Settings } from "lucide-react";
+import { Plus, Settings, Loader2 } from "lucide-react";
 import { WidgetRenderer } from "@/components/widgets/WidgetRenderer";
 import { DEFAULT_LAYOUT, WIDGET_CATALOG, createWidgetInstance } from "@/components/widgets/WidgetCatalog";
 import {
@@ -31,15 +31,28 @@ interface WidgetInstance {
 
 export default function CustomizableDashboard() {
   const [isAddWidgetOpen, setIsAddWidgetOpen] = useState(false);
+  const [widgets, setWidgets] = useState<WidgetInstance[]>([]);
 
   // Load layout from backend
-  const { data: savedLayout } = useQuery({
+  const { data: savedLayout, isLoading: isLoadingLayout } = useQuery({
     queryKey: ['/api/dashboard/layout'],
   });
 
-  const [widgets, setWidgets] = useState<WidgetInstance[]>(
-    (savedLayout as any)?.widgets || DEFAULT_LAYOUT
-  );
+  // Update widgets when savedLayout data arrives
+  useEffect(() => {
+    if (savedLayout) {
+      const loadedWidgets = (savedLayout as any)?.widgets;
+      if (loadedWidgets && loadedWidgets.length > 0) {
+        setWidgets(loadedWidgets);
+      } else {
+        // No saved layout, use default
+        setWidgets(DEFAULT_LAYOUT);
+      }
+    } else if (!isLoadingLayout) {
+      // Query finished but no data, use default
+      setWidgets(DEFAULT_LAYOUT);
+    }
+  }, [savedLayout, isLoadingLayout]);
 
   // Save layout mutation
   const saveLayoutMutation = useMutation({
@@ -108,6 +121,18 @@ export default function CustomizableDashboard() {
     minW: WIDGET_CATALOG.find(w => w.type === widget.type)?.minSize?.w || 2,
     minH: WIDGET_CATALOG.find(w => w.type === widget.type)?.minSize?.h || 2,
   }));
+
+  // Show loading state while fetching layout
+  if (isLoadingLayout) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-primary" />
+          <p className="text-muted-foreground">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 space-y-6">
