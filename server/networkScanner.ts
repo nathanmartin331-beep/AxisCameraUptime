@@ -1,9 +1,35 @@
 // Network scanner for discovering Axis cameras on a subnet
+import { detectCameraModel, type CameraModelInfo } from './cameraModelDetection';
+
 export interface ScanResult {
   ipAddress: string;
   isAxis: boolean;
   model?: string;
+  series?: string; // P, Q, M, F
+  capabilities?: {
+    hasPTZ?: boolean;
+    hasAudio?: boolean;
+    resolution?: string;
+  };
   error?: string;
+}
+
+/**
+ * Safely detect camera model without failing the scan
+ * Uses shorter timeout (2s) to keep scanning fast
+ */
+async function detectCameraModelSafe(ipAddress: string): Promise<CameraModelInfo> {
+  try {
+    // Use shorter timeout for scanner (2s vs 5s)
+    const modelInfo = await detectCameraModel(ipAddress, 2000);
+    return modelInfo;
+  } catch (error) {
+    // Model detection failed, but that's okay
+    console.log(`[Scanner] Model detection failed for ${ipAddress}, using fallback`);
+    return {
+      fullName: "Axis Camera",
+    };
+  }
 }
 
 async function checkAxisCamera(ipAddress: string, timeout: number = 3000): Promise<ScanResult> {
@@ -26,10 +52,15 @@ async function checkAxisCamera(ipAddress: string, timeout: number = 3000): Promi
       const text = await response.text();
       // Check if response contains systemready data
       if (text.includes("systemready=")) {
+        // Camera is confirmed as Axis, now try to detect model
+        const modelInfo = await detectCameraModelSafe(ipAddress);
+
         return {
           ipAddress,
           isAxis: true,
-          model: "Axis Camera", // Could parse from response if available
+          model: modelInfo.model || modelInfo.fullName || "Axis Camera",
+          series: modelInfo.series,
+          capabilities: modelInfo.capabilities,
         };
       }
     }

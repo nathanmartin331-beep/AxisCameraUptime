@@ -48,6 +48,57 @@ export const insertUserSchema = createInsertSchema(users, {
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 
+/**
+ * Camera capabilities interface
+ * Stores detailed capability information for model-aware features
+ */
+export interface CameraCapabilities {
+  // Video
+  resolution?: string;           // "1920x1080"
+  maxFramerate?: number;         // 60
+  supportedFormats?: string[];   // ["jpeg", "mjpeg", "h264", "h265"]
+
+  // PTZ (Q-series)
+  ptz?: {
+    enabled: boolean;
+    panRange?: { min: number; max: number };
+    tiltRange?: { min: number; max: number };
+    zoomRange?: { min: number; max: number };
+    presets?: boolean;
+    autoTracking?: boolean;
+  };
+
+  // Audio
+  audio?: {
+    enabled: boolean;
+    channels: number;
+    formats?: string[];          // ["aac", "g711", "opus"]
+  };
+
+  // Multi-Sensor (M-series)
+  multiSensor?: {
+    enabled: boolean;
+    sensorCount: number;
+    channelIds: number[];        // [1, 2, 3, 4]
+    panoramic: boolean;          // Stitched view available
+  };
+
+  // Analytics
+  analytics?: {
+    motionDetection: boolean;
+    tampering: boolean;
+    objectDetection: boolean;
+    peopleCount: boolean;
+  };
+
+  // System
+  system?: {
+    architecture?: string;       // "armv7hf"
+    soc?: string;               // "Artpec-7"
+    edgeStorage?: boolean;
+  };
+}
+
 // Cameras table - stores camera configuration and encrypted credentials
 export const cameras = sqliteTable("cameras", {
   id: text("id").primaryKey().$defaultFn(generateId),
@@ -67,6 +118,28 @@ export const cameras = sqliteTable("cameras", {
   lastVideoCheck: integer("last_video_check", { mode: "timestamp" }),
   createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
   updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+
+  // NEW FIELDS: Camera model information (all optional for backward compatibility)
+  model: text("model"),                    // e.g., "P3255-LVE"
+  series: text("series"),                  // e.g., "P", "Q", "M", "F"
+  fullName: text("full_name"),             // e.g., "AXIS P3255-LVE Network Camera"
+
+  // Firmware & Hardware
+  firmwareVersion: text("firmware_version"), // e.g., "9.80.1"
+  vapixVersion: text("vapix_version"),       // e.g., "3"
+
+  // Capability Flags (boolean fields for fast queries)
+  hasPTZ: integer("has_ptz", { mode: "boolean" }).default(false),
+  hasAudio: integer("has_audio", { mode: "boolean" }).default(false),
+  audioChannels: integer("audio_channels").default(0),
+  numberOfViews: integer("number_of_views").default(1), // Multi-sensor count
+
+  // Detailed Capabilities (JSON for extensibility)
+  capabilities: text("capabilities", { mode: "json" }).$type<CameraCapabilities>(),
+
+  // Detection Metadata
+  detectedAt: integer("detected_at", { mode: "timestamp" }),
+  detectionMethod: text("detection_method"), // "auto" | "manual" | "import"
 });
 
 export const insertCameraSchema = createInsertSchema(cameras).omit({

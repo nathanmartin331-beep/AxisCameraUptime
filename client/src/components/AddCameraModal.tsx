@@ -11,7 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2 } from "lucide-react";
+import { Loader2, Info } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 interface AddCameraModalProps {
   open: boolean;
@@ -148,6 +149,12 @@ export default function AddCameraModal({
                 rows={3}
               />
             </div>
+            <Alert>
+              <Info className="h-4 w-4" />
+              <AlertDescription>
+                Camera model and capabilities will be automatically detected on the first successful connection.
+              </AlertDescription>
+            </Alert>
           </div>
           <DialogFooter className="gap-2">
             <Button

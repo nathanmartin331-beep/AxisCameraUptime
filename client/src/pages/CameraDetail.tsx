@@ -1,5 +1,5 @@
 import { useParams, useLocation } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import CameraDetailView from "@/components/CameraDetailView";
 import UptimeChart from "@/components/UptimeChart";
@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import type { Camera, UptimeEvent } from "@shared/schema";
 import type { CameraStatus } from "@/components/StatusIndicator";
+import { useState } from "react";
 
 interface UptimeResponse {
   percentage: number;
@@ -24,7 +25,9 @@ export default function CameraDetail() {
   const params = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const cameraId = params.id;
+  const [detectingModel, setDetectingModel] = useState(false);
 
   const { data: camera, isLoading: cameraLoading, error: cameraError } = useQuery<Camera>({
     queryKey: ["/api/cameras", cameraId],
@@ -257,6 +260,37 @@ export default function CameraDetail() {
       .reverse();
   };
 
+  const handleDetectModel = async () => {
+    if (!cameraId) return;
+
+    setDetectingModel(true);
+    try {
+      const response = await fetch(`/api/cameras/${cameraId}/detect-model`, {
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to detect model');
+      }
+
+      // Refresh camera data
+      await queryClient.invalidateQueries({ queryKey: ["/api/cameras", cameraId] });
+
+      toast({
+        title: "Model Detected",
+        description: "Camera model information has been updated.",
+      });
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Detection Failed",
+        description: "Could not detect camera model. Please try again.",
+      });
+    } finally {
+      setDetectingModel(false);
+    }
+  };
+
   const cameraDetails = {
     id: camera.id,
     name: camera.name,
@@ -269,6 +303,17 @@ export default function CameraDetail() {
     addedDate: formatAddedDate(camera.createdAt),
     bootId: camera.currentBootId || "Unknown",
     reboots: detectReboots(),
+    model: camera.model,
+    series: camera.series as 'P' | 'Q' | 'M' | 'F' | undefined,
+    fullName: camera.fullName,
+    firmwareVersion: camera.firmwareVersion,
+    hasPTZ: camera.hasPTZ,
+    hasAudio: camera.hasAudio,
+    resolution: camera.resolution,
+    maxFramerate: camera.maxFramerate,
+    numberOfViews: camera.numberOfViews,
+    capabilities: camera.capabilities,
+    modelDetectedAt: camera.modelDetectedAt,
   };
 
   const chartData = transformEventsToChartData();
@@ -292,6 +337,8 @@ export default function CameraDetail() {
         onBack={handleBack}
         onEdit={handleEdit}
         onDelete={handleDelete}
+        onDetectModel={handleDetectModel}
+        detectingModel={detectingModel}
       />
 
       <UptimeChart

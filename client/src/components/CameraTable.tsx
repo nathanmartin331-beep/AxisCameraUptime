@@ -9,7 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import StatusIndicator, { CameraStatus } from "./StatusIndicator";
-import { MoreVertical, Eye, CheckCircle2, AlertTriangle, XCircle } from "lucide-react";
+import { MoreVertical, Eye, CheckCircle2, AlertTriangle, XCircle, Move, Mic, Camera as CameraIcon, Loader2 } from "lucide-react";
 import { 
   Tooltip,
   TooltipContent,
@@ -32,6 +32,17 @@ export interface Camera {
   videoStatus?: string;
   uptime: string;
   lastSeen: string;
+  model?: string;
+  series?: 'P' | 'Q' | 'M' | 'F';
+  fullName?: string;
+  firmwareVersion?: string;
+  hasPTZ?: boolean;
+  hasAudio?: boolean;
+  resolution?: string;
+  maxFramerate?: number;
+  numberOfViews?: number;
+  capabilities?: Record<string, any>;
+  modelDetectedAt?: string;
 }
 
 interface CameraTableProps {
@@ -54,6 +65,7 @@ export default function CameraTable({
           <TableRow>
             <TableHead>Status</TableHead>
             <TableHead>Camera Name</TableHead>
+            <TableHead>Model</TableHead>
             <TableHead>IP Address</TableHead>
             <TableHead>Location</TableHead>
             <TableHead>Current Uptime</TableHead>
@@ -64,7 +76,7 @@ export default function CameraTable({
         <TableBody>
           {cameras.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={7} className="text-center text-muted-foreground h-24">
+              <TableCell colSpan={8} className="text-center text-muted-foreground h-24">
                 No cameras found
               </TableCell>
             </TableRow>
@@ -126,6 +138,79 @@ export default function CameraTable({
                   </TooltipProvider>
                 </TableCell>
                 <TableCell className="font-medium">{camera.name}</TableCell>
+                <TableCell>
+                  <TooltipProvider>
+                    <div className="flex items-center gap-2">
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2">
+                          {camera.model ? (
+                            <>
+                              <span className="text-sm font-medium">{camera.model}</span>
+                              {camera.series && (
+                                <Badge
+                                  variant="outline"
+                                  className={
+                                    camera.series === 'P'
+                                      ? "border-blue-500 text-blue-700 bg-blue-50"
+                                      : camera.series === 'Q'
+                                      ? "border-green-500 text-green-700 bg-green-50"
+                                      : camera.series === 'M'
+                                      ? "border-purple-500 text-purple-700 bg-purple-50"
+                                      : "border-orange-500 text-orange-700 bg-orange-50"
+                                  }
+                                >
+                                  {camera.series}
+                                </Badge>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-sm text-muted-foreground flex items-center gap-1">
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              Detecting...
+                            </span>
+                          )}
+                        </div>
+                        {(camera.hasPTZ || camera.hasAudio || (camera.numberOfViews && camera.numberOfViews > 1)) && (
+                          <div className="flex items-center gap-1">
+                            {camera.hasPTZ && (
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <Move className="w-3 h-3 text-muted-foreground" />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-xs">PTZ Support</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            )}
+                            {camera.hasAudio && (
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <Mic className="w-3 h-3 text-muted-foreground" />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-xs">Audio Support</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            )}
+                            {camera.numberOfViews && camera.numberOfViews > 1 && (
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <div className="flex items-center gap-0.5">
+                                    <CameraIcon className="w-3 h-3 text-muted-foreground" />
+                                    <span className="text-xs text-muted-foreground">×{camera.numberOfViews}</span>
+                                  </div>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-xs">Multi-sensor ({camera.numberOfViews} views)</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </TooltipProvider>
+                </TableCell>
                 <TableCell>
                   <code className="text-sm font-mono">{camera.ipAddress}</code>
                 </TableCell>

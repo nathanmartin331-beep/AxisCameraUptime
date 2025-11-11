@@ -2,7 +2,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import StatusIndicator, { CameraStatus } from "./StatusIndicator";
-import { Edit, Trash2, ArrowLeft } from "lucide-react";
+import { Edit, Trash2, ArrowLeft, RefreshCw, Move, Mic, Camera as CameraIcon, Info } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -11,6 +11,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger
+} from "@/components/ui/tooltip";
 
 interface CameraDetails {
   id: string;
@@ -28,6 +34,17 @@ interface CameraDetails {
     duration: string;
     bootId: string;
   }>;
+  model?: string;
+  series?: 'P' | 'Q' | 'M' | 'F';
+  fullName?: string;
+  firmwareVersion?: string;
+  hasPTZ?: boolean;
+  hasAudio?: boolean;
+  resolution?: string;
+  maxFramerate?: number;
+  numberOfViews?: number;
+  capabilities?: Record<string, any>;
+  modelDetectedAt?: string;
 }
 
 interface CameraDetailViewProps {
@@ -35,13 +52,17 @@ interface CameraDetailViewProps {
   onBack?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
+  onDetectModel?: () => void;
+  detectingModel?: boolean;
 }
 
 export default function CameraDetailView({
   camera,
   onBack,
   onEdit,
-  onDelete
+  onDelete,
+  onDetectModel,
+  detectingModel = false
 }: CameraDetailViewProps) {
   return (
     <div className="space-y-6" data-testid="camera-detail-view">
@@ -83,6 +104,154 @@ export default function CameraDetailView({
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Model Information Card */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle>Model Information</CardTitle>
+                <CardDescription>Camera model and capabilities</CardDescription>
+              </div>
+              {onDetectModel && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onDetectModel}
+                  disabled={detectingModel}
+                  data-testid="button-detect-model"
+                >
+                  {detectingModel ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4" />
+                  )}
+                </Button>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-muted-foreground">Model</span>
+              <div className="flex items-center gap-2">
+                {camera.model ? (
+                  <>
+                    <span className="text-sm font-medium">{camera.model}</span>
+                    {camera.series && (
+                      <Badge
+                        variant="outline"
+                        className={
+                          camera.series === 'P'
+                            ? "border-blue-500 text-blue-700 bg-blue-50"
+                            : camera.series === 'Q'
+                            ? "border-green-500 text-green-700 bg-green-50"
+                            : camera.series === 'M'
+                            ? "border-purple-500 text-purple-700 bg-purple-50"
+                            : "border-orange-500 text-orange-700 bg-orange-50"
+                        }
+                      >
+                        {camera.series} Series
+                      </Badge>
+                    )}
+                  </>
+                ) : (
+                  <span className="text-sm text-muted-foreground">Unknown</span>
+                )}
+              </div>
+            </div>
+            {camera.fullName && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Full Name</span>
+                <span className="text-sm font-medium text-right max-w-[60%]">{camera.fullName}</span>
+              </div>
+            )}
+            {camera.firmwareVersion && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Firmware</span>
+                <code className="text-sm font-mono">{camera.firmwareVersion}</code>
+              </div>
+            )}
+            {camera.modelDetectedAt && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Detected</span>
+                <span className="text-sm">
+                  {new Date(camera.modelDetectedAt).toLocaleString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })}
+                </span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Capabilities Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Capabilities</CardTitle>
+            <CardDescription>Camera features and specifications</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-muted-foreground">PTZ Support</span>
+              <div className="flex items-center gap-2">
+                {camera.hasPTZ ? (
+                  <>
+                    <Move className="w-4 h-4 text-green-600" />
+                    <span className="text-sm font-medium text-green-600">Yes</span>
+                  </>
+                ) : (
+                  <span className="text-sm text-muted-foreground">No</span>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-muted-foreground">Audio Support</span>
+              <div className="flex items-center gap-2">
+                {camera.hasAudio ? (
+                  <>
+                    <Mic className="w-4 h-4 text-green-600" />
+                    <span className="text-sm font-medium text-green-600">Yes</span>
+                  </>
+                ) : (
+                  <span className="text-sm text-muted-foreground">No</span>
+                )}
+              </div>
+            </div>
+            {camera.resolution && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Resolution</span>
+                <span className="text-sm font-medium">{camera.resolution}</span>
+              </div>
+            )}
+            {camera.maxFramerate && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Max Framerate</span>
+                <span className="text-sm font-medium">{camera.maxFramerate} fps</span>
+              </div>
+            )}
+            {camera.numberOfViews && camera.numberOfViews > 1 && (
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-muted-foreground">Views/Sensors</span>
+                <div className="flex items-center gap-2">
+                  <CameraIcon className="w-4 h-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">{camera.numberOfViews}</span>
+                </div>
+              </div>
+            )}
+            {!camera.model && (
+              <div className="flex items-start gap-2 pt-2 border-t">
+                <Info className="w-4 h-4 text-muted-foreground mt-0.5" />
+                <p className="text-xs text-muted-foreground">
+                  Click the refresh button above to detect model information
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Camera Information Card */}
         <Card>
           <CardHeader>
             <CardTitle>Camera Information</CardTitle>
