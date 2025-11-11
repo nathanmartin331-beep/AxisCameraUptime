@@ -1,0 +1,145 @@
+{
+  "database": {
+    "path": "./data/agentdb/camera-uptime.db",
+    "dimension": 768,
+    "preset": "medium",
+    "description": "AgentDB configuration for Axis Camera Uptime Monitoring"
+  },
+  "domains": {
+    "camera-incidents": {
+      "description": "Camera downtime and incident tracking",
+      "patterns": [
+        "network_timeout",
+        "authentication_failure",
+        "hardware_failure",
+        "configuration_error",
+        "firmware_issue"
+      ],
+      "metadata": {
+        "priority": ["low", "medium", "high", "critical"],
+        "resolution_status": ["pending", "investigating", "resolved", "escalated"]
+      }
+    },
+    "uptime-predictions": {
+      "description": "ML-based uptime and failure predictions",
+      "patterns": [
+        "degradation_pattern",
+        "seasonal_variation",
+        "maintenance_window",
+        "expected_failure"
+      ],
+      "confidence_threshold": 0.75
+    },
+    "camera-patterns": {
+      "description": "Learned patterns from camera behavior",
+      "patterns": [
+        "normal_operation",
+        "anomaly_detected",
+        "recovery_sequence",
+        "recurrent_failure"
+      ]
+    }
+  },
+  "learning": {
+    "algorithms": [
+      "decision_transformer",
+      "q_learning",
+      "sarsa",
+      "actor_critic"
+    ],
+    "training": {
+      "min_attempts": 3,
+      "min_success_rate": 0.6,
+      "min_confidence": 0.7,
+      "time_window_days": 30
+    },
+    "pruning": {
+      "min_confidence": 0.5,
+      "min_uplift": 0.05,
+      "max_age_days": 90
+    }
+  },
+  "causal": {
+    "edges": [
+      {
+        "cause": "network_latency_high",
+        "effect": "camera_disconnect",
+        "description": "High network latency causes camera disconnections"
+      },
+      {
+        "cause": "firmware_update",
+        "effect": "temporary_downtime",
+        "description": "Firmware updates cause temporary downtime"
+      },
+      {
+        "cause": "temperature_threshold_exceeded",
+        "effect": "hardware_failure",
+        "description": "Overheating leads to hardware failures"
+      },
+      {
+        "cause": "authentication_token_expired",
+        "effect": "connection_loss",
+        "description": "Expired tokens cause connection loss"
+      }
+    ],
+    "experiments": [
+      {
+        "name": "network-optimization-uptime",
+        "cause": "network_optimization",
+        "effect": "uptime_improvement",
+        "description": "Measure impact of network optimization on camera uptime"
+      },
+      {
+        "name": "monitoring-frequency-detection",
+        "cause": "increased_monitoring_frequency",
+        "effect": "faster_issue_detection",
+        "description": "Test if more frequent checks improve issue detection"
+      }
+    ]
+  },
+  "skills": {
+    "auto_consolidate": true,
+    "consolidation": {
+      "min_attempts": 3,
+      "min_reward": 0.7,
+      "time_window_days": 7,
+      "extract_patterns": true
+    },
+    "predefined": [
+      {
+        "name": "detect_network_issues",
+        "description": "Analyze network patterns to detect connectivity issues",
+        "domain": "camera-incidents"
+      },
+      {
+        "name": "predict_failure",
+        "description": "Predict camera failures based on historical patterns",
+        "domain": "uptime-predictions"
+      },
+      {
+        "name": "auto_recovery",
+        "description": "Execute automated recovery procedures for common issues",
+        "domain": "camera-patterns"
+      }
+    ]
+  },
+  "vector_search": {
+    "default_k": 10,
+    "similarity_metric": "cosine",
+    "min_threshold": 0.75,
+    "mmr_enabled": true,
+    "mmr_lambda": 0.7
+  },
+  "sync": {
+    "enabled": false,
+    "port": 4433,
+    "auto_sync_interval": 300,
+    "incremental": true
+  },
+  "memory_optimization": {
+    "compress": true,
+    "consolidate_patterns": true,
+    "auto_prune": true,
+    "prune_schedule": "daily"
+  }
+}
