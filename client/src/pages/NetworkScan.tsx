@@ -4,10 +4,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Wifi, Plus, AlertCircle } from "lucide-react";
+import { Wifi, Plus, AlertCircle, Camera } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import AddCameraModal, { CameraFormData } from "@/components/AddCameraModal";
+import { useMutation } from "@tanstack/react-query";
 
 interface DiscoveredCamera {
   ipAddress: string;
@@ -19,6 +21,7 @@ export default function NetworkScan() {
   const [isScanning, setIsScanning] = useState(false);
   const [discoveredCameras, setDiscoveredCameras] = useState<DiscoveredCamera[]>([]);
   const [selectedCameras, setSelectedCameras] = useState<Set<string>>(new Set());
+  const [showAddDialog, setShowAddDialog] = useState(false);
   const { toast } = useToast();
 
   const handleScan = async () => {
@@ -54,6 +57,31 @@ export default function NetworkScan() {
       newSelected.add(ipAddress);
     }
     setSelectedCameras(newSelected);
+  };
+
+  const addMutation = useMutation({
+    mutationFn: async (data: CameraFormData) => {
+      return await apiRequest("POST", "/api/cameras", data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cameras"] });
+      setShowAddDialog(false);
+      toast({
+        title: "Success",
+        description: "Camera added successfully",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to add camera",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleAddCamera = (data: CameraFormData) => {
+    addMutation.mutate(data);
   };
 
   const handleAddSelected = async () => {
@@ -101,16 +129,22 @@ export default function NetworkScan() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold" data-testid="heading-network-scan">Network Scan</h1>
-        <p className="text-muted-foreground">Discover Axis cameras on your network</p>
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-3xl font-bold" data-testid="heading-network-scan">Add Cameras</h1>
+          <p className="text-muted-foreground">Discover cameras via network scan or add individual IP addresses</p>
+        </div>
+        <Button onClick={() => setShowAddDialog(true)} data-testid="button-add-single-camera">
+          <Camera className="w-4 h-4 mr-2" />
+          Add Single Camera
+        </Button>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Subnet Scanner</CardTitle>
+          <CardTitle>Network Scanner</CardTitle>
           <CardDescription>
-            Scan your network for Axis cameras using VAPIX API detection
+            Scan subnet ranges to discover multiple Axis cameras at once
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -211,6 +245,12 @@ export default function NetworkScan() {
           </CardContent>
         </Card>
       )}
+
+      <AddCameraModal 
+        open={showAddDialog} 
+        onOpenChange={setShowAddDialog}
+        onSave={handleAddCamera}
+      />
     </div>
   );
 }
