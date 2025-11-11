@@ -222,6 +222,7 @@ async function checkAllCameras() {
         });
 
         // If camera is online, check video stream
+        let videoStatus = "unknown";
         try {
           const videoCheck = await checkVideoStream(
             camera.ipAddress,
@@ -230,18 +231,29 @@ async function checkAllCameras() {
             3000 // Shorter timeout for video check
           );
 
-          await storage.updateVideoStatus(camera.id, "video_ok");
+          videoStatus = "video_ok";
+          await storage.updateVideoStatus(camera.id, videoStatus);
           
           console.log(
             `[Monitor] ✓ ${camera.name} (${camera.ipAddress}) - Online, Video OK ${rebooted ? "(REBOOTED)" : ""}`
           );
         } catch (videoError: any) {
-          await storage.updateVideoStatus(camera.id, "video_failed");
+          videoStatus = "video_failed";
+          await storage.updateVideoStatus(camera.id, videoStatus);
           
           console.log(
             `[Monitor] ⚠ ${camera.name} (${camera.ipAddress}) - Online but Video FAILED: ${videoError.message}`
           );
         }
+
+        // Create a second event for video status tracking
+        await storage.createUptimeEvent({
+          cameraId: camera.id,
+          timestamp: new Date(),
+          status: "online",
+          videoStatus,
+          responseTimeMs: Date.now() - startTime,
+        });
       } catch (error: any) {
         // Camera is offline or unreachable
         await storage.updateCameraStatus(camera.id, "offline");
@@ -251,6 +263,7 @@ async function checkAllCameras() {
           cameraId: camera.id,
           timestamp: new Date(),
           status: "offline",
+          videoStatus: "unknown",
           errorMessage: error.message,
           responseTimeMs: Date.now() - startTime,
         });
