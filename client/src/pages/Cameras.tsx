@@ -1,22 +1,30 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useQuery } from "@tanstack/react-query";
-import { Plus, Search, Trash2, Eye, Upload } from "lucide-react";
+import { Plus, Search, Trash2, Eye, Upload, MapPin } from "lucide-react";
 import { Link } from "wouter";
 import AddCameraModal, { CameraFormData } from "@/components/AddCameraModal";
 import CSVImportModal from "@/components/CSVImportModal";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useMutation } from "@tanstack/react-query";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface Camera {
   id: number;
   name: string;
   ipAddress: string;
   status: string;
+  location?: string;
   lastSeenAt: string | null;
 }
 
@@ -24,6 +32,7 @@ export default function Cameras() {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [locationFilter, setLocationFilter] = useState<string>("all");
   const [csvContent, setCsvContent] = useState("");
   const { toast } = useToast();
 
@@ -112,10 +121,29 @@ export default function Cameras() {
     }
   };
 
-  const filteredCameras = cameras.filter((camera) =>
-    camera.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    camera.ipAddress.includes(searchQuery)
-  );
+  // Get unique locations for filter dropdown
+  const uniqueLocations = useMemo(() => {
+    const locations = cameras
+      .map(camera => camera.location)
+      .filter((loc): loc is string => !!loc && loc.trim() !== "");
+    return Array.from(new Set(locations)).sort();
+  }, [cameras]);
+
+  const filteredCameras = cameras.filter((camera) => {
+    // Search filter
+    const matchesSearch = 
+      camera.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      camera.ipAddress.includes(searchQuery) ||
+      (camera.location?.toLowerCase().includes(searchQuery.toLowerCase()) ?? false);
+    
+    // Location filter
+    const matchesLocation = 
+      locationFilter === "all" || 
+      (locationFilter === "none" && (!camera.location || camera.location.trim() === "")) ||
+      camera.location === locationFilter;
+
+    return matchesSearch && matchesLocation;
+  });
 
   return (
     <div className="space-y-6">
@@ -138,22 +166,46 @@ export default function Cameras() {
 
       <Card>
         <CardHeader>
-          <div className="flex justify-between items-center gap-4">
-            <div>
-              <CardTitle>Camera List</CardTitle>
-              <CardDescription>
-                {cameras.length} camera{cameras.length !== 1 ? "s" : ""} total
-              </CardDescription>
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <div>
+                <CardTitle>Camera List</CardTitle>
+                <CardDescription>
+                  {filteredCameras.length} of {cameras.length} camera{cameras.length !== 1 ? "s" : ""}
+                  {locationFilter !== "all" && " (filtered by location)"}
+                </CardDescription>
+              </div>
             </div>
-            <div className="relative w-64">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
-                placeholder="Search cameras..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9"
-                data-testid="input-search-cameras"
-              />
+            <div className="flex gap-3">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search by name, IP, or location..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9"
+                  data-testid="input-search-cameras"
+                />
+              </div>
+              <Select value={locationFilter} onValueChange={setLocationFilter}>
+                <SelectTrigger className="w-64" data-testid="select-location-filter">
+                  <MapPin className="w-4 h-4 mr-2" />
+                  <SelectValue placeholder="All Locations" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all" data-testid="location-option-all">All Locations</SelectItem>
+                  <SelectItem value="none" data-testid="location-option-none">No Location</SelectItem>
+                  {uniqueLocations.map((location) => (
+                    <SelectItem 
+                      key={location} 
+                      value={location}
+                      data-testid={`location-option-${location.replace(/\s+/g, '-').toLowerCase()}`}
+                    >
+                      {location}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
         </CardHeader>
@@ -162,7 +214,9 @@ export default function Cameras() {
             <div className="text-center py-8 text-muted-foreground">Loading cameras...</div>
           ) : filteredCameras.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              {searchQuery ? "No cameras match your search" : "No cameras yet. Add your first camera to get started."}
+              {searchQuery || locationFilter !== "all" 
+                ? "No cameras match your filters" 
+                : "No cameras yet. Add your first camera to get started."}
             </div>
           ) : (
             <div className="space-y-2">
@@ -180,6 +234,14 @@ export default function Cameras() {
                       <p className="text-sm text-muted-foreground" data-testid={`text-camera-ip-${camera.id}`}>
                         {camera.ipAddress}
                       </p>
+                      {camera.location && (
+                        <div className="flex items-center gap-1 mt-1">
+                          <MapPin className="w-3 h-3 text-muted-foreground" />
+                          <p className="text-xs text-muted-foreground" data-testid={`text-camera-location-${camera.id}`}>
+                            {camera.location}
+                          </p>
+                        </div>
+                      )}
                     </div>
                     <Badge
                       variant={camera.status === "online" ? "default" : "secondary"}
