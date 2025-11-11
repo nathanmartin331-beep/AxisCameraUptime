@@ -15,7 +15,7 @@ interface VideoCheckResponse {
   responseTime: number;
 }
 
-async function checkVideoStream(
+export async function checkVideoStream(
   ipAddress: string,
   username: string,
   password: string,

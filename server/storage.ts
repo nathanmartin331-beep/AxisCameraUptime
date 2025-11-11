@@ -244,44 +244,20 @@ export class DatabaseStorage implements IStorage {
 
     const priorEvent = await this.getLatestEventBefore(cameraId, startDate);
 
-    if (events.length === 0 && !priorEvent) {
-      return 100;
-    }
+    // Use validated pure function for calculation
+    const { calculateUptimeFromEvents } = await import('./uptimeCalculator.js');
+    
+    const eventList = events.map(e => ({
+      timestamp: new Date(e.timestamp),
+      status: e.status
+    }));
 
-    let totalUptime = 0;
-    const totalDuration = endDate.getTime() - startDate.getTime();
-
-    const sortedEvents = [...events].sort((a, b) => 
-      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    return calculateUptimeFromEvents(
+      eventList,
+      startDate,
+      endDate,
+      priorEvent?.status
     );
-
-    let currentStatus: string;
-    if (priorEvent) {
-      currentStatus = priorEvent.status;
-    } else if (sortedEvents.length > 0) {
-      currentStatus = sortedEvents[0].status === "online" ? "offline" : "online";
-    } else {
-      currentStatus = "online";
-    }
-
-    let currentTime = startDate.getTime();
-
-    for (const event of sortedEvents) {
-      const eventTime = new Date(event.timestamp).getTime();
-
-      if (currentStatus === "online") {
-        totalUptime += eventTime - currentTime;
-      }
-
-      currentStatus = event.status;
-      currentTime = eventTime;
-    }
-
-    if (currentStatus === "online") {
-      totalUptime += endDate.getTime() - currentTime;
-    }
-
-    return totalDuration > 0 ? (totalUptime / totalDuration) * 100 : 0;
   }
 }
 
