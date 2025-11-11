@@ -677,6 +677,86 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Reliability metrics endpoints
+  app.get("/api/metrics/camera/:id", requireAuth, async (req: any, res) => {
+    try {
+      const camera = await storage.getCameraById(req.params.id);
+      
+      if (!camera) {
+        return res.status(404).json({ message: "Camera not found" });
+      }
+
+      if (camera.userId !== getUserId(req)) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      const days = parseInt(req.query.days as string) || 30;
+      
+      const { calculateCameraMetrics } = await import("./reliabilityMetrics");
+      const metrics = await calculateCameraMetrics(req.params.id, days);
+
+      res.json(metrics);
+    } catch (error) {
+      console.error("Error fetching camera metrics:", error);
+      res.status(500).json({ message: "Failed to fetch camera metrics" });
+    }
+  });
+
+  app.get("/api/metrics/sites", requireAuth, async (req: any, res) => {
+    try {
+      const userId = getUserId(req);
+      const days = parseInt(req.query.days as string) || 30;
+      
+      const { calculateSiteMetrics } = await import("./reliabilityMetrics");
+      const metrics = await calculateSiteMetrics(userId, days);
+
+      res.json(metrics);
+    } catch (error) {
+      console.error("Error fetching site metrics:", error);
+      res.status(500).json({ message: "Failed to fetch site metrics" });
+    }
+  });
+
+  app.get("/api/metrics/network", requireAuth, async (req: any, res) => {
+    try {
+      const userId = getUserId(req);
+      const days = parseInt(req.query.days as string) || 30;
+      
+      const { calculateNetworkMetrics } = await import("./reliabilityMetrics");
+      const metrics = await calculateNetworkMetrics(userId, days);
+
+      res.json(metrics);
+    } catch (error) {
+      console.error("Error fetching network metrics:", error);
+      res.status(500).json({ message: "Failed to fetch network metrics" });
+    }
+  });
+
+  // Dashboard layout endpoints
+  app.get("/api/dashboard/layout", requireAuth, async (req: any, res) => {
+    try {
+      const userId = getUserId(req);
+      const layout = await storage.getDashboardLayout(userId);
+
+      res.json(layout || { widgets: [] });
+    } catch (error) {
+      console.error("Error fetching dashboard layout:", error);
+      res.status(500).json({ message: "Failed to fetch dashboard layout" });
+    }
+  });
+
+  app.post("/api/dashboard/layout", requireAuth, async (req: any, res) => {
+    try {
+      const userId = getUserId(req);
+      const layout = await storage.saveDashboardLayout(userId, req.body);
+
+      res.json(layout);
+    } catch (error) {
+      console.error("Error saving dashboard layout:", error);
+      res.status(500).json({ message: "Failed to save dashboard layout" });
+    }
+  });
+
   const httpServer = createServer(app);
 
   return httpServer;

@@ -112,3 +112,34 @@ export const insertUptimeEventSchema = createInsertSchema(uptimeEvents).omit({
 
 export type InsertUptimeEvent = z.infer<typeof insertUptimeEventSchema>;
 export type UptimeEvent = typeof uptimeEvents.$inferSelect;
+
+// Dashboard layouts - stores user's widget configuration and positions
+export const dashboardLayouts = pgTable("dashboard_layouts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" })
+    .unique(),
+  layout: jsonb("layout").notNull().$type<{
+    widgets: Array<{
+      id: string;
+      type: string;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      config?: Record<string, any>;
+    }>;
+  }>(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertDashboardLayoutSchema = createInsertSchema(dashboardLayouts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertDashboardLayout = z.infer<typeof insertDashboardLayoutSchema>;
+export type DashboardLayout = typeof dashboardLayouts.$inferSelect;
