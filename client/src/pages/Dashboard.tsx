@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Camera, Wifi, TrendingUp, Plus, Upload, Search as SearchIcon, AlertTriangle } from "lucide-react";
+import { useState, useMemo } from "react";
+import { Camera, Wifi, TrendingUp, Plus, Upload, Search as SearchIcon, AlertTriangle, Download, Filter } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
@@ -14,6 +14,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLocation } from "wouter";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface DashboardSummary {
   totalCameras: number;
@@ -84,6 +91,8 @@ export default function Dashboard() {
   const [scanOpen, setScanOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [locationFilter, setLocationFilter] = useState<string>("all");
+  const [videoFilter, setVideoFilter] = useState<string>("all");
   const { toast } = useToast();
   const [, setLocation] = useLocation();
 
@@ -182,11 +191,52 @@ export default function Dashboard() {
   });
 
   const transformedCameras = cameras ? cameras.map(c => transformCamera(c, uptimeMap)) : [];
-  const filteredCameras = transformedCameras.filter(camera =>
-    camera.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    camera.ipAddress.includes(searchTerm) ||
-    camera.location.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  
+  // Get unique locations for filter
+  const uniqueLocations = useMemo(() => {
+    const locations = new Set<string>();
+    transformedCameras.forEach(camera => {
+      if (camera.location && camera.location !== "No location") {
+        locations.add(camera.location);
+      }
+    });
+    return Array.from(locations).sort();
+  }, [transformedCameras]);
+
+  // Apply all filters
+  const filteredCameras = useMemo(() => {
+    return transformedCameras.filter(camera => {
+      // Search filter
+      const matchesSearch = camera.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        camera.ipAddress.includes(searchTerm) ||
+        camera.location.toLowerCase().includes(searchTerm.toLowerCase());
+      
+      // Location filter
+      const matchesLocation = locationFilter === "all" || camera.location === locationFilter;
+      
+      // Video health filter
+      const matchesVideo = videoFilter === "all" ||
+        (videoFilter === "issues" && camera.videoStatus === "video_failed") ||
+        (videoFilter === "ok" && camera.videoStatus === "video_ok") ||
+        (videoFilter === "unknown" && (!camera.videoStatus || camera.videoStatus === "unknown"));
+      
+      return matchesSearch && matchesLocation && matchesVideo;
+    });
+  }, [transformedCameras, searchTerm, locationFilter, videoFilter]);
+
+  // Calculate filtered metrics
+  const filteredMetrics = useMemo(() => {
+    const total = filteredCameras.length;
+    const online = filteredCameras.filter(c => c.status === "online").length;
+    const videoOk = filteredCameras.filter(c => c.videoStatus === "video_ok").length;
+    const videoFailed = filteredCameras.filter(c => c.videoStatus === "video_failed").length;
+    
+    // Calculate average uptime for filtered cameras
+    const uptimeValues = filteredCameras.map(c => parseFloat(c.uptime) || 0);
+    const avgUptime = total > 0 ? uptimeValues.reduce((a, b) => a + b, 0) / total : 0;
+    
+    return { total, online, videoOk, videoFailed, avgUptime };
+  }, [filteredCameras]);
 
   const handleViewDetails = (camera: CameraType) => {
     setLocation(`/cameras/${camera.id}`);
@@ -202,6 +252,113 @@ export default function Dashboard() {
     addMutation.mutate(data);
   };
 
+  // Export camera data as CSV
+  const handleExportCSV = () => {
+    if (!filteredCameras.length) {
+      toast({
+        title: "No Data",
+        description: "No cameras to export",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Properly escape CSV fields
+    const escapeCSV = (value: string): string => {
+      // Sanitize potential CSV injection (leading =, +, -, @)
+      let sanitized = value.toString();
+      if (/^[=+\-@]/.test(sanitized)) {
+        sanitized = "'" + sanitized;
+      }
+      // Escape double quotes by doubling them
+      sanitized = sanitized.replace(/"/g, '""');
+      return `"${sanitized}"`;
+    };
+
+    const headers = ["Camera Name", "IP Address", "Location", "Status", "Video Status", "Uptime %", "Last Seen"];
+    const rows = filteredCameras.map(cam => [
+      escapeCSV(cam.name),
+      escapeCSV(cam.ipAddress),
+      escapeCSV(cam.location),
+      escapeCSV(cam.status),
+      escapeCSV(cam.videoStatus || "unknown"),
+      escapeCSV(cam.uptime),
+      escapeCSV(cam.lastSeen)
+    ]);
+
+    const csvContent = [
+      headers.map(h => escapeCSV(h)).join(","),
+      ...rows.map(row => row.join(","))
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').split('T').join('_').substring(0, 19);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `camera-report-${timestamp}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    toast({
+      title: "Export Successful",
+      description: `Exported ${filteredCameras.length} cameras to CSV`,
+    });
+  };
+
+  // Export executive summary
+  const handleExportSummary = () => {
+    const timestamp = new Date().toISOString();
+    const summaryText = `
+CAMERA NETWORK STATUS REPORT
+Generated: ${new Date(timestamp).toLocaleString()}
+${locationFilter !== "all" ? `Location Filter: ${locationFilter}` : "All Locations"}
+${videoFilter !== "all" ? `Video Health Filter: ${videoFilter}` : "All Video Statuses"}
+${searchTerm ? `Search Filter: "${searchTerm}"` : ""}
+
+SUMMARY METRICS:
+- Total Cameras (Filtered): ${filteredMetrics.total}
+- Online Cameras: ${filteredMetrics.online}
+- Cameras with Video OK: ${filteredMetrics.videoOk}
+- Video Issues Detected: ${filteredMetrics.videoFailed}
+- Average Uptime: ${filteredMetrics.avgUptime.toFixed(1)}%
+
+CAMERA DETAILS:
+${filteredCameras.map(cam => `
+  ${cam.name}
+  - IP Address: ${cam.ipAddress}
+  - Location: ${cam.location}
+  - System Status: ${cam.status}
+  - Video Health: ${cam.videoStatus || "unknown"}
+  - Uptime Percentage: ${cam.uptime}
+  - Last Contact: ${cam.lastSeen}
+`).join("\n")}
+
+---
+Report generated for security review purposes
+Total cameras in system: ${transformedCameras.length}
+Cameras matching filters: ${filteredCameras.length}
+    `.trim();
+
+    const blob = new Blob([summaryText], { type: "text/plain;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    const fileTimestamp = timestamp.replace(/[:.]/g, '-').split('T').join('_').substring(0, 19);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `executive-summary-${fileTimestamp}.txt`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    toast({
+      title: "Summary Exported",
+      description: `Executive summary with ${filteredCameras.length} cameras downloaded`,
+    });
+  };
+
   return (
     <div className="space-y-6" data-testid="page-dashboard">
       <div>
@@ -211,7 +368,7 @@ export default function Dashboard() {
         </p>
       </div>
 
-      {summaryLoading ? (
+      {summaryLoading || camerasLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <Skeleton className="h-32" />
           <Skeleton className="h-32" />
@@ -222,29 +379,29 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <MetricCard
             title="Total Cameras"
-            value={summary?.totalCameras ?? 0}
-            subtitle="Across all locations"
+            value={filteredMetrics.total}
+            subtitle={locationFilter !== "all" ? locationFilter : "Across all locations"}
             icon={Camera}
             accentColor="blue"
           />
           <MetricCard
             title="Online Cameras"
-            value={summary?.onlineCameras ?? 0}
-            subtitle={`${summary?.avgUptime.toFixed(1) ?? 0}% availability`}
+            value={filteredMetrics.online}
+            subtitle={`${filteredMetrics.avgUptime.toFixed(1)}% avg uptime`}
             icon={Wifi}
             accentColor="green"
           />
           <MetricCard
             title="Video Issues"
-            value={summary?.videoFailed ?? 0}
-            subtitle={`${summary?.videoOk ?? 0} cameras streaming`}
+            value={filteredMetrics.videoFailed}
+            subtitle={`${filteredMetrics.videoOk} cameras streaming`}
             icon={AlertTriangle}
-            accentColor={summary?.videoFailed && summary.videoFailed > 0 ? "amber" : "green"}
+            accentColor={filteredMetrics.videoFailed > 0 ? "amber" : "green"}
           />
           <MetricCard
             title="System Uptime"
-            value={`${summary?.avgUptime.toFixed(1) ?? 0}%`}
-            subtitle="Last 30 days"
+            value={`${filteredMetrics.avgUptime.toFixed(1)}%`}
+            subtitle="Filtered cameras"
             icon={TrendingUp}
             accentColor="green"
           />
@@ -254,42 +411,100 @@ export default function Dashboard() {
       <UptimeChart cameraId="all" days={30} />
 
       <div className="space-y-4">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex-1 max-w-sm relative">
-            <SearchIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search cameras..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-9"
-              data-testid="input-search"
-            />
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex gap-2 flex-wrap">
+              <div className="relative w-64">
+                <SearchIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search cameras..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-9"
+                  data-testid="input-search"
+                />
+              </div>
+              
+              <Select value={locationFilter} onValueChange={setLocationFilter}>
+                <SelectTrigger className="w-48" data-testid="select-location">
+                  <Filter className="mr-2 h-4 w-4" />
+                  <SelectValue placeholder="All Locations" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Locations</SelectItem>
+                  {uniqueLocations.map((location) => (
+                    <SelectItem key={location} value={location}>
+                      {location}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select value={videoFilter} onValueChange={setVideoFilter}>
+                <SelectTrigger className="w-48" data-testid="select-video">
+                  <AlertTriangle className="mr-2 h-4 w-4" />
+                  <SelectValue placeholder="All Cameras" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Cameras</SelectItem>
+                  <SelectItem value="ok">Video OK</SelectItem>
+                  <SelectItem value="issues">Video Issues</SelectItem>
+                  <SelectItem value="unknown">Unknown Status</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex gap-2 flex-wrap">
+              <Button
+                variant="outline"
+                onClick={handleExportCSV}
+                data-testid="button-export-csv"
+              >
+                <Download className="mr-2 h-4 w-4" />
+                Export CSV
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleExportSummary}
+                data-testid="button-export-summary"
+              >
+                <Download className="mr-2 h-4 w-4" />
+                Summary
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setScanOpen(true)}
+                data-testid="button-scan-network"
+              >
+                <Wifi className="mr-2 h-4 w-4" />
+                Scan
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setImportOpen(true)}
+                data-testid="button-import-csv"
+              >
+                <Upload className="mr-2 h-4 w-4" />
+                Import
+              </Button>
+              <Button
+                onClick={() => setAddCameraOpen(true)}
+                data-testid="button-add-camera"
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Add Camera
+              </Button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={() => setScanOpen(true)}
-              data-testid="button-scan-network"
-            >
-              <Wifi className="mr-2 h-4 w-4" />
-              Scan Network
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => setImportOpen(true)}
-              data-testid="button-import-csv"
-            >
-              <Upload className="mr-2 h-4 w-4" />
-              Import CSV
-            </Button>
-            <Button
-              onClick={() => setAddCameraOpen(true)}
-              data-testid="button-add-camera"
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              Add Camera
-            </Button>
-          </div>
+
+          {(locationFilter !== "all" || videoFilter !== "all" || searchTerm) && (
+            <div className="text-sm text-muted-foreground">
+              Showing {filteredCameras.length} of {transformedCameras.length} cameras
+              {locationFilter !== "all" && ` • Location: ${locationFilter}`}
+              {videoFilter !== "all" && ` • Video: ${videoFilter}`}
+              {searchTerm && ` • Search: "${searchTerm}"`}
+            </div>
+          )}
         </div>
 
         {camerasLoading ? (
