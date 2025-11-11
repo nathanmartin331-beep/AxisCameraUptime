@@ -92,7 +92,7 @@ export interface NetworkMetrics {
 }
 
 /**
- * Extract incidents from uptime events
+ * Extract incidents from uptime events with robust state machine
  */
 export async function extractIncidents(
   cameraId: string,
@@ -105,7 +105,8 @@ export async function extractIncidents(
   if (!camera) return [];
   
   const incidents: Incident[] = [];
-  let currentIncident: Partial<Incident> | null = null;
+  let currentOfflineIncident: Partial<Incident> | null = null;
+  let currentVideoIncident: Partial<Incident> | null = null;
   
   // Sort events by timestamp
   const sortedEvents = [...events].sort((a, b) => 
@@ -115,58 +116,89 @@ export async function extractIncidents(
   for (const event of sortedEvents) {
     const eventTime = new Date(event.timestamp);
     
-    // Start of offline incident
-    if (event.status === 'offline' && !currentIncident) {
-      currentIncident = {
-        cameraId,
-        cameraName: camera.name,
-        startTime: eventTime,
-        incidentType: 'offline',
-        resolved: false,
-      };
+    // Handle offline status change
+    if (event.status === 'offline') {
+      // Close any open video incident when going offline
+      if (currentVideoIncident) {
+        const durationMs = eventTime.getTime() - currentVideoIncident.startTime!.getTime();
+        incidents.push({
+          ...currentVideoIncident,
+          endTime: eventTime,
+          durationMinutes: durationMs / (1000 * 60),
+          resolved: true,
+        } as Incident);
+        currentVideoIncident = null;
+      }
+      
+      // Start new offline incident if not already in one
+      if (!currentOfflineIncident) {
+        currentOfflineIncident = {
+          cameraId,
+          cameraName: camera.name,
+          startTime: eventTime,
+          incidentType: 'offline',
+          resolved: false,
+        };
+      }
     }
     
-    // Start of video failure incident (camera online but no video)
-    else if (event.status === 'online' && event.videoStatus === 'video_failed' && !currentIncident) {
-      currentIncident = {
-        cameraId,
-        cameraName: camera.name,
-        startTime: eventTime,
-        incidentType: 'video_failed',
-        resolved: false,
-      };
-    }
-    
-    // Resolution of offline incident
-    else if (event.status === 'online' && currentIncident && currentIncident.incidentType === 'offline') {
-      const durationMs = eventTime.getTime() - currentIncident.startTime!.getTime();
-      incidents.push({
-        ...currentIncident,
-        endTime: eventTime,
-        durationMinutes: durationMs / (1000 * 60),
-        resolved: true,
-      } as Incident);
-      currentIncident = null;
-    }
-    
-    // Resolution of video failure (video comes back)
-    else if (event.status === 'online' && event.videoStatus === 'video_ok' && currentIncident && currentIncident.incidentType === 'video_failed') {
-      const durationMs = eventTime.getTime() - currentIncident.startTime!.getTime();
-      incidents.push({
-        ...currentIncident,
-        endTime: eventTime,
-        durationMinutes: durationMs / (1000 * 60),
-        resolved: true,
-      } as Incident);
-      currentIncident = null;
+    // Handle online status with video check
+    else if (event.status === 'online') {
+      // Close offline incident when coming back online
+      if (currentOfflineIncident) {
+        const durationMs = eventTime.getTime() - currentOfflineIncident.startTime!.getTime();
+        incidents.push({
+          ...currentOfflineIncident,
+          endTime: eventTime,
+          durationMinutes: durationMs / (1000 * 60),
+          resolved: true,
+        } as Incident);
+        currentOfflineIncident = null;
+      }
+      
+      // Handle video status
+      if (event.videoStatus === 'video_failed') {
+        // Start video incident if not already in one
+        if (!currentVideoIncident) {
+          currentVideoIncident = {
+            cameraId,
+            cameraName: camera.name,
+            startTime: eventTime,
+            incidentType: 'video_failed',
+            resolved: false,
+          };
+        }
+      } else if (event.videoStatus === 'video_ok') {
+        // Close video incident when video recovers
+        if (currentVideoIncident) {
+          const durationMs = eventTime.getTime() - currentVideoIncident.startTime!.getTime();
+          incidents.push({
+            ...currentVideoIncident,
+            endTime: eventTime,
+            durationMinutes: durationMs / (1000 * 60),
+            resolved: true,
+          } as Incident);
+          currentVideoIncident = null;
+        }
+      }
     }
   }
   
-  // Handle ongoing incident
-  if (currentIncident) {
-    const durationMs = endDate.getTime() - currentIncident.startTime!.getTime();
+  // Handle ongoing incidents
+  if (currentOfflineIncident) {
+    const durationMs = endDate.getTime() - currentOfflineIncident.startTime!.getTime();
     incidents.push({
-      ...currentIncident,
+      ...currentOfflineIncident,
+      endTime: null,
+      durationMinutes: durationMs / (1000 * 60),
+      resolved: false,
+    } as Incident);
+  }
+  
+  if (currentVideoIncident) {
+    const durationMs = endDate.getTime() - currentVideoIncident.startTime!.getTime();
+    incidents.push({
+      ...currentVideoIncident,
       endTime: null,
       durationMinutes: durationMs / (1000 * 60),
       resolved: false,
@@ -265,7 +297,7 @@ export async function calculateCameraMetrics(
 }
 
 /**
- * Calculate site-level metrics
+ * Calculate site-level metrics (optimized for batch processing)
  */
 export async function calculateSiteMetrics(
   userId: string,
@@ -273,22 +305,24 @@ export async function calculateSiteMetrics(
 ): Promise<SiteMetrics[]> {
   const cameras = await storage.getCamerasByUserId(userId);
   
-  // Group cameras by location
-  const camerasByLocation = new Map<string, typeof cameras>();
-  for (const camera of cameras) {
-    const location = camera.location || 'Unknown';
-    if (!camerasByLocation.has(location)) {
-      camerasByLocation.set(location, []);
+  // Batch-calculate metrics for all cameras at once to minimize DB queries
+  const metricsPromises = cameras.map((c) => calculateCameraMetrics(c.id, days));
+  const allCameraMetrics = (await Promise.all(metricsPromises)).filter((m) => m !== null) as CameraMetrics[];
+  
+  // Group metrics by location
+  const metricsByLocation = new Map<string, CameraMetrics[]>();
+  for (const metric of allCameraMetrics) {
+    const location = metric.location || 'Unknown';
+    if (!metricsByLocation.has(location)) {
+      metricsByLocation.set(location, []);
     }
-    camerasByLocation.get(location)!.push(camera);
+    metricsByLocation.get(location)!.push(metric);
   }
   
-  // Calculate metrics for each site
+  // Calculate site-level aggregations
   const siteMetrics: SiteMetrics[] = [];
   
-  for (const [location, siteCameras] of Array.from(camerasByLocation)) {
-    const metricsPromises = siteCameras.map((c) => calculateCameraMetrics(c.id, days));
-    const cameraMetrics = (await Promise.all(metricsPromises)).filter((m) => m !== null) as CameraMetrics[];
+  for (const [location, cameraMetrics] of Array.from(metricsByLocation)) {
     
     if (cameraMetrics.length === 0) continue;
     
