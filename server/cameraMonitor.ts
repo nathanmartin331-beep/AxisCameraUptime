@@ -10,6 +10,70 @@ interface SystemReadyResponse {
   bootId: string;
 }
 
+interface VideoCheckResponse {
+  videoAvailable: boolean;
+  responseTime: number;
+}
+
+async function checkVideoStream(
+  ipAddress: string,
+  username: string,
+  password: string,
+  timeout: number = 5000
+): Promise<VideoCheckResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const url = `http://${ipAddress}/axis-cgi/jpg/image.cgi`;
+    const startTime = Date.now();
+
+    const authHeader = Buffer.from(`${username}:${password}`).toString('base64');
+
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "AxisCameraMonitor/1.0",
+        "Authorization": `Basic ${authHeader}`,
+      },
+    });
+
+    clearTimeout(timeoutId);
+    const responseTime = Date.now() - startTime;
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error(`Authentication failed - invalid credentials`);
+      } else if (response.status === 404) {
+        throw new Error(`Video endpoint not found - camera may not support JPEG API`);
+      }
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('image')) {
+      throw new Error(`Unexpected content type: ${contentType} (expected image/*)`);
+    }
+
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength === 0) {
+      throw new Error(`Empty response - no image data received`);
+    }
+
+    return {
+      videoAvailable: true,
+      responseTime,
+    };
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    
+    if (error.name === "AbortError") {
+      throw new Error(`Video check timeout after ${timeout}ms`);
+    }
+    throw error;
+  }
+}
+
 async function pollCamera(
   ipAddress: string,
   username: string,
@@ -157,12 +221,31 @@ async function checkAllCameras() {
           responseTimeMs: responseTime,
         });
 
-        console.log(
-          `[Monitor] ✓ ${camera.name} (${camera.ipAddress}) - Online ${rebooted ? "(REBOOTED)" : ""}`
-        );
+        // If camera is online, check video stream
+        try {
+          const videoCheck = await checkVideoStream(
+            camera.ipAddress,
+            camera.username,
+            decryptedPassword,
+            3000 // Shorter timeout for video check
+          );
+
+          await storage.updateVideoStatus(camera.id, "video_ok");
+          
+          console.log(
+            `[Monitor] ✓ ${camera.name} (${camera.ipAddress}) - Online, Video OK ${rebooted ? "(REBOOTED)" : ""}`
+          );
+        } catch (videoError: any) {
+          await storage.updateVideoStatus(camera.id, "video_failed");
+          
+          console.log(
+            `[Monitor] ⚠ ${camera.name} (${camera.ipAddress}) - Online but Video FAILED: ${videoError.message}`
+          );
+        }
       } catch (error: any) {
         // Camera is offline or unreachable
         await storage.updateCameraStatus(camera.id, "offline");
+        await storage.updateVideoStatus(camera.id, "unknown"); // Can't check video if camera is offline
 
         await storage.createUptimeEvent({
           cameraId: camera.id,

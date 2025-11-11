@@ -46,6 +46,11 @@ export interface IStorage {
     bootId?: string,
     lastSeenAt?: Date
   ): Promise<void>;
+  updateVideoStatus(
+    id: string,
+    videoStatus: string,
+    lastVideoCheck?: Date
+  ): Promise<void>;
 
   // Uptime event operations
   createUptimeEvent(event: InsertUptimeEvent): Promise<UptimeEvent>;
@@ -146,6 +151,21 @@ export class DatabaseStorage implements IStorage {
         currentStatus: status,
         ...(bootId && { currentBootId: bootId }),
         ...(lastSeenAt && { lastSeenAt }),
+        updatedAt: new Date(),
+      })
+      .where(eq(cameras.id, id));
+  }
+
+  async updateVideoStatus(
+    id: string,
+    videoStatus: string,
+    lastVideoCheck?: Date
+  ): Promise<void> {
+    await db
+      .update(cameras)
+      .set({
+        videoStatus,
+        lastVideoCheck: lastVideoCheck || new Date(),
         updatedAt: new Date(),
       })
       .where(eq(cameras.id, id));

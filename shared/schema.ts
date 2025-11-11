@@ -59,27 +59,22 @@ export const cameras = pgTable("cameras", {
   encryptedPassword: text("encrypted_password").notNull(),
   location: text("location"),
   notes: text("notes"),
-  protocol: varchar("protocol", { length: 5 }).notNull().default("http"),
-  port: integer("port").notNull().default(80),
-  useSSL: boolean("use_ssl").notNull().default(false),
-  verifySslCert: boolean("verify_ssl_cert").notNull().default(false),
   currentBootId: varchar("current_boot_id"),
   lastSeenAt: timestamp("last_seen_at"),
   currentStatus: varchar("current_status", { length: 20 }).default("unknown"),
+  videoStatus: varchar("video_status", { length: 20 }).default("unknown"),
+  lastVideoCheck: timestamp("last_video_check"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-export const insertCameraSchema = createInsertSchema(cameras, {
-  protocol: z.enum(["http", "https"]).default("http"),
-  port: z.number().int().min(1).max(65535).default(80),
-  useSSL: z.boolean().default(false),
-  verifySslCert: z.boolean().default(false),
-}).omit({
+export const insertCameraSchema = createInsertSchema(cameras).omit({
   id: true,
   currentBootId: true,
   lastSeenAt: true,
   currentStatus: true,
+  videoStatus: true,
+  lastVideoCheck: true,
   createdAt: true,
   updatedAt: true,
 });
