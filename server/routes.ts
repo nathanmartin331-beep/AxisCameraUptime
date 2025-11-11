@@ -3,8 +3,16 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { requireAuth } from "./auth";
 import { encryptPassword } from "./encryption";
-import { insertCameraSchema } from "@shared/schema";
+import { insertCameraSchema, type Camera } from "@shared/schema";
 import type { SafeUser } from "./storage";
+import { z } from "zod";
+
+// Dedicated schema for CSV import validation (includes plain password instead of encrypted)
+const importCameraSchema = insertCameraSchema
+  .omit({ encryptedPassword: true })
+  .extend({
+    password: z.string().min(1, "Password is required"),
+  });
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Get current user helper
@@ -322,24 +330,91 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Import cameras for the current user
       const userId = (req.user as any).id;
       const imported = [];
+      const skipped = [];
+      const errors = [];
 
-      for (const camera of cameras) {
-        const encryptedPassword = await encryptPassword(camera.password);
-        const newCamera = await storage.createCamera({
-          userId,
-          name: camera.name,
-          ipAddress: camera.ipAddress,
-          username: camera.username,
-          encryptedPassword,
-          location: camera.location,
-          notes: camera.notes,
-        });
-        imported.push(newCamera);
+      // Get existing cameras for deduplication
+      const existingCameras = await storage.getCamerasByUserId(userId);
+      const normalizeIP = (ip: string) => ip.trim().toLowerCase();
+      const existingIPs = new Set(existingCameras.map((c: Camera) => normalizeIP(c.ipAddress)));
+      const processedIPs = new Set<string>(); // Track IPs processed in this import
+
+      for (let i = 0; i < cameras.length; i++) {
+        const camera = cameras[i];
+        const rowNum = i + 2; // +2 because row 1 is headers and arrays are 0-indexed
+
+        try {
+          const normalizedIP = normalizeIP(camera.ipAddress);
+
+          // Check for duplicates (both in DB and within this import)
+          if (existingIPs.has(normalizedIP) || processedIPs.has(normalizedIP)) {
+            const reason = existingIPs.has(normalizedIP) 
+              ? "Duplicate IP (already exists in database)"
+              : "Duplicate IP (appears earlier in this file)";
+            skipped.push({
+              row: rowNum,
+              name: camera.name,
+              ipAddress: camera.ipAddress,
+              reason,
+            });
+            continue;
+          }
+
+          // Validate camera data using dedicated import schema
+          const validatedData = importCameraSchema.parse({
+            userId,
+            name: camera.name,
+            ipAddress: camera.ipAddress,
+            username: camera.username,
+            password: camera.password,
+            location: camera.location || null,
+            notes: camera.notes || null,
+          });
+
+          // Encrypt password and create camera
+          const encryptedPassword = await encryptPassword(validatedData.password);
+          const newCamera = await storage.createCamera({
+            userId: validatedData.userId,
+            name: validatedData.name,
+            ipAddress: validatedData.ipAddress,
+            username: validatedData.username,
+            encryptedPassword,
+            location: validatedData.location,
+            notes: validatedData.notes,
+          });
+          
+          imported.push(newCamera);
+          processedIPs.add(normalizedIP); // Track this IP as processed
+          existingIPs.add(normalizedIP); // Also add to existing to catch future duplicates
+        } catch (validationError: any) {
+          errors.push({
+            row: rowNum,
+            name: camera.name || "Unknown",
+            ipAddress: camera.ipAddress || "Unknown",
+            error: validationError.message || "Validation failed",
+          });
+        }
+      }
+
+      // Build response message
+      let message = `Successfully imported ${imported.length} camera${imported.length !== 1 ? 's' : ''}`;
+      if (skipped.length > 0) {
+        message += `, skipped ${skipped.length} duplicate${skipped.length !== 1 ? 's' : ''}`;
+      }
+      if (errors.length > 0) {
+        message += `, ${errors.length} error${errors.length !== 1 ? 's' : ''}`;
       }
 
       res.json({
-        message: `Successfully imported ${imported.length} cameras`,
+        message,
         count: imported.length,
+        imported: imported.length,
+        skipped: skipped.length,
+        errors: errors.length,
+        details: {
+          skippedRows: skipped.length > 0 ? skipped : undefined,
+          errorRows: errors.length > 0 ? errors : undefined,
+        },
       });
     } catch (error: any) {
       console.error("Error importing cameras:", error);

@@ -1,0 +1,21 @@
+name,ipAddress,username,password,location,notes
+Front Entrance Cam,192.168.1.101,admin,ViewCam2025,Building A - Main Entrance,Primary entrance monitoring with PTZ
+Parking Lot North,192.168.1.102,axis,SecureView2025,Parking Structure - North,Wide angle view of north parking area
+Warehouse Bay 1,192.168.1.103,admin,WatchDog2025,Warehouse - Bay 1,Loading dock surveillance
+"Executive Office, Floor 3",192.168.1.104,security,Monitor123,Building B - Floor 3,"High-resolution camera, records 24/7"
+Lobby Reception,192.168.1.105,admin,CamPass2025,Building A - Lobby,Reception desk coverage
+Server Room Entry,192.168.1.106,axis,DataCenter2025,Data Center - Entry,Critical infrastructure monitoring
+Cafeteria Main,192.168.1.107,admin,LunchWatch2025,Building A - Cafeteria,Dining area coverage
+Emergency Exit West,192.168.1.108,security,ExitCam2025,Building A - West Wing,Emergency exit compliance monitoring
+Conference Room A,192.168.1.109,admin,MeetingCam2025,Building B - Floor 2,"Conference room, motion detection enabled"
+Shipping Dock,192.168.1.110,axis,ShipView2025,Warehouse - Shipping Dock,Package loading area
+IT Lab Entrance,192.168.1.111,admin,LabCam2025,Building B - Floor 1,Restricted area monitoring
+Courtyard East,192.168.1.112,security,Outdoor2025,Exterior - East Courtyard,Weather-resistant outdoor camera
+Stairwell B-2,192.168.1.113,admin,StairCam2025,Building B - Stairwell,Fire exit monitoring
+Generator Room,192.168.1.114,axis,PowerCam2025,Building A - Mechanical,"Critical systems room, infrared enabled"
+Parking Garage Entry,192.168.1.115,security,GateView2025,Parking Structure - Entry Gate,License plate recognition
+Rooftop Access,192.168.1.116,admin,RoofCam2025,Building A - Rooftop,Perimeter security
+Loading Zone South,192.168.1.117,axis,LoadCam2025,Warehouse - South Zone,Delivery truck monitoring
+Break Room Floor 2,192.168.1.118,admin,BreakCam2025,Building B - Floor 2,Employee area coverage
+"Storage Room, Basement",192.168.1.119,security,StoreCam2025,Building A - Basement,Archive storage monitoring
+Network Closet Main,192.168.1.120,axis,NetCam2025,Building B - Network Closet,"Network equipment room, temperature monitoring"

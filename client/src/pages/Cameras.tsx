@@ -4,9 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useQuery } from "@tanstack/react-query";
-import { Plus, Search, Trash2, Eye } from "lucide-react";
+import { Plus, Search, Trash2, Eye, Upload } from "lucide-react";
 import { Link } from "wouter";
 import AddCameraModal, { CameraFormData } from "@/components/AddCameraModal";
+import CSVImportModal from "@/components/CSVImportModal";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useMutation } from "@tanstack/react-query";
@@ -21,7 +22,9 @@ interface Camera {
 
 export default function Cameras() {
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [showImportDialog, setShowImportDialog] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [csvContent, setCsvContent] = useState("");
   const { toast } = useToast();
 
   const { data: cameras = [], isLoading } = useQuery<Camera[]>({
@@ -69,6 +72,31 @@ export default function Cameras() {
     },
   });
 
+  const importMutation = useMutation({
+    mutationFn: async (csvData: string) => {
+      const response = await apiRequest("POST", "/api/cameras/import", {
+        csvContent: csvData,
+      });
+      return await response.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cameras"] });
+      setShowImportDialog(false);
+      setCsvContent("");
+      toast({
+        title: "Import Successful",
+        description: data.message || `Imported ${data.count} cameras`,
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Import Failed",
+        description: error.message || "Failed to import cameras",
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleDeleteCamera = (cameraId: number) => {
     if (!confirm("Are you sure you want to delete this camera?")) return;
     deleteMutation.mutate(cameraId);
@@ -76,6 +104,12 @@ export default function Cameras() {
 
   const handleAddCamera = (data: CameraFormData) => {
     addMutation.mutate(data);
+  };
+
+  const handleImport = (cameras: any[]) => {
+    if (csvContent) {
+      importMutation.mutate(csvContent);
+    }
   };
 
   const filteredCameras = cameras.filter((camera) =>
@@ -90,10 +124,16 @@ export default function Cameras() {
           <h1 className="text-3xl font-bold" data-testid="heading-cameras">Cameras</h1>
           <p className="text-muted-foreground">Manage your Axis camera fleet</p>
         </div>
-        <Button onClick={() => setShowAddDialog(true)} data-testid="button-add-camera">
-          <Plus className="w-4 h-4 mr-2" />
-          Add Camera
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={() => setShowImportDialog(true)} variant="outline" data-testid="button-import-csv">
+            <Upload className="w-4 h-4 mr-2" />
+            Import CSV
+          </Button>
+          <Button onClick={() => setShowAddDialog(true)} data-testid="button-add-camera">
+            <Plus className="w-4 h-4 mr-2" />
+            Add Camera
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -178,6 +218,13 @@ export default function Cameras() {
         open={showAddDialog} 
         onOpenChange={setShowAddDialog}
         onSave={handleAddCamera}
+      />
+      <CSVImportModal
+        open={showImportDialog}
+        onOpenChange={setShowImportDialog}
+        onImport={handleImport}
+        csvContent={csvContent}
+        onCsvContentChange={setCsvContent}
       />
     </div>
   );
