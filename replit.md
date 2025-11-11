@@ -6,9 +6,11 @@ An enterprise-grade monitoring application for Axis security camera networks. Th
 
 **Core Capabilities:**
 - Continuous camera health monitoring via VAPIX systemready endpoint
+- **Video stream health detection** - Validates video encoder functionality (detects cameras that are online but not delivering video)
 - Real-time status tracking (online/offline/warning states)
+- Tri-state video health indicators (video_ok/video_failed/unknown)
 - Reboot detection through bootId comparison
-- 365-day uptime percentage calculations
+- 365-day uptime percentage calculations with video health history
 - Network scanning for camera discovery (supports all network classes: Class A 10.x.x.x, Class B 172.16-31.x.x, Class C 192.168.x.x)
 - CSV import/export for bulk camera management
 
@@ -32,10 +34,17 @@ Preferred communication style: Simple, everyday language.
 
 **Key Pages:**
 - Landing page (unauthenticated users)
-- Dashboard (camera overview, metrics, uptime charts)
+- Dashboard (camera overview with video health metrics, uptime charts, tri-state status badges)
 - Cameras page (camera management with manual add and CSV import)
 - Network Scan page (subnet scanning for camera discovery)
-- Camera detail views (individual camera analytics and reboot history)
+- Camera detail views (individual camera analytics, reboot history, video health status)
+
+**Video Health UI:**
+- Tri-state status badges: Green (video_ok), Amber (video_failed), Neutral (unknown/offline)
+- Icons: CheckCircle2 (healthy), AlertTriangle (video failed), standard status dot (system state)
+- Dashboard "Video Issues" metric with amber accent when failures detected
+- Tooltips with remediation guidance for video failures
+- Video status displayed alongside system status in camera table
 
 ### Backend Architecture
 
@@ -45,12 +54,18 @@ Preferred communication style: Simple, everyday language.
 
 **Camera Monitoring System:**
 - Cron-based polling service (`cameraMonitor.ts`) that runs on configurable intervals
-- Polls cameras using VAPIX systemready.cgi endpoint (unauthenticated HTTP calls)
+- Two-tier health validation:
+  1. System health check via VAPIX systemready.cgi (unauthenticated)
+  2. **Video stream validation** via `/axis-cgi/jpg/image.cgi` (authenticated with HTTP Basic Auth)
 - Tracks camera status changes and bootId for reboot detection
 - Creates uptime events for state transitions (online→offline, offline→online, reboot detected)
+- Records video health status in both camera records and uptime events
 
 **Core Monitoring Logic:**
 - Each poll checks `systemready=yes/no` and captures `bootId`
+- For online cameras, performs authenticated video stream check with 3-second timeout
+- Video check fetches JPEG snapshot to verify encoder functionality
+- Three-state video status: `video_ok` (streaming), `video_failed` (encoder issue), `unknown` (not checked/offline)
 - Boot ID changes indicate reboots even if camera stays online
 - Events stored as time-series data for uptime calculations
 - Uptime percentage calculated by aggregating event durations over specified time windows
@@ -96,12 +111,14 @@ Preferred communication style: Simple, everyday language.
 - username, encryptedPassword (bcrypt hashed)
 - location, notes (optional text fields)
 - currentStatus, bootId, lastSeenAt
+- **videoStatus, lastVideoCheck** (video stream health tracking)
 - Timestamps: createdAt, updatedAt
 - Cascade delete on user deletion
 
 **uptimeEvents** - Time-series uptime tracking
 - id, cameraId (foreign key → cameras)
 - eventType (enum: 'online', 'offline', 'reboot')
+- **videoStatus** (captures video health at time of event)
 - timestamp, bootId, metadata (JSONB for extensibility)
 - Indexed on cameraId + timestamp for efficient range queries
 
@@ -119,9 +136,11 @@ Preferred communication style: Simple, everyday language.
 
 **Camera Integration:**
 - **Axis VAPIX API:** HTTP-based camera API for health checks
-  - Endpoint: `http://{ip}/axis-cgi/systemready.cgi`
+  - System health endpoint: `http://{ip}/axis-cgi/systemready.cgi` (unauthenticated)
   - Response format: Key-value pairs (systemready, uptime, bootid)
-  - No authentication required for systemready endpoint
+  - **Video validation endpoint:** `http://{ip}/axis-cgi/jpg/image.cgi` (HTTP Basic Auth required)
+  - Video check validates encoder by fetching JPEG snapshot with content-type verification
+  - 5-second timeout for system checks, 3-second timeout for video checks
 
 **UI Component Libraries:**
 - **Radix UI:** Headless accessible components (@radix-ui/react-*)
