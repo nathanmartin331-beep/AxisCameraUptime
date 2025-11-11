@@ -748,11 +748,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/dashboard/layout", requireAuth, async (req: any, res) => {
     try {
       const userId = getUserId(req);
-      const layout = await storage.saveDashboardLayout(userId, req.body);
+      
+      // Validate layout schema
+      const layoutSchema = z.object({
+        widgets: z.array(z.object({
+          id: z.string(),
+          type: z.string(),
+          x: z.number(),
+          y: z.number().refine(val => isFinite(val) && val >= 0, "Y must be a finite positive number"),
+          w: z.number().min(1),
+          h: z.number().min(1),
+        })),
+      });
+      
+      const validatedLayout = layoutSchema.parse(req.body);
+      const layout = await storage.saveDashboardLayout(userId, validatedLayout);
 
       res.json(layout);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error saving dashboard layout:", error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ message: "Invalid layout data", errors: error.errors });
+      }
       res.status(500).json({ message: "Failed to save dashboard layout" });
     }
   });
