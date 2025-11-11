@@ -34,7 +34,10 @@ export default function Settings() {
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     
+    console.log("Password change started");
+    
     if (newPassword !== confirmPassword) {
+      console.log("Password mismatch");
       toast({
         variant: "destructive",
         title: "Password Mismatch",
@@ -44,6 +47,7 @@ export default function Settings() {
     }
 
     if (newPassword.length < 8) {
+      console.log("Password too short");
       toast({
         variant: "destructive",
         title: "Weak Password",
@@ -53,11 +57,16 @@ export default function Settings() {
     }
 
     setIsChangingPassword(true);
+    console.log("Sending password change request...");
     try {
-      await apiRequest("POST", "/api/auth/change-password", {
+      const response = await apiRequest("POST", "/api/auth/change-password", {
         currentPassword,
         newPassword,
       });
+      console.log("Password change response received:", response);
+      
+      const data = await response.json();
+      console.log("Password change data:", data);
 
       toast({
         title: "Password Changed",
@@ -69,6 +78,7 @@ export default function Settings() {
       setNewPassword("");
       setConfirmPassword("");
     } catch (error: any) {
+      console.error("Password change error:", error);
       toast({
         variant: "destructive",
         title: "Failed to Change Password",
@@ -76,6 +86,7 @@ export default function Settings() {
       });
     } finally {
       setIsChangingPassword(false);
+      console.log("Password change completed (success or failure)");
     }
   };
 

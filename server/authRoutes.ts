@@ -128,36 +128,49 @@ router.get("/me", requireAuth, (req, res) => {
 
 // Change password
 router.post("/change-password", requireAuth, async (req, res) => {
+  console.log("Password change request received");
+  console.log("Request body:", req.body);
+  console.log("User:", req.user);
+  
   try {
     const { currentPassword, newPassword } = req.body;
     const userId = (req.user as any).id;
 
     if (!currentPassword || !newPassword) {
+      console.log("Missing required fields");
       return res.status(400).json({ message: "Current password and new password are required" });
     }
 
     if (newPassword.length < 8) {
+      console.log("Password too short");
       return res.status(400).json({ message: "New password must be at least 8 characters long" });
     }
 
     // Get user with password
+    console.log("Getting user by ID:", userId);
     const user = await storage.getUserById(userId);
     if (!user) {
+      console.log("User not found");
       return res.status(404).json({ message: "User not found" });
     }
 
     // Verify current password
+    console.log("Verifying current password");
     const isValid = await bcrypt.compare(currentPassword, user.password);
     if (!isValid) {
+      console.log("Current password incorrect");
       return res.status(401).json({ message: "Current password is incorrect" });
     }
 
     // Hash new password
+    console.log("Hashing new password");
     const hashedPassword = await hashPassword(newPassword);
 
     // Update password
+    console.log("Updating password in database");
     await storage.updateUser(userId, { password: hashedPassword });
 
+    console.log("Password changed successfully");
     res.json({ message: "Password changed successfully" });
   } catch (error) {
     console.error("Change password error:", error);
