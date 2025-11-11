@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<response>
+  <parameter name="root.Brand.Brand" value="AXIS" />
+  <parameter name="root.Brand.ProdFullName" value="AXIS XYZ9999-Z Network Camera" />
+  <parameter name="root.Brand.ProdNbr" value="XYZ9999-Z" />
+  <parameter name="root.Brand.ProdShortName" value="AXIS XYZ9999-Z" />
+  <parameter name="root.Brand.ProdType" value="Network Camera" />
+  <parameter name="root.Brand.ProdVariant" value="XYZ9999-Z" />
+  <parameter name="root.Brand.WebURL" value="http://www.axis.com" />
+  <parameter name="root.Properties.System.SerialNumber" value="ACCC8E999999" />
+</response>

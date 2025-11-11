@@ -34,6 +34,8 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<SafeUser>;
   // Note: updateUser allows updating user fields including password
   updateUser(id: string, data: Partial<InsertUser>): Promise<SafeUser>;
+  // Note: upsertUser creates or updates user based on email
+  upsertUser(email: string, userData: Partial<InsertUser>): Promise<SafeUser>;
 
   // Camera operations
   createCamera(camera: InsertCamera): Promise<Camera>;
@@ -103,6 +105,15 @@ export class DatabaseStorage implements IStorage {
   async createUser(userData: InsertUser): Promise<SafeUser> {
     const [user] = await db.insert(users).values(userData).returning();
     return sanitizeUser(user);
+  }
+
+  async upsertUser(email: string, userData: Partial<InsertUser>): Promise<SafeUser> {
+    const existing = await this.getUserByEmail(email);
+    if (existing) {
+      return await this.updateUser(existing.id, userData);
+    } else {
+      return await this.createUser({ email, ...userData } as InsertUser);
+    }
   }
 
   // Camera operations

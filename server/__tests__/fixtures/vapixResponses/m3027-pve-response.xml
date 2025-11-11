@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<response>
+  <parameter name="root.Brand.Brand" value="AXIS" />
+  <parameter name="root.Brand.ProdFullName" value="AXIS M3027-PVE Network Camera" />
+  <parameter name="root.Brand.ProdNbr" value="M3027-PVE" />
+  <parameter name="root.Brand.ProdShortName" value="AXIS M3027-PVE" />
+  <parameter name="root.Brand.ProdType" value="Network Camera" />
+  <parameter name="root.Brand.ProdVariant" value="M3027-PVE" />
+  <parameter name="root.Brand.WebURL" value="http://www.axis.com" />
+  <parameter name="root.Properties.API.HTTP.Version" value="3" />
+  <parameter name="root.Properties.API.Metadata.Version" value="1.0" />
+  <parameter name="root.Properties.Firmware.BuildDate" value="Feb 15 2019 09:42" />
+  <parameter name="root.Properties.Firmware.BuildNumber" value="26" />
+  <parameter name="root.Properties.Firmware.Version" value="9.80.1" />
+  <parameter name="root.Properties.Image.Format" value="jpeg,mjpeg,h264" />
+  <parameter name="root.Properties.Image.NbrOfViews" value="1" />
+  <parameter name="root.Properties.Image.Resolution" value="2048x1536" />
+  <parameter name="root.Properties.Image.Rotation" value="0,180" />
+  <parameter name="root.Properties.System.Architecture" value="armv7hf" />
+  <parameter name="root.Properties.System.SerialNumber" value="ACCC8E123456" />
+  <parameter name="root.Properties.System.Soc" value="Ambarella S2L (Cortex-A9)" />
+</response>

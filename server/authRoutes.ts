@@ -6,8 +6,32 @@ import { insertUserSchema } from "@shared/schema";
 import { z } from "zod";
 import { getDefaultCredentials } from "./defaultUser";
 import bcrypt from "bcryptjs";
+import rateLimit from "express-rate-limit";
 
 const router = Router();
+
+// Rate limiter for authentication endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // 5 attempts per window
+  message: {
+    message: "Too many authentication attempts, please try again after 15 minutes"
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: false, // Count successful requests
+});
+
+// Rate limiter for registration endpoint
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 3, // 3 registrations per hour
+  message: {
+    message: "Too many registration attempts, please try again after 1 hour"
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Register schema with password confirmation
 const registerSchema = insertUserSchema.extend({
@@ -59,8 +83,18 @@ router.post("/register", async (req, res) => {
   }
 });
 
-// Auto-login endpoint (for local network deployment)
+// Auto-login endpoint (DEVELOPMENT ONLY - for local network deployment)
 router.post("/auto-login", async (req, res) => {
+  // SECURITY: Only allow auto-login in development mode
+  if (process.env.NODE_ENV !== 'development') {
+    console.warn('[SECURITY] Auto-login attempt blocked in production mode');
+    return res.status(403).json({
+      message: "Auto-login is disabled in production for security reasons"
+    });
+  }
+
+  console.warn('[SECURITY] Auto-login endpoint used - this should only be used in development');
+
   // Check if already logged in
   if (req.isAuthenticated()) {
     return res.json(req.user);
@@ -70,7 +104,7 @@ router.post("/auto-login", async (req, res) => {
     // Get default user from database (regardless of password)
     const credentials = getDefaultCredentials();
     const user = await storage.getUserByEmail(credentials.email);
-    
+
     if (!user) {
       return res.status(500).json({ message: "Default user not found" });
     }
@@ -82,9 +116,7 @@ router.post("/auto-login", async (req, res) => {
         return res.status(500).json({ message: "Auto-login session creation failed" });
       }
       // Return safe user without password
-      console.log("User before destructuring:", user);
       const { password, ...safeUser } = user;
-      console.log("Safe user after destructuring:", safeUser);
       res.json(safeUser);
     });
   } catch (error) {

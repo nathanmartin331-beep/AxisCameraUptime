@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<response>
+  <parameter name="root.Brand.Brand" value="AXIS" />
+  <parameter name="root.Brand.ProdFullName" value="AXIS Q6155-E PTZ Network Camera" />
+  <parameter name="root.Brand.ProdNbr" value="Q6155-E" />
+  <parameter name="root.Brand.ProdShortName" value="AXIS Q6155-E" />
+  <parameter name="root.Brand.ProdType" value="PTZ Network Camera" />
+  <parameter name="root.Brand.ProdVariant" value="Q6155-E" />
+  <parameter name="root.Brand.WebURL" value="http://www.axis.com" />
+  <parameter name="root.Properties.API.HTTP.Version" value="3" />
+  <parameter name="root.Properties.Firmware.BuildDate" value="Jun 20 2021 11:15" />
+  <parameter name="root.Properties.Firmware.BuildNumber" value="42" />
+  <parameter name="root.Properties.Firmware.Version" value="10.12.54" />
+  <parameter name="root.Properties.Image.Format" value="jpeg,mjpeg,h264,h265" />
+  <parameter name="root.Properties.Image.NbrOfViews" value="1" />
+  <parameter name="root.Properties.Image.Resolution" value="1920x1080" />
+  <parameter name="root.Properties.PTZ.PTZ" value="yes" />
+  <parameter name="root.Properties.PTZ.DigitalPTZ" value="yes" />
+  <parameter name="root.Properties.PTZ.Capabilities" value="PanTilt,Zoom,AutoFocus,IrisControl" />
+  <parameter name="root.Properties.PTZ.MaxPanSpeed" value="450" />
+  <parameter name="root.Properties.PTZ.MaxTiltSpeed" value="450" />
+  <parameter name="root.Properties.PTZ.OpticalZoom" value="30" />
+  <parameter name="root.Properties.System.Architecture" value="armv7hf" />
+  <parameter name="root.Properties.System.SerialNumber" value="ACCC8E345678" />
+  <parameter name="root.Properties.System.Soc" value="Axis ARTPEC-6" />
+</response>

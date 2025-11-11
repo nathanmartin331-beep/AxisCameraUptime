@@ -1,0 +1,26 @@
+{
+  "apiVersion": "1.0",
+  "method": "getProperties",
+  "data": {
+    "propertyList": {
+      "Brand.Brand": "AXIS",
+      "Brand.ProdFullName": "AXIS P1365 Network Camera",
+      "Brand.ProdNbr": "P1365",
+      "Brand.ProdShortName": "AXIS P1365",
+      "Brand.ProdType": "Network Camera",
+      "Brand.ProdVariant": "P1365",
+      "Brand.WebURL": "http://www.axis.com",
+      "Properties.API.HTTP.Version": "3",
+      "Properties.Firmware.BuildDate": "Mar 10 2020 14:23",
+      "Properties.Firmware.BuildNumber": "35",
+      "Properties.Firmware.Version": "9.80.2",
+      "Properties.Image.Format": "jpeg,mjpeg,h264,h265",
+      "Properties.Image.NbrOfViews": "1",
+      "Properties.Image.Resolution": "1920x1080",
+      "Properties.Image.Rotation": "0,90,180,270",
+      "Properties.System.Architecture": "armv7hf",
+      "Properties.System.SerialNumber": "ACCC8E789012",
+      "Properties.System.Soc": "Axis ARTPEC-4"
+    }
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "timestamp": "2025-11-11T05:56:22Z",
+  "total_ts_files": 111,
+  "type_errors": 4,
+  "linting_errors": 0,
+  "typescript_config": {
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler"
+  },
+  "critical_issues": [
+    {
+      "file": "server/replitAuth.ts",
+      "line": 54,
+      "severity": "error",
+      "code": "TS2339",
+      "message": "Property 'upsertUser' does not exist on type 'DatabaseStorage'",
+      "impact": "Runtime error - authentication will fail",
+      "priority": "critical"
+    },
+    {
+      "file": "server/index.ts",
+      "line": 3,
+      "severity": "error",
+      "code": "TS7016",
+      "message": "Could not find a declaration file for module 'session-file-store'",
+      "impact": "Type safety compromised, implicit any type",
+      "priority": "medium"
+    },
+    {
+      "file": "client/src/components/examples/UptimeChart.tsx",
+      "line": 19,
+      "severity": "error",
+      "code": "TS2322",
+      "message": "Type mismatch - data prop does not exist on UptimeChartProps",
+      "impact": "Component API mismatch, may cause runtime errors",
+      "priority": "high"
+    },
+    {
+      "file": "client/src/pages/CameraDetail.tsx",
+      "line": 299,
+      "severity": "error",
+      "code": "TS2322",
+      "message": "Type mismatch - data prop does not exist on UptimeChartProps",
+      "impact": "Component API mismatch, may cause runtime errors",
+      "priority": "high"
+    }
+  ],
+  "linting_status": "No ESLint configured",
+  "type_coverage_score": 96.4,
+  "recommendations": [
+    "Add upsertUser method to IStorage interface and DatabaseStorage class",
+    "Install @types/session-file-store or create custom type declaration",
+    "Update UptimeChart component to remove data prop requirement",
+    "Consider adding ESLint for code quality checks",
+    "Enable additional strict TypeScript checks (noImplicitAny, strictNullChecks)",
+    "Add type declarations for external modules without types"
+  ]
+}

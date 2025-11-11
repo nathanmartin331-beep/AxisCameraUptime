@@ -294,19 +294,12 @@ export default function CameraDetail() {
         onDelete={handleDelete}
       />
 
-      {chartData.length > 0 ? (
-        <UptimeChart
-          data={chartData}
-          title="30-Day Uptime History"
-          description="Daily availability percentage for this camera"
-        />
-      ) : (
-        <Card>
-          <CardContent className="p-8 text-center">
-            <p className="text-muted-foreground">No uptime data available yet</p>
-          </CardContent>
-        </Card>
-      )}
+      <UptimeChart
+        cameraId={camera.id}
+        days={30}
+        title="30-Day Uptime History"
+        description="Daily availability percentage for this camera"
+      />
     </div>
   );
 }

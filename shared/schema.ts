@@ -1,38 +1,39 @@
 import { sql } from "drizzle-orm";
 import {
-  pgTable,
+  sqliteTable,
   text,
-  varchar,
-  timestamp,
-  jsonb,
-  index,
   integer,
-  boolean,
-} from "drizzle-orm/pg-core";
+  index,
+} from "drizzle-orm/sqlite-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+// Helper function to generate UUIDs for SQLite
+const generateId = () => crypto.randomUUID();
+
 // Session storage table for Replit Auth
 // Reference: blueprint:javascript_log_in_with_replit
-export const sessions = pgTable(
+export const sessions = sqliteTable(
   "sessions",
   {
-    sid: varchar("sid").primaryKey(),
-    sess: jsonb("sess").notNull(),
-    expire: timestamp("expire").notNull(),
+    sid: text("sid").primaryKey(),
+    sess: text("sess", { mode: "json" }).notNull().$type<any>(),
+    expire: integer("expire", { mode: "timestamp" }).notNull(),
   },
-  (table) => [index("IDX_session_expire").on(table.expire)]
+  (table) => ({
+    expireIdx: index("IDX_session_expire").on(table.expire),
+  })
 );
 
 // User storage table for local authentication
-export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  email: varchar("email").unique().notNull(),
+export const users = sqliteTable("users", {
+  id: text("id").primaryKey().$defaultFn(generateId),
+  email: text("email").unique().notNull(),
   password: text("password").notNull(),
-  firstName: varchar("first_name"),
-  lastName: varchar("last_name"),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
 export const insertUserSchema = createInsertSchema(users, {
@@ -48,24 +49,24 @@ export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 
 // Cameras table - stores camera configuration and encrypted credentials
-export const cameras = pgTable("cameras", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id")
+export const cameras = sqliteTable("cameras", {
+  id: text("id").primaryKey().$defaultFn(generateId),
+  userId: text("user_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
-  ipAddress: varchar("ip_address", { length: 45 }).notNull(),
+  ipAddress: text("ip_address").notNull(),
   username: text("username").notNull(),
   encryptedPassword: text("encrypted_password").notNull(),
   location: text("location"),
   notes: text("notes"),
-  currentBootId: varchar("current_boot_id"),
-  lastSeenAt: timestamp("last_seen_at"),
-  currentStatus: varchar("current_status", { length: 20 }).default("unknown"),
-  videoStatus: varchar("video_status", { length: 20 }).default("unknown"),
-  lastVideoCheck: timestamp("last_video_check"),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
+  currentBootId: text("current_boot_id"),
+  lastSeenAt: integer("last_seen_at", { mode: "timestamp" }),
+  currentStatus: text("current_status").default("unknown"),
+  videoStatus: text("video_status").default("unknown"),
+  lastVideoCheck: integer("last_video_check", { mode: "timestamp" }),
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
 export const insertCameraSchema = createInsertSchema(cameras).omit({
@@ -83,27 +84,27 @@ export type InsertCamera = z.infer<typeof insertCameraSchema>;
 export type Camera = typeof cameras.$inferSelect;
 
 // Uptime events table - tracks all status changes and polling results
-export const uptimeEvents = pgTable(
+export const uptimeEvents = sqliteTable(
   "uptime_events",
   {
-    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-    cameraId: varchar("camera_id")
+    id: text("id").primaryKey().$defaultFn(generateId),
+    cameraId: text("camera_id")
       .notNull()
       .references(() => cameras.id, { onDelete: "cascade" }),
-    timestamp: timestamp("timestamp").notNull().defaultNow(),
-    status: varchar("status", { length: 20 }).notNull(),
-    videoStatus: varchar("video_status", { length: 20 }),
+    timestamp: integer("timestamp", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+    status: text("status").notNull(),
+    videoStatus: text("video_status"),
     uptimeSeconds: integer("uptime_seconds"),
-    bootId: varchar("boot_id"),
+    bootId: text("boot_id"),
     responseTimeMs: integer("response_time_ms"),
     errorMessage: text("error_message"),
   },
-  (table) => [
-    index("idx_uptime_events_camera_timestamp").on(
+  (table) => ({
+    cameraTimestampIdx: index("idx_uptime_events_camera_timestamp").on(
       table.cameraId,
       table.timestamp
     ),
-  ]
+  })
 );
 
 export const insertUptimeEventSchema = createInsertSchema(uptimeEvents).omit({
@@ -114,13 +115,13 @@ export type InsertUptimeEvent = z.infer<typeof insertUptimeEventSchema>;
 export type UptimeEvent = typeof uptimeEvents.$inferSelect;
 
 // Dashboard layouts - stores user's widget configuration and positions
-export const dashboardLayouts = pgTable("dashboard_layouts", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id")
+export const dashboardLayouts = sqliteTable("dashboard_layouts", {
+  id: text("id").primaryKey().$defaultFn(generateId),
+  userId: text("user_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" })
     .unique(),
-  layout: jsonb("layout").notNull().$type<{
+  layout: text("layout", { mode: "json" }).notNull().$type<{
     widgets: Array<{
       id: string;
       type: string;
@@ -131,8 +132,8 @@ export const dashboardLayouts = pgTable("dashboard_layouts", {
       config?: Record<string, any>;
     }>;
   }>(),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
 export const insertDashboardLayoutSchema = createInsertSchema(dashboardLayouts).omit({

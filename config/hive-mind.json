@@ -1,0 +1,129 @@
+{
+  "hiveMind": {
+    "enabled": true,
+    "version": "2.7.33",
+    "topology": "hierarchical",
+    "projectContext": {
+      "name": "AxisCameraUptime",
+      "type": "full-stack-web-app",
+      "stack": {
+        "frontend": "React + TypeScript + Vite",
+        "backend": "Express + TypeScript",
+        "database": "PostgreSQL + Drizzle ORM",
+        "auth": "Replit Auth",
+        "deployment": "Replit"
+      },
+      "purpose": "Camera uptime monitoring and reporting system"
+    }
+  },
+  "queen": {
+    "type": "strategic",
+    "role": "queen-coordinator",
+    "governance": "democratic",
+    "succession": "collective-intelligence-coordinator",
+    "responsibilities": [
+      "Strategic oversight",
+      "Resource allocation",
+      "Hive coherence",
+      "Emergency response"
+    ]
+  },
+  "collectiveIntelligence": {
+    "enabled": true,
+    "role": "collective-intelligence-coordinator",
+    "consensusThreshold": 0.75,
+    "decisionMode": "weighted-voting",
+    "knowledgeIntegration": true
+  },
+  "workers": {
+    "maxWorkers": 8,
+    "autoScale": true,
+    "specializations": [
+      "backend-dev",
+      "coder",
+      "tester",
+      "reviewer",
+      "qe-test-generator",
+      "qe-coverage-analyzer"
+    ],
+    "loadBalancing": "work-stealing",
+    "faultTolerance": true
+  },
+  "scouts": {
+    "enabled": true,
+    "maxScouts": 3,
+    "roles": [
+      "scout-explorer"
+    ],
+    "scanInterval": 300,
+    "reportingFrequency": 120
+  },
+  "memory": {
+    "manager": "swarm-memory-manager",
+    "distributedMemory": true,
+    "sizeLimit": "100mb",
+    "persistence": true,
+    "conflictResolution": "crdt",
+    "caching": {
+      "enabled": true,
+      "levels": ["l1", "l2", "l3"],
+      "ttl": 3600
+    },
+    "namespace": "swarm",
+    "keyPrefixes": {
+      "queen": "swarm/queen/",
+      "collective": "swarm/collective-intelligence/",
+      "shared": "swarm/shared/",
+      "workers": "swarm/workers/",
+      "scouts": "swarm/scouts/",
+      "memory": "swarm/memory-manager/"
+    }
+  },
+  "consensus": {
+    "algorithm": "weighted-voting",
+    "fallback": "byzantine-fault-tolerant",
+    "quorumSize": 0.67,
+    "timeout": 30000,
+    "maxRetries": 3
+  },
+  "coordination": {
+    "mode": "hybrid",
+    "patterns": {
+      "hierarchical": {
+        "enabled": true,
+        "depth": 3,
+        "commandChain": ["queen", "collective-intelligence", "workers"]
+      },
+      "mesh": {
+        "enabled": true,
+        "peerToPeer": true,
+        "knowledgeSharing": true
+      }
+    },
+    "communication": {
+      "protocol": "memory-based",
+      "encryption": false,
+      "compression": true
+    }
+  },
+  "monitoring": {
+    "enabled": true,
+    "metricsInterval": 60,
+    "healthChecks": true,
+    "performanceTracking": true,
+    "alerts": {
+      "enabled": true,
+      "thresholds": {
+        "coherenceScore": 0.70,
+        "taskFailureRate": 0.10,
+        "memoryUsage": 0.90
+      }
+    }
+  },
+  "recovery": {
+    "autoRecovery": true,
+    "checkpointInterval": 300,
+    "backupEnabled": true,
+    "sessionPersistence": true
+  }
+}

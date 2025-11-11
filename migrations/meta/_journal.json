@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1762839757367,
+      "tag": "0000_tranquil_fabian_cortez",
+      "breakpoints": true
+    }
+  ]
+}

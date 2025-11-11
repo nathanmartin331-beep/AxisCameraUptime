@@ -1,0 +1,157 @@
+{
+  "cameras": [
+    {
+      "id": "fixture-m3027-pve",
+      "name": "Front Entrance",
+      "model": "AXIS M3027-PVE",
+      "series": "M",
+      "type": "fixed-dome",
+      "features": ["outdoor", "vandal-resistant", "day-night"],
+      "resolution": "3MP",
+      "description": "3MP outdoor fixed dome camera with vandal-resistant housing"
+    },
+    {
+      "id": "fixture-p1365",
+      "name": "Lobby Camera",
+      "model": "AXIS P1365",
+      "series": "P",
+      "type": "box",
+      "features": ["indoor", "day-night", "hdtv"],
+      "resolution": "2MP",
+      "description": "2MP indoor box camera with HDTV quality"
+    },
+    {
+      "id": "fixture-q6155-e",
+      "name": "Parking Lot PTZ",
+      "model": "AXIS Q6155-E",
+      "series": "Q",
+      "type": "ptz",
+      "features": ["outdoor", "pan-tilt-zoom", "day-night", "30x-zoom"],
+      "resolution": "1080p",
+      "description": "Outdoor PTZ camera with 30x optical zoom"
+    },
+    {
+      "id": "fixture-f34",
+      "name": "Warehouse Modular",
+      "model": "AXIS F34",
+      "series": "F",
+      "type": "modular",
+      "features": ["indoor", "flexible-mounting", "multiple-sensors"],
+      "resolution": "1080p",
+      "description": "Modular camera system with flexible sensor options"
+    },
+    {
+      "id": "fixture-m1065-l",
+      "name": "Back Office Legacy",
+      "model": "AXIS M1065-L",
+      "series": "M",
+      "type": "fixed-dome",
+      "features": ["indoor", "compact", "legacy"],
+      "resolution": "2MP",
+      "description": "Compact legacy network camera"
+    },
+    {
+      "id": "fixture-unknown",
+      "name": "Generic Camera",
+      "model": null,
+      "series": "unknown",
+      "type": "unknown",
+      "features": [],
+      "resolution": null,
+      "description": "Camera with unknown model (backward compatibility test)"
+    }
+  ],
+  "vapixResponses": {
+    "m3027-pve": {
+      "format": "xml",
+      "file": "m3027-pve-response.xml",
+      "properties": {
+        "Brand.Brand": "AXIS",
+        "Properties.ProdFullName": "AXIS M3027-PVE Network Camera",
+        "Properties.ProdNbr": "M3027-PVE",
+        "Properties.ProdType": "Network Camera",
+        "Properties.ProdVariant": "M3027-PVE"
+      }
+    },
+    "p1365": {
+      "format": "json",
+      "file": "p1365-response.json",
+      "properties": {
+        "Brand.Brand": "AXIS",
+        "Properties.ProdFullName": "AXIS P1365 Network Camera",
+        "Properties.ProdNbr": "P1365",
+        "Properties.ProdType": "Network Camera",
+        "Properties.ProdVariant": "P1365"
+      }
+    },
+    "q6155-e": {
+      "format": "xml",
+      "file": "q6155-e-response.xml",
+      "properties": {
+        "Brand.Brand": "AXIS",
+        "Properties.ProdFullName": "AXIS Q6155-E PTZ Network Camera",
+        "Properties.ProdNbr": "Q6155-E",
+        "Properties.ProdType": "PTZ Network Camera",
+        "Properties.ProdVariant": "Q6155-E"
+      }
+    },
+    "malformed": {
+      "format": "xml",
+      "file": "malformed-response.xml",
+      "description": "Malformed XML for error handling tests"
+    },
+    "empty": {
+      "format": "xml",
+      "file": "empty-response.xml",
+      "description": "Empty response for edge case testing"
+    },
+    "unknown": {
+      "format": "xml",
+      "file": "unknown-model-response.xml",
+      "properties": {
+        "Brand.Brand": "AXIS",
+        "Properties.ProdFullName": "AXIS XYZ9999-Z Network Camera",
+        "Properties.ProdNbr": "XYZ9999-Z",
+        "Properties.ProdType": "Network Camera",
+        "Properties.ProdVariant": "XYZ9999-Z"
+      },
+      "description": "Unknown model for fallback testing"
+    }
+  },
+  "testScenarios": [
+    {
+      "name": "Successful Model Detection",
+      "camera": "fixture-m3027-pve",
+      "expectedResult": "success",
+      "expectedModel": "AXIS M3027-PVE"
+    },
+    {
+      "name": "Network Timeout",
+      "camera": "fixture-p1365",
+      "mockBehavior": "timeout",
+      "expectedResult": "error",
+      "expectedError": "Network timeout"
+    },
+    {
+      "name": "Authentication Failure",
+      "camera": "fixture-q6155-e",
+      "mockBehavior": "401",
+      "expectedResult": "error",
+      "expectedError": "Authentication failed"
+    },
+    {
+      "name": "Malformed Response",
+      "camera": "fixture-f34",
+      "mockResponse": "malformed",
+      "expectedResult": "error",
+      "expectedError": "Failed to parse response"
+    },
+    {
+      "name": "Unknown Model Fallback",
+      "camera": "fixture-unknown",
+      "mockResponse": "unknown",
+      "expectedResult": "success",
+      "expectedModel": "Unknown"
+    }
+  ]
+}

@@ -1,0 +1,276 @@
+{
+  "scanDate": "2025-11-11",
+  "application": "Axis Camera Uptime",
+  "version": "1.0.0",
+  "securityScore": 62,
+  "overallStatus": "MODERATE_RISK",
+
+  "vulnerabilities": {
+    "total": 17,
+    "critical": 6,
+    "high": 4,
+    "medium": 7,
+    "low": 0
+  },
+
+  "criticalFindings": [
+    {
+      "id": "VULN-001",
+      "title": "Missing CSRF Protection",
+      "severity": "CRITICAL",
+      "cwe": "CWE-352",
+      "location": "All POST/PUT/DELETE endpoints",
+      "cvss": 8.8,
+      "status": "OPEN"
+    },
+    {
+      "id": "VULN-002",
+      "title": "No Rate Limiting",
+      "severity": "CRITICAL",
+      "cwe": "CWE-307",
+      "location": "/api/auth/* endpoints",
+      "cvss": 8.6,
+      "status": "OPEN"
+    },
+    {
+      "id": "VULN-003",
+      "title": "Hardcoded Default Credentials",
+      "severity": "CRITICAL",
+      "cwe": "CWE-798",
+      "location": "server/defaultUser.ts",
+      "cvss": 9.8,
+      "status": "OPEN",
+      "credentials": "admin@local / admin123"
+    },
+    {
+      "id": "VULN-004",
+      "title": "Auto-Login Authentication Bypass",
+      "severity": "CRITICAL",
+      "cwe": "CWE-287",
+      "location": "server/authRoutes.ts:63-94",
+      "cvss": 9.1,
+      "status": "OPEN"
+    },
+    {
+      "id": "VULN-005",
+      "title": "Weak Session Secret",
+      "severity": "CRITICAL",
+      "cwe": "CWE-312",
+      "location": ".env, server/index.ts:22",
+      "cvss": 8.1,
+      "status": "OPEN"
+    },
+    {
+      "id": "VULN-006",
+      "title": "Missing Security Headers",
+      "severity": "CRITICAL",
+      "cwe": "CWE-693",
+      "location": "server/index.ts",
+      "cvss": 7.5,
+      "status": "OPEN"
+    }
+  ],
+
+  "highPriorityFindings": [
+    {
+      "id": "VULN-007",
+      "title": "Weak Password Requirements",
+      "severity": "HIGH",
+      "cwe": "CWE-521",
+      "location": "server/authRoutes.ts:144",
+      "cvss": 7.4,
+      "status": "OPEN"
+    },
+    {
+      "id": "VULN-008",
+      "title": "Verbose Error Messages",
+      "severity": "HIGH",
+      "cwe": "CWE-209",
+      "location": "Multiple routes",
+      "cvss": 6.5,
+      "status": "OPEN"
+    },
+    {
+      "id": "VULN-009",
+      "title": "Sensitive Data in Logs",
+      "severity": "HIGH",
+      "cwe": "CWE-532",
+      "location": "server/authRoutes.ts:85-87, 131-133",
+      "cvss": 6.5,
+      "status": "OPEN"
+    },
+    {
+      "id": "VULN-010",
+      "title": "Missing Input Sanitization",
+      "severity": "HIGH",
+      "cwe": "CWE-20",
+      "location": "server/routes.ts:102",
+      "cvss": 7.2,
+      "status": "OPEN"
+    }
+  ],
+
+  "mediumPriorityFindings": [
+    {
+      "id": "VULN-011",
+      "title": "Dependency Vulnerabilities",
+      "severity": "MEDIUM",
+      "packages": ["drizzle-kit", "brace-expansion", "esbuild"],
+      "status": "OPEN"
+    },
+    {
+      "id": "VULN-012",
+      "title": "Insecure Cookie Configuration",
+      "severity": "MEDIUM",
+      "cwe": "CWE-614",
+      "location": "server/index.ts:25-30",
+      "status": "OPEN"
+    },
+    {
+      "id": "VULN-013",
+      "title": "SQL Injection Risk (Mitigated)",
+      "severity": "MEDIUM",
+      "status": "MITIGATED",
+      "note": "Using Drizzle ORM with parameterized queries"
+    },
+    {
+      "id": "VULN-014",
+      "title": "No Request Size Limits",
+      "severity": "MEDIUM",
+      "cwe": "CWE-400",
+      "location": "server/index.ts:40",
+      "status": "OPEN"
+    },
+    {
+      "id": "VULN-015",
+      "title": "File-based Session Storage",
+      "severity": "MEDIUM",
+      "cwe": "CWE-552",
+      "location": "server/index.ts:17-19",
+      "status": "OPEN"
+    },
+    {
+      "id": "VULN-016",
+      "title": "No HTTPS Enforcement",
+      "severity": "MEDIUM",
+      "cwe": "CWE-319",
+      "location": "Application-wide",
+      "status": "OPEN"
+    },
+    {
+      "id": "VULN-017",
+      "title": "Encryption/Hashing Confusion",
+      "severity": "MEDIUM",
+      "location": "server/encryption.ts",
+      "status": "OPEN"
+    }
+  ],
+
+  "strengths": [
+    "Strong bcrypt password hashing (12 rounds)",
+    "Proper session management with Passport.js",
+    "SQL injection protection via Drizzle ORM",
+    "Password removal from API responses",
+    "Input validation with Zod schemas",
+    "Authorization checks on protected resources",
+    "HttpOnly cookie flags"
+  ],
+
+  "owaspTop10Compliance": {
+    "A01_BrokenAccessControl": "PARTIAL",
+    "A02_CryptographicFailures": "PARTIAL",
+    "A03_Injection": "PROTECTED",
+    "A04_InsecureDesign": "VULNERABLE",
+    "A05_SecurityMisconfiguration": "VULNERABLE",
+    "A06_VulnerableComponents": "PARTIAL",
+    "A07_AuthSessionManagement": "PARTIAL",
+    "A08_DataIntegrityFailures": "PARTIAL",
+    "A09_LoggingMonitoring": "VULNERABLE",
+    "A10_SSRF": "PROTECTED"
+  },
+
+  "dependencies": {
+    "express": "4.21.2",
+    "express-session": "1.18.1",
+    "bcryptjs": "3.0.3",
+    "better-sqlite3": "12.4.1",
+    "passport": "0.7.0",
+    "drizzle-orm": "0.39.3"
+  },
+
+  "recommendations": {
+    "immediate": [
+      "Remove or restrict auto-login endpoint",
+      "Change default admin credentials",
+      "Generate strong SESSION_SECRET",
+      "Install helmet for security headers",
+      "Implement CSRF protection (csurf)",
+      "Add rate limiting (express-rate-limit)"
+    ],
+    "shortTerm": [
+      "Enhance password complexity requirements",
+      "Sanitize error messages",
+      "Remove sensitive data from logs",
+      "Add input validation for all endpoints",
+      "Update vulnerable dependencies",
+      "Configure strict cookie settings"
+    ],
+    "longTerm": [
+      "Migrate to Redis session storage",
+      "Implement MFA",
+      "Add security audit logging",
+      "Set up automated vulnerability scanning",
+      "Perform penetration testing",
+      "Add WAF (Web Application Firewall)"
+    ]
+  },
+
+  "remediationTimeline": {
+    "phase1": {
+      "name": "Critical Fixes",
+      "duration": "1 week",
+      "tasks": 6,
+      "scoreImprovement": 15
+    },
+    "phase2": {
+      "name": "High Priority",
+      "duration": "1 week",
+      "tasks": 5,
+      "scoreImprovement": 10
+    },
+    "phase3": {
+      "name": "Medium Priority",
+      "duration": "2 weeks",
+      "tasks": 6,
+      "scoreImprovement": 8
+    },
+    "phase4": {
+      "name": "Security Hardening",
+      "duration": "Ongoing",
+      "tasks": 8,
+      "scoreImprovement": 5
+    },
+    "targetScore": 85
+  },
+
+  "complianceStatus": {
+    "gdpr": "PARTIAL",
+    "hipaa": "NOT_ASSESSED",
+    "pciDss": "NOT_COMPLIANT",
+    "soc2": "NOT_ASSESSED",
+    "iso27001": "PARTIAL"
+  },
+
+  "scanMetadata": {
+    "scanDuration": "420 seconds",
+    "filesScanned": 15,
+    "linesOfCodeAnalyzed": 2847,
+    "toolsUsed": [
+      "npm audit",
+      "manual code review",
+      "static analysis",
+      "dependency scanning"
+    ],
+    "nextReviewDate": "2025-12-11"
+  }
+}
