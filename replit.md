@@ -34,10 +34,25 @@ Preferred communication style: Simple, everyday language.
 
 **Key Pages:**
 - Landing page (unauthenticated users)
-- Dashboard (camera overview with video health metrics, uptime charts, tri-state status badges)
+- Dashboard (camera overview with video health metrics, uptime charts, tri-state status badges, filtering, and exports)
 - Cameras page (camera management with manual add and CSV import)
 - Network Scan page (subnet scanning for camera discovery)
 - Camera detail views (individual camera analytics, reboot history, video health status)
+
+**Dashboard Filtering & Reporting:**
+- **Location-based filtering:** Dropdown populated from unique camera locations, filters all metrics and camera list
+- **Video health filtering:** Filter by video status (all/ok/issues/unknown) to identify problematic cameras
+- **Search filtering:** Real-time search across camera name, IP address, and location
+- **Combined filtering:** All filters work together; metrics recalculate dynamically
+- **Filter status indicator:** Shows active filters and filtered vs total camera counts
+- **CSV Export:** Download filtered camera data with proper quote escaping and CSV injection protection
+  - Columns: Camera Name, IP Address, Location, Status, Video Status, Uptime %, Last Seen
+  - ISO timestamp in filename: `camera-report-2025-11-11_03-15-30.csv`
+  - Sanitizes leading dangerous characters (=, +, -, @) to prevent formula injection
+- **Executive Summary Export:** Text-based report for security directors
+  - Includes: Generation timestamp, active filters, summary metrics, detailed camera sections
+  - Professional format suitable for security reviews and audit trails
+  - Filename format: `executive-summary-2025-11-11_03-15-30.txt`
 
 **Video Health UI:**
 - Tri-state status badges: Green (video_ok), Amber (video_failed), Neutral (unknown/offline)
