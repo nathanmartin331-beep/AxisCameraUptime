@@ -95,9 +95,12 @@ export default function AddCameraModal({
                   data-testid="input-ip-address"
                   value={formData.ipAddress}
                   onChange={(e) => setFormData({ ...formData, ipAddress: e.target.value })}
-                  placeholder="192.168.1.100"
+                  placeholder="192.168.1.100 or 203.0.113.50"
                   required
                 />
+                <p className="text-xs text-muted-foreground">
+                  Private or public IP address
+                </p>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
