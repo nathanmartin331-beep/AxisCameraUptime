@@ -9,7 +9,7 @@ An enterprise-grade monitoring application for Axis security camera networks. Th
 - Real-time status tracking (online/offline/warning states)
 - Reboot detection through bootId comparison
 - 365-day uptime percentage calculations
-- Network scanning for camera discovery
+- Network scanning for camera discovery (supports all network classes: Class A 10.x.x.x, Class B 172.16-31.x.x, Class C 192.168.x.x)
 - CSV import/export for bulk camera management
 
 ## User Preferences
@@ -63,7 +63,11 @@ Preferred communication style: Simple, everyday language.
 - `/api/auth/*` - Authentication (login/logout/user)
 - `/api/cameras` - CRUD operations for camera management (POST accepts plain password, encrypts server-side)
 - `/api/cameras/import` - CSV bulk import with deduplication
-- `/api/cameras/scan` - Network scanning with CIDR notation (e.g., "192.168.1.0/24")
+- `/api/cameras/scan` - Network scanning with CIDR notation
+  - Supports all private network classes (10.x.x.x/8, 172.16-31.x.x/12, 192.168.x.x/16)
+  - Accepts CIDR notation from /8 to /30 (e.g., "172.16.0.0/16", "10.5.20.0/24")
+  - Properly calculates network ranges across multiple octets
+  - Maximum 10,000 hosts per scan for performance
 - `/api/cameras/:id/events` - Uptime event history
 - `/api/cameras/:id/uptime` - Calculated uptime percentages
 - `/api/cameras/test` - Test camera credentials before saving
