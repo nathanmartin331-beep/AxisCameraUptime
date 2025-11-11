@@ -124,7 +124,7 @@ export default function NetworkScan() {
               data-testid="input-subnet"
             />
             <p className="text-xs text-muted-foreground">
-              Example: 192.168.1.0/24 will scan 192.168.1.1 through 192.168.1.254
+              Example: 192.168.1.0/24 scans local network, supports public IPs too
             </p>
           </div>
 
