@@ -33,6 +33,8 @@ Preferred communication style: Simple, everyday language.
 **Key Pages:**
 - Landing page (unauthenticated users)
 - Dashboard (camera overview, metrics, uptime charts)
+- Cameras page (camera management with manual add and CSV import)
+- Network Scan page (subnet scanning for camera discovery)
 - Camera detail views (individual camera analytics and reboot history)
 
 ### Backend Architecture
@@ -59,10 +61,18 @@ Preferred communication style: Simple, everyday language.
 
 **Key API Endpoints:**
 - `/api/auth/*` - Authentication (login/logout/user)
-- `/api/cameras` - CRUD operations for camera management
+- `/api/cameras` - CRUD operations for camera management (POST accepts plain password, encrypts server-side)
+- `/api/cameras/import` - CSV bulk import with deduplication
+- `/api/cameras/scan` - Network scanning with CIDR notation (e.g., "192.168.1.0/24")
 - `/api/cameras/:id/events` - Uptime event history
 - `/api/cameras/:id/uptime` - Calculated uptime percentages
 - `/api/cameras/test` - Test camera credentials before saving
+
+**Security Implementation:**
+- Plain passwords accepted from frontend, encrypted immediately server-side using bcryptjs
+- userId derived from authenticated session (requireAuth middleware), never from request body
+- Plaintext passwords never stored in database or returned to frontend
+- All camera operations scoped to authenticated user via session
 
 ### Database Design
 
