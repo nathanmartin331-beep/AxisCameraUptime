@@ -258,10 +258,12 @@ async function pollCameraJsonApi(
     }
 
     const data = json.data || {};
-    const systemReady = data.systemReady === "yes" || data.systemReady === true;
+    // Response keys may be all-lowercase (e.g. "systemready") or camelCase
+    const readyValue = data.systemReady ?? data.systemready;
+    const systemReady = readyValue === "yes" || readyValue === true;
 
     if (!systemReady) {
-      console.warn(`[VAPIX] Camera ${ipAddress} reports systemReady=${data.systemReady}`);
+      console.warn(`[VAPIX] Camera ${ipAddress} reports systemReady=${readyValue}`);
     }
 
     return {
@@ -382,6 +384,7 @@ async function checkAllCameras() {
             camera.ipAddress,
             camera.username,
             decryptedPassword,
+            getVideoEndpoint(camera),
             3000 // Shorter timeout for video check
           );
 

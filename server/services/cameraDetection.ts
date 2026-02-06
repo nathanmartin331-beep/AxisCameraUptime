@@ -165,8 +165,8 @@ export class CameraModelDetector {
         detectionMethod: 'auto',
       };
     } catch (error) {
-      // If camera uses modern JSON API, fall back to basicdeviceinfo.cgi
-      if (error instanceof DetectionError && error.details?.jsonResponse) {
+      // If camera uses modern JSON API or rejects Basic auth, fall back to basicdeviceinfo.cgi
+      if (error instanceof DetectionError && (error.details?.jsonResponse || error.code === 'AUTH_FAILED')) {
         return await this.detectModern(ipAddress, username, password);
       }
       if (error instanceof DetectionError) {
