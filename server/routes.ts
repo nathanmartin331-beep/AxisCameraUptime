@@ -202,6 +202,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return {
             cameraId: camera.id,
             uptime,
+            monitoredSince: camera.createdAt,
           };
         })
       );

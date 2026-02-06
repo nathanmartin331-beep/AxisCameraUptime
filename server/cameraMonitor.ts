@@ -356,8 +356,6 @@ async function checkAllCameras() {
           decryptedPassword
         );
 
-        const responseTime = Date.now() - startTime;
-
         // Lazy model detection (non-blocking)
         // Only detect if model is not already known
         if (!camera.model) {
@@ -423,20 +421,10 @@ async function checkAllCameras() {
           new Date()
         );
 
-        // Record uptime event
-        await storage.createUptimeEvent({
-          cameraId: camera.id,
-          timestamp: new Date(),
-          status: "online",
-          uptimeSeconds: result.uptime,
-          bootId: result.bootId,
-          responseTimeMs: responseTime,
-        });
-
-        // If camera is online, check video stream
+        // Check video stream
         let videoStatus = "unknown";
         try {
-          const videoCheck = await checkVideoStream(
+          await checkVideoStream(
             camera.ipAddress,
             camera.username,
             decryptedPassword,
@@ -446,24 +434,26 @@ async function checkAllCameras() {
 
           videoStatus = "video_ok";
           await storage.updateVideoStatus(camera.id, videoStatus);
-          
+
           console.log(
             `[Monitor] ✓ ${camera.name} (${camera.ipAddress}) - Online, Video OK ${rebooted ? "(REBOOTED)" : ""}`
           );
         } catch (videoError: any) {
           videoStatus = "video_failed";
           await storage.updateVideoStatus(camera.id, videoStatus);
-          
+
           console.log(
             `[Monitor] ⚠ ${camera.name} (${camera.ipAddress}) - Online but Video FAILED: ${videoError.message}`
           );
         }
 
-        // Create a second event for video status tracking
+        // Record single combined uptime event (system + video status)
         await storage.createUptimeEvent({
           cameraId: camera.id,
           timestamp: new Date(),
           status: "online",
+          uptimeSeconds: result.uptime,
+          bootId: result.bootId,
           videoStatus,
           responseTimeMs: Date.now() - startTime,
         });

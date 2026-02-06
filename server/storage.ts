@@ -532,8 +532,16 @@ export class DatabaseStorage implements IStorage {
     days: number
   ): Promise<number> {
     const endDate = new Date();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
+    const windowStart = new Date();
+    windowStart.setDate(windowStart.getDate() - days);
+
+    // Clamp start date to camera's creation date so we only measure
+    // uptime for the period we've actually been monitoring.
+    // Without this, a camera added 2 hours ago would show ~0.2% uptime
+    // over a 30-day window instead of ~100% over 2 hours.
+    const camera = await this.getCameraById(cameraId);
+    const monitoringStart = camera?.createdAt ? new Date(camera.createdAt) : windowStart;
+    const startDate = monitoringStart > windowStart ? monitoringStart : windowStart;
 
     const events = await this.getUptimeEventsInRange(
       cameraId,
@@ -545,7 +553,7 @@ export class DatabaseStorage implements IStorage {
 
     // Use validated pure function for calculation
     const { calculateUptimeFromEvents } = await import('./uptimeCalculator.js');
-    
+
     const eventList = events.map(e => ({
       timestamp: new Date(e.timestamp),
       status: e.status

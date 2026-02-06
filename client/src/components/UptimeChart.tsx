@@ -55,35 +55,50 @@ export default function UptimeChart({
   function generateUptimeData(events: any[], days: number, initialPriorEvent?: any): UptimeDataPoint[] {
     const data: UptimeDataPoint[] = [];
     const now = new Date();
-    const sortedEvents = [...events].sort((a, b) => 
+    const sortedEvents = [...events].sort((a, b) =>
       new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
-    
+
+    // Find the earliest monitoring date (first event or prior event)
+    // Only show chart data from when monitoring actually started
+    const earliestEventTime = sortedEvents.length > 0
+      ? new Date(sortedEvents[0].timestamp).getTime()
+      : now.getTime();
+    const earliestPriorTime = initialPriorEvent
+      ? new Date(initialPriorEvent.timestamp).getTime()
+      : Infinity;
+    const monitoringStartTime = Math.min(earliestEventTime, earliestPriorTime);
+
     for (let i = days - 1; i >= 0; i--) {
       const date = new Date(now);
       date.setDate(date.getDate() - i);
       date.setHours(0, 0, 0, 0);
-      
+
       const nextDate = new Date(date);
       nextDate.setDate(nextDate.getDate() + 1);
-      
+
+      // Skip days entirely before monitoring started
+      if (nextDate.getTime() <= monitoringStartTime && !initialPriorEvent) {
+        continue;
+      }
+
       const dayEvents = sortedEvents.filter(e => {
         const eventDate = new Date(e.timestamp);
         return eventDate >= date && eventDate < nextDate;
       });
 
-      const priorEvent = sortedEvents.filter(e => 
+      const priorEvent = sortedEvents.filter(e =>
         new Date(e.timestamp).getTime() < date.getTime()
       ).pop() || (i === days - 1 ? initialPriorEvent : undefined);
-      
+
       const uptime = calculateDayUptime(dayEvents, date, nextDate, priorEvent);
-      
+
       data.push({
         date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
         uptime: parseFloat(uptime.toFixed(1))
       });
     }
-    
+
     return data;
   }
 
@@ -127,7 +142,9 @@ export default function UptimeChart({
         totalUptime += Math.max(0, dayEnd - currentTime);
       }
     } else {
-      totalUptime = dayEnd - dayStart;
+      // No events and no prior event means no monitoring data for this day.
+      // Default to 0% instead of assuming 100% uptime.
+      totalUptime = 0;
     }
 
     const actualDuration = dayEnd - dayStart;

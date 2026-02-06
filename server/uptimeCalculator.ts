@@ -19,9 +19,10 @@ export function calculateUptimeFromEvents(
     return 0;
   }
 
-  // Default to 100% if no events (assume camera online)
+  // No events and no prior status means no monitoring data exists
+  // for this period. Return 0% instead of assuming 100%.
   if (events.length === 0 && !priorEventStatus) {
-    return 100;
+    return 0;
   }
 
   let totalUptime = 0;
