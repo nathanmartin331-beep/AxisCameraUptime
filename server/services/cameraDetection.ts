@@ -4,6 +4,7 @@
  */
 
 import type { CameraCapabilities } from "@shared/schema";
+import { authFetch } from "./digestAuth";
 
 /**
  * VAPIX API response parser
@@ -190,17 +191,12 @@ export class CameraModelDetector {
     group: string
   ): Promise<Record<string, string>> {
     const url = `http://${ipAddress}/axis-cgi/param.cgi?action=list&group=${group}`;
-    const authHeader = Buffer.from(`${username}:${password}`).toString('base64');
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `Basic ${authHeader}`,
-          'User-Agent': 'AxisCameraMonitor/2.0',
-        },
+      const response = await authFetch(url, username, password, {
         signal: controller.signal,
       });
 
@@ -267,18 +263,15 @@ export class CameraModelDetector {
     password: string
   ): Promise<CameraModelDetection> {
     const url = `http://${ipAddress}/axis-cgi/basicdeviceinfo.cgi`;
-    const authHeader = Buffer.from(`${username}:${password}`).toString('base64');
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await authFetch(url, username, password, {
         method: 'POST',
         headers: {
-          'Authorization': `Basic ${authHeader}`,
           'Content-Type': 'application/json',
-          'User-Agent': 'AxisCameraMonitor/2.0',
         },
         body: JSON.stringify({
           apiVersion: '1.0',

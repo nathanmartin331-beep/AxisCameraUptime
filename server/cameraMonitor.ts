@@ -6,6 +6,7 @@ import { decryptPassword } from "./encryption";
 import { detectCameraModel } from "./services/cameraDetection";
 import { detectionCache } from "./services/detectionCache";
 import { eq } from "drizzle-orm";
+import { authFetch } from "./services/digestAuth";
 
 interface SystemReadyResponse {
   systemReady: boolean;
@@ -55,14 +56,8 @@ export async function checkVideoStream(
     const url = `http://${ipAddress}${endpoint}`;
     const startTime = Date.now();
 
-    const authHeader = Buffer.from(`${username}:${password}`).toString('base64');
-
-    const response = await fetch(url, {
+    const response = await authFetch(url, username, password, {
       signal: controller.signal,
-      headers: {
-        "User-Agent": "AxisCameraMonitor/1.0",
-        "Authorization": `Basic ${authHeader}`,
-      },
     });
 
     clearTimeout(timeoutId);
