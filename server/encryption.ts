@@ -1,15 +1,51 @@
-import bcrypt from "bcryptjs";
+import crypto from "crypto";
 
-const SALT_ROUNDS = 10;
+// AES-256-GCM requires a 32-byte key. Derive one from the session secret.
+const SECRET = process.env.SESSION_SECRET || "your-secret-key-change-in-production";
+const ALGORITHM = "aes-256-gcm";
+const IV_LENGTH = 16;
+const AUTH_TAG_LENGTH = 16;
+
+function deriveKey(secret: string): Buffer {
+  return crypto.scryptSync(secret, "axis-camera-salt", 32);
+}
 
 export async function encryptPassword(password: string): Promise<string> {
-  return await bcrypt.hash(password, SALT_ROUNDS);
+  const key = deriveKey(SECRET);
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
+
+  let encrypted = cipher.update(password, "utf8", "hex");
+  encrypted += cipher.final("hex");
+
+  const authTag = cipher.getAuthTag();
+
+  // Format: iv:authTag:ciphertext (all hex)
+  return `${iv.toString("hex")}:${authTag.toString("hex")}:${encrypted}`;
 }
 
 export async function decryptPassword(encryptedPassword: string): Promise<string> {
-  // Note: bcrypt hashes are one-way, we don't actually decrypt them
-  // We'll store them encrypted and use them for HTTP Digest Auth
-  // For now, we'll use a simple reversible encryption for the demo
-  // In production, consider using a proper encryption library like crypto
-  return encryptedPassword;
+  // Handle legacy unencrypted or bcrypt-hashed passwords
+  // bcrypt hashes start with $2a$ or $2b$, and our format uses colons
+  if (!encryptedPassword.includes(":")) {
+    return encryptedPassword;
+  }
+
+  const parts = encryptedPassword.split(":");
+  if (parts.length !== 3) {
+    return encryptedPassword;
+  }
+
+  const [ivHex, authTagHex, ciphertext] = parts;
+
+  const key = deriveKey(SECRET);
+  const iv = Buffer.from(ivHex, "hex");
+  const authTag = Buffer.from(authTagHex, "hex");
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+  decipher.setAuthTag(authTag);
+
+  let decrypted = decipher.update(ciphertext, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+
+  return decrypted;
 }

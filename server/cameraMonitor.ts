@@ -214,11 +214,12 @@ async function pollCamera(
 /**
  * Poll camera using modern JSON-based VAPIX API (v1.4+)
  * Newer Axis firmware expects POST with JSON body on systemready.cgi
+ * Note: systemready.cgi is unauthenticated — no credentials needed
  */
 async function pollCameraJsonApi(
   ipAddress: string,
-  username: string,
-  password: string,
+  _username: string,
+  _password: string,
   timeout: number = 5000
 ): Promise<SystemReadyResponse> {
   const controller = new AbortController();
@@ -226,7 +227,6 @@ async function pollCameraJsonApi(
 
   try {
     const url = `http://${ipAddress}/axis-cgi/systemready.cgi`;
-    const authHeader = Buffer.from(`${username}:${password}`).toString('base64');
 
     const response = await fetch(url, {
       method: 'POST',
@@ -234,7 +234,6 @@ async function pollCameraJsonApi(
       headers: {
         "User-Agent": "AxisCameraMonitor/1.0",
         "Content-Type": "application/json",
-        "Authorization": `Basic ${authHeader}`,
       },
       body: JSON.stringify({
         apiVersion: "1.0",
