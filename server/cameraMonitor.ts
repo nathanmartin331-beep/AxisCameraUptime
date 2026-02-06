@@ -7,6 +7,7 @@ import { detectCameraModel } from "./services/cameraDetection";
 import { detectionCache } from "./services/detectionCache";
 import { eq } from "drizzle-orm";
 import { authFetch } from "./services/digestAuth";
+import { backfillFromUptimeSeconds, backfillFromSystemLog } from "./services/historyBackfill";
 
 interface SystemReadyResponse {
   systemReady: boolean;
@@ -457,6 +458,27 @@ async function checkAllCameras() {
           videoStatus,
           responseTimeMs: Date.now() - startTime,
         });
+
+        // Historical uptime backfill (runs once per camera lifecycle)
+        // Uses camera-reported uptimeSeconds to create synthetic boot event
+        if (!camera.historyBackfilled && result.uptime > 0) {
+          backfillFromUptimeSeconds(
+            camera.id,
+            new Date(),
+            result.uptime,
+            result.bootId
+          ).then((backfilled) => {
+            if (backfilled) {
+              // Also try to get system log for historical reboots (non-blocking)
+              backfillFromSystemLog(
+                camera.id,
+                camera.ipAddress,
+                camera.username,
+                decryptedPassword
+              ).catch(() => {}); // System log is best-effort
+            }
+          }).catch(() => {}); // Backfill is non-blocking
+        }
       } catch (error: any) {
         // Camera is offline or unreachable
         await storage.updateCameraStatus(camera.id, "offline");

@@ -140,6 +140,10 @@ export const cameras = sqliteTable("cameras", {
   // Detection Metadata
   detectedAt: integer("detected_at", { mode: "timestamp" }),
   detectionMethod: text("detection_method"), // "auto" | "manual" | "import"
+
+  // Historical uptime backfill tracking
+  lastBootAt: integer("last_boot_at", { mode: "timestamp" }),
+  historyBackfilled: integer("history_backfilled", { mode: "boolean" }).default(false),
 });
 
 export const insertCameraSchema = createInsertSchema(cameras).omit({
@@ -171,6 +175,7 @@ export const uptimeEvents = sqliteTable(
     bootId: text("boot_id"),
     responseTimeMs: integer("response_time_ms"),
     errorMessage: text("error_message"),
+    isSynthetic: integer("is_synthetic", { mode: "boolean" }).default(false),
   },
   (table) => ({
     cameraTimestampIdx: index("idx_uptime_events_camera_timestamp").on(
