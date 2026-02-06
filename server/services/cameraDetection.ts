@@ -165,6 +165,10 @@ export class CameraModelDetector {
         detectionMethod: 'auto',
       };
     } catch (error) {
+      // If camera uses modern JSON API, fall back to basicdeviceinfo.cgi
+      if (error instanceof DetectionError && error.details?.jsonResponse) {
+        return await this.detectModern(ipAddress, username, password);
+      }
       if (error instanceof DetectionError) {
         throw error;
       }
@@ -218,6 +222,16 @@ export class CameraModelDetector {
       }
 
       const text = await response.text();
+
+      // Detect JSON error response (modern VAPIX API v1.4+)
+      if (text.trim().startsWith('{')) {
+        throw new DetectionError(
+          'Camera uses modern JSON-based VAPIX API',
+          'PARSE_ERROR',
+          { jsonResponse: true }
+        );
+      }
+
       return VAPIXResponseParser.parse(text);
     } catch (error) {
       clearTimeout(timeoutId);
@@ -240,6 +254,102 @@ export class CameraModelDetector {
         );
       }
       throw new DetectionError('Unknown error during VAPIX query', 'NETWORK_ERROR');
+    }
+  }
+
+  /**
+   * Detect camera model using modern JSON-based VAPIX API (v1.4+)
+   * Falls back to basicdeviceinfo.cgi when legacy param.cgi is not supported
+   */
+  private async detectModern(
+    ipAddress: string,
+    username: string,
+    password: string
+  ): Promise<CameraModelDetection> {
+    const url = `http://${ipAddress}/axis-cgi/basicdeviceinfo.cgi`;
+    const authHeader = Buffer.from(`${username}:${password}`).toString('base64');
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Basic ${authHeader}`,
+          'Content-Type': 'application/json',
+          'User-Agent': 'AxisCameraMonitor/2.0',
+        },
+        body: JSON.stringify({
+          apiVersion: '1.0',
+          method: 'getAllProperties',
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.status === 401) {
+        throw new DetectionError('Authentication failed', 'AUTH_FAILED');
+      }
+
+      if (!response.ok) {
+        throw new DetectionError(
+          `HTTP ${response.status}: ${response.statusText}`,
+          'NETWORK_ERROR',
+          { status: response.status }
+        );
+      }
+
+      const json = await response.json();
+
+      if (json.error) {
+        throw new DetectionError(
+          `VAPIX API error: ${json.error.message}`,
+          'PARSE_ERROR',
+          json.error
+        );
+      }
+
+      const props = json.data?.propertyList || {};
+      const model = props.ProdNbr || props.ProdShortName?.replace(/^AXIS\s+/, '') || 'Unknown';
+      const series = this.detectSeries(model);
+
+      const capabilities: CameraCapabilities = {};
+
+      if (props.Architecture || props.Soc) {
+        capabilities.system = {
+          architecture: props.Architecture,
+          soc: props.Soc,
+        };
+      }
+
+      return {
+        brand: props.Brand || 'AXIS',
+        model,
+        fullName: props.ProdFullName || `AXIS ${model}`,
+        series,
+        firmwareVersion: props.Version,
+        buildDate: props.BuildDate,
+        hasPTZ: false,
+        hasAudio: false,
+        audioChannels: 0,
+        numberOfViews: 1,
+        capabilities,
+        detectedAt: new Date(),
+        detectionMethod: 'auto',
+      };
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error instanceof DetectionError) throw error;
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new DetectionError(`Detection timeout after ${this.timeout}ms`, 'TIMEOUT');
+      }
+      throw new DetectionError(
+        error instanceof Error ? error.message : 'Unknown error',
+        'NETWORK_ERROR',
+        error
+      );
     }
   }
 

@@ -137,7 +137,14 @@ async function pollCamera(
       console.log(`[VAPIX] Raw response from ${ipAddress}:\n${text.substring(0, 500)}`);
     }
 
-    // Validate response contains expected VAPIX format
+    // Detect JSON response (modern VAPIX API v1.4+)
+    const trimmed = text.trim();
+    if (trimmed.startsWith('{')) {
+      console.log(`[VAPIX] Detected JSON API on ${ipAddress}, retrying with JSON POST`);
+      return await pollCameraJsonApi(ipAddress, username, password, timeout);
+    }
+
+    // Validate response contains expected legacy VAPIX format
     if (!text.includes("systemready=") && !text.includes("=")) {
       throw new Error(`Invalid response format - not VAPIX systemready (got: ${text.substring(0, 100)})`);
     }
@@ -197,6 +204,74 @@ async function pollCamera(
   } catch (error: any) {
     clearTimeout(timeoutId);
     // Provide more context in error message
+    if (error.name === "AbortError") {
+      throw new Error(`Timeout after ${timeout}ms`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Poll camera using modern JSON-based VAPIX API (v1.4+)
+ * Newer Axis firmware expects POST with JSON body on systemready.cgi
+ */
+async function pollCameraJsonApi(
+  ipAddress: string,
+  username: string,
+  password: string,
+  timeout: number = 5000
+): Promise<SystemReadyResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const url = `http://${ipAddress}/axis-cgi/systemready.cgi`;
+    const authHeader = Buffer.from(`${username}:${password}`).toString('base64');
+
+    const response = await fetch(url, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "AxisCameraMonitor/1.0",
+        "Content-Type": "application/json",
+        "Authorization": `Basic ${authHeader}`,
+      },
+      body: JSON.stringify({
+        apiVersion: "1.0",
+        method: "systemReady",
+      }),
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const json = await response.json();
+
+    if (process.env.NODE_ENV === "development") {
+      console.log(`[VAPIX] JSON API response from ${ipAddress}:\n${JSON.stringify(json).substring(0, 500)}`);
+    }
+
+    if (json.error) {
+      throw new Error(`VAPIX API error ${json.error.code}: ${json.error.message}`);
+    }
+
+    const data = json.data || {};
+    const systemReady = data.systemReady === "yes" || data.systemReady === true;
+
+    if (!systemReady) {
+      console.warn(`[VAPIX] Camera ${ipAddress} reports systemReady=${data.systemReady}`);
+    }
+
+    return {
+      systemReady,
+      uptime: parseInt(data.uptime || '0') || 0,
+      bootId: data.bootId || data.bootid || "",
+    };
+  } catch (error: any) {
+    clearTimeout(timeoutId);
     if (error.name === "AbortError") {
       throw new Error(`Timeout after ${timeout}ms`);
     }
