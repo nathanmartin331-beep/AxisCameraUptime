@@ -4,6 +4,7 @@ import {
   text,
   integer,
   index,
+  uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -89,6 +90,9 @@ export interface CameraCapabilities {
     tampering: boolean;
     objectDetection: boolean;
     peopleCount: boolean;
+    occupancyEstimation?: boolean;
+    lineCrossing?: boolean;
+    acapInstalled?: string[];
   };
 
   // System
@@ -222,3 +226,84 @@ export const insertDashboardLayoutSchema = createInsertSchema(dashboardLayouts).
 
 export type InsertDashboardLayout = z.infer<typeof insertDashboardLayoutSchema>;
 export type DashboardLayout = typeof dashboardLayouts.$inferSelect;
+
+// Camera groups - allows grouping cameras by area/zone for aggregated analytics
+export const cameraGroups = sqliteTable("camera_groups", {
+  id: text("id").primaryKey().$defaultFn(generateId),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  color: text("color"), // hex color for UI badges, e.g., "#3B82F6"
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+});
+
+export const insertCameraGroupSchema = createInsertSchema(cameraGroups).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertCameraGroup = z.infer<typeof insertCameraGroupSchema>;
+export type CameraGroup = typeof cameraGroups.$inferSelect;
+
+// Camera group members - many-to-many (camera can be in multiple groups)
+export const cameraGroupMembers = sqliteTable(
+  "camera_group_members",
+  {
+    id: text("id").primaryKey().$defaultFn(generateId),
+    groupId: text("group_id")
+      .notNull()
+      .references(() => cameraGroups.id, { onDelete: "cascade" }),
+    cameraId: text("camera_id")
+      .notNull()
+      .references(() => cameras.id, { onDelete: "cascade" }),
+    addedAt: integer("added_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  },
+  (table) => ({
+    uniqueMembership: uniqueIndex("idx_group_camera_unique").on(table.groupId, table.cameraId),
+  })
+);
+
+export const insertCameraGroupMemberSchema = createInsertSchema(cameraGroupMembers).omit({
+  id: true,
+  addedAt: true,
+});
+
+export type InsertCameraGroupMember = z.infer<typeof insertCameraGroupMemberSchema>;
+export type CameraGroupMember = typeof cameraGroupMembers.$inferSelect;
+
+// Analytics events - raw per-poll data points from VAPIX analytics APIs
+export const analyticsEvents = sqliteTable(
+  "analytics_events",
+  {
+    id: text("id").primaryKey().$defaultFn(generateId),
+    cameraId: text("camera_id")
+      .notNull()
+      .references(() => cameras.id, { onDelete: "cascade" }),
+    timestamp: integer("timestamp", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+    eventType: text("event_type").notNull(), // "people_in", "people_out", "occupancy", "line_crossing"
+    value: integer("value").notNull(), // count value
+    metadata: text("metadata", { mode: "json" }).$type<Record<string, any>>(), // channel, scenario name, etc.
+  },
+  (table) => ({
+    cameraTimestampIdx: index("idx_analytics_camera_timestamp").on(
+      table.cameraId,
+      table.timestamp
+    ),
+    eventTypeIdx: index("idx_analytics_event_type").on(
+      table.cameraId,
+      table.eventType,
+      table.timestamp
+    ),
+  })
+);
+
+export const insertAnalyticsEventSchema = createInsertSchema(analyticsEvents).omit({
+  id: true,
+});
+
+export type InsertAnalyticsEvent = z.infer<typeof insertAnalyticsEventSchema>;
+export type AnalyticsEvent = typeof analyticsEvents.$inferSelect;

@@ -14,6 +14,8 @@ import NetworkScan from "@/pages/NetworkScan";
 import Reports from "@/pages/Reports";
 import Settings from "@/pages/Settings";
 import CustomizableDashboard from "@/pages/CustomizableDashboard";
+import Groups from "@/pages/Groups";
+import GroupDetail from "@/pages/GroupDetail";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
@@ -28,6 +30,8 @@ function Router() {
       <Route path="/reports" component={Reports} />
       <Route path="/settings" component={Settings} />
       <Route path="/custom-dashboard" component={CustomizableDashboard} />
+      <Route path="/groups" component={Groups} />
+      <Route path="/groups/:id" component={GroupDetail} />
       <Route component={NotFound} />
     </Switch>
   );

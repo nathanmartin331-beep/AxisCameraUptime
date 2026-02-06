@@ -932,6 +932,269 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ===== Camera Groups CRUD =====
+
+  // List user's groups with member count
+  app.get("/api/groups", requireAuth, async (req: any, res) => {
+    try {
+      const userId = getUserId(req);
+      const groups = await storage.getGroupsByUserId(userId);
+
+      // Attach member count to each group
+      const groupsWithCounts = await Promise.all(
+        groups.map(async (group) => {
+          const members = await storage.getGroupMembers(group.id);
+          return { ...group, memberCount: members.length };
+        })
+      );
+
+      res.json(groupsWithCounts);
+    } catch (error) {
+      console.error("Error fetching groups:", error);
+      res.status(500).json({ message: "Failed to fetch groups" });
+    }
+  });
+
+  // Create group
+  app.post("/api/groups", requireAuth, async (req: any, res) => {
+    try {
+      const userId = getUserId(req);
+      const createGroupSchema = z.object({
+        name: z.string().min(1, "Group name is required"),
+        description: z.string().optional(),
+        color: z.string().optional(),
+      });
+
+      const validatedData = createGroupSchema.parse(req.body);
+      const group = await storage.createGroup({ ...validatedData, userId });
+      res.status(201).json(group);
+    } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Error creating group:", error);
+      res.status(500).json({ message: "Failed to create group" });
+    }
+  });
+
+  // Get group detail
+  app.get("/api/groups/:id", requireAuth, async (req: any, res) => {
+    try {
+      const group = await storage.getGroupById(req.params.id);
+      if (!group) return res.status(404).json({ message: "Group not found" });
+      if (group.userId !== getUserId(req)) return res.status(403).json({ message: "Forbidden" });
+
+      const members = await storage.getGroupMembers(group.id);
+      const safeMembersList = members.map(({ encryptedPassword, ...c }) => c);
+
+      res.json({ ...group, members: safeMembersList });
+    } catch (error) {
+      console.error("Error fetching group:", error);
+      res.status(500).json({ message: "Failed to fetch group" });
+    }
+  });
+
+  // Update group
+  app.patch("/api/groups/:id", requireAuth, async (req: any, res) => {
+    try {
+      const group = await storage.getGroupById(req.params.id);
+      if (!group) return res.status(404).json({ message: "Group not found" });
+      if (group.userId !== getUserId(req)) return res.status(403).json({ message: "Forbidden" });
+
+      const updated = await storage.updateGroup(req.params.id, req.body);
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating group:", error);
+      res.status(500).json({ message: "Failed to update group" });
+    }
+  });
+
+  // Delete group
+  app.delete("/api/groups/:id", requireAuth, async (req: any, res) => {
+    try {
+      const group = await storage.getGroupById(req.params.id);
+      if (!group) return res.status(404).json({ message: "Group not found" });
+      if (group.userId !== getUserId(req)) return res.status(403).json({ message: "Forbidden" });
+
+      await storage.deleteGroup(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting group:", error);
+      res.status(500).json({ message: "Failed to delete group" });
+    }
+  });
+
+  // Add cameras to group
+  app.post("/api/groups/:id/members", requireAuth, async (req: any, res) => {
+    try {
+      const group = await storage.getGroupById(req.params.id);
+      if (!group) return res.status(404).json({ message: "Group not found" });
+      if (group.userId !== getUserId(req)) return res.status(403).json({ message: "Forbidden" });
+
+      const memberSchema = z.object({
+        cameraIds: z.array(z.string()).min(1, "At least one camera ID required"),
+      });
+      const { cameraIds } = memberSchema.parse(req.body);
+
+      // Verify all cameras belong to user
+      const userId = getUserId(req);
+      for (const cameraId of cameraIds) {
+        const camera = await storage.getCameraById(cameraId);
+        if (!camera || camera.userId !== userId) {
+          return res.status(400).json({ message: `Camera ${cameraId} not found or not owned by you` });
+        }
+      }
+
+      for (const cameraId of cameraIds) {
+        await storage.addCameraToGroup(req.params.id, cameraId);
+      }
+
+      const members = await storage.getGroupMembers(req.params.id);
+      const safeMembers = members.map(({ encryptedPassword, ...c }) => c);
+      res.json({ members: safeMembers });
+    } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Error adding members:", error);
+      res.status(500).json({ message: "Failed to add members" });
+    }
+  });
+
+  // Remove camera from group
+  app.delete("/api/groups/:id/members/:cameraId", requireAuth, async (req: any, res) => {
+    try {
+      const group = await storage.getGroupById(req.params.id);
+      if (!group) return res.status(404).json({ message: "Group not found" });
+      if (group.userId !== getUserId(req)) return res.status(403).json({ message: "Forbidden" });
+
+      await storage.removeCameraFromGroup(req.params.id, req.params.cameraId);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error removing member:", error);
+      res.status(500).json({ message: "Failed to remove member" });
+    }
+  });
+
+  // ===== Analytics Routes =====
+
+  // Per-camera analytics
+  app.get("/api/cameras/:id/analytics", requireAuth, async (req: any, res) => {
+    try {
+      const camera = await storage.getCameraById(req.params.id);
+      if (!camera) return res.status(404).json({ message: "Camera not found" });
+      if (camera.userId !== getUserId(req)) return res.status(403).json({ message: "Forbidden" });
+
+      const eventType = (req.query.eventType as string) || "occupancy";
+      const days = parseInt(req.query.days as string) || 1;
+
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - days);
+
+      const events = await storage.getAnalyticsEvents(req.params.id, eventType, startDate, endDate);
+      const latest = await storage.getLatestAnalyticsEvent(req.params.id, eventType);
+
+      res.json({
+        cameraId: req.params.id,
+        eventType,
+        latest: latest || null,
+        events,
+      });
+    } catch (error) {
+      console.error("Error fetching camera analytics:", error);
+      res.status(500).json({ message: "Failed to fetch camera analytics" });
+    }
+  });
+
+  // Group real-time occupancy
+  app.get("/api/groups/:id/occupancy", requireAuth, async (req: any, res) => {
+    try {
+      const group = await storage.getGroupById(req.params.id);
+      if (!group) return res.status(404).json({ message: "Group not found" });
+      if (group.userId !== getUserId(req)) return res.status(403).json({ message: "Forbidden" });
+
+      const occupancy = await storage.getGroupCurrentOccupancy(req.params.id);
+      res.json(occupancy);
+    } catch (error) {
+      console.error("Error fetching group occupancy:", error);
+      res.status(500).json({ message: "Failed to fetch group occupancy" });
+    }
+  });
+
+  // Group analytics summary
+  app.get("/api/groups/:id/analytics", requireAuth, async (req: any, res) => {
+    try {
+      const group = await storage.getGroupById(req.params.id);
+      if (!group) return res.status(404).json({ message: "Group not found" });
+      if (group.userId !== getUserId(req)) return res.status(403).json({ message: "Forbidden" });
+
+      const days = parseInt(req.query.days as string) || 1;
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - days);
+
+      const summary = await storage.getGroupAnalyticsSummary(req.params.id, startDate, endDate);
+      res.json(summary);
+    } catch (error) {
+      console.error("Error fetching group analytics:", error);
+      res.status(500).json({ message: "Failed to fetch group analytics" });
+    }
+  });
+
+  // Group analytics trend data (time-series for charts)
+  app.get("/api/groups/:id/analytics/trend", requireAuth, async (req: any, res) => {
+    try {
+      const group = await storage.getGroupById(req.params.id);
+      if (!group) return res.status(404).json({ message: "Group not found" });
+      if (group.userId !== getUserId(req)) return res.status(403).json({ message: "Forbidden" });
+
+      const eventType = (req.query.eventType as string) || "occupancy";
+      const days = parseInt(req.query.days as string) || 1;
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - days);
+
+      // Get members and aggregate their events
+      const members = await storage.getGroupMembers(req.params.id);
+      const allEvents: Array<{ timestamp: Date; value: number; cameraId: string }> = [];
+
+      for (const member of members) {
+        const events = await storage.getAnalyticsEvents(member.id, eventType, startDate, endDate);
+        for (const e of events) {
+          allEvents.push({ timestamp: new Date(e.timestamp), value: e.value, cameraId: e.cameraId });
+        }
+      }
+
+      // Sort by timestamp
+      allEvents.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+      // Bucket into hourly intervals
+      const buckets: Record<string, number> = {};
+      for (const event of allEvents) {
+        const hour = new Date(event.timestamp);
+        hour.setMinutes(0, 0, 0);
+        const key = hour.toISOString();
+        if (eventType === "occupancy") {
+          // For occupancy, take the latest value per bucket (not sum)
+          buckets[key] = (buckets[key] || 0) + event.value;
+        } else {
+          // For people_in/out, sum
+          buckets[key] = (buckets[key] || 0) + event.value;
+        }
+      }
+
+      const trend = Object.entries(buckets)
+        .map(([timestamp, value]) => ({ timestamp, value }))
+        .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
+      res.json({ eventType, trend });
+    } catch (error) {
+      console.error("Error fetching analytics trend:", error);
+      res.status(500).json({ message: "Failed to fetch analytics trend" });
+    }
+  });
+
   const httpServer = createServer(app);
 
   return httpServer;

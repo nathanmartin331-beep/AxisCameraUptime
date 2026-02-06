@@ -8,7 +8,7 @@ export interface WidgetDefinition {
   name: string;
   description: string;
   icon: string;
-  category: 'metrics' | 'charts' | 'lists' | 'status';
+  category: 'metrics' | 'charts' | 'lists' | 'status' | 'analytics';
   defaultSize: {
     w: number; // grid units wide
     h: number; // grid units tall
@@ -147,6 +147,38 @@ export const WIDGET_CATALOG: WidgetDefinition[] = [
     category: 'charts',
     defaultSize: { w: 6, h: 3 },
     minSize: { w: 4, h: 3 },
+  },
+
+  // Analytics Widgets
+  {
+    id: 'group-occupancy',
+    type: 'group-occupancy',
+    name: 'Group Occupancy',
+    description: 'Real-time total occupancy for a camera group',
+    icon: 'Users',
+    category: 'analytics',
+    defaultSize: { w: 4, h: 2 },
+    minSize: { w: 3, h: 2 },
+  },
+  {
+    id: 'people-flow',
+    type: 'people-flow',
+    name: 'People Flow',
+    description: 'People in/out count for all groups',
+    icon: 'ArrowLeftRight',
+    category: 'analytics',
+    defaultSize: { w: 6, h: 3 },
+    minSize: { w: 4, h: 3 },
+  },
+  {
+    id: 'group-overview',
+    type: 'group-overview',
+    name: 'Groups Overview',
+    description: 'Summary of all camera groups with occupancy',
+    icon: 'FolderOpen',
+    category: 'analytics',
+    defaultSize: { w: 6, h: 3 },
+    minSize: { w: 4, h: 2 },
   },
 ];
 

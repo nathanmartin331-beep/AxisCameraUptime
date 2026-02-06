@@ -3,12 +3,20 @@ import {
   cameras,
   uptimeEvents,
   dashboardLayouts,
+  cameraGroups,
+  cameraGroupMembers,
+  analyticsEvents,
   type User,
   type InsertUser,
   type Camera,
   type InsertCamera,
   type UptimeEvent,
   type InsertUptimeEvent,
+  type CameraGroup,
+  type InsertCameraGroup,
+  type CameraGroupMember,
+  type AnalyticsEvent,
+  type InsertAnalyticsEvent,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, gte, lte, sql, isNull } from "drizzle-orm";
@@ -172,6 +180,30 @@ export interface IStorage {
     cameraId: string,
     days: number
   ): Promise<number>;
+
+  // Camera group operations
+  createGroup(group: InsertCameraGroup): Promise<CameraGroup>;
+  getGroupsByUserId(userId: string): Promise<CameraGroup[]>;
+  getGroupById(id: string): Promise<CameraGroup | undefined>;
+  updateGroup(id: string, data: Partial<InsertCameraGroup>): Promise<CameraGroup | undefined>;
+  deleteGroup(id: string): Promise<void>;
+  addCameraToGroup(groupId: string, cameraId: string): Promise<void>;
+  removeCameraFromGroup(groupId: string, cameraId: string): Promise<void>;
+  getGroupMembers(groupId: string): Promise<Camera[]>;
+  getCameraGroups(cameraId: string): Promise<CameraGroup[]>;
+
+  // Analytics event operations
+  createAnalyticsEvent(event: InsertAnalyticsEvent): Promise<AnalyticsEvent>;
+  createAnalyticsEventBatch(events: InsertAnalyticsEvent[]): Promise<void>;
+  getAnalyticsEvents(cameraId: string, eventType: string, startDate: Date, endDate: Date): Promise<AnalyticsEvent[]>;
+  getLatestAnalyticsEvent(cameraId: string, eventType: string): Promise<AnalyticsEvent | undefined>;
+  getGroupCurrentOccupancy(groupId: string): Promise<{ total: number; cameras: Array<{ id: string; name: string; occupancy: number }> }>;
+  getGroupAnalyticsSummary(groupId: string, startDate: Date, endDate: Date): Promise<{
+    totalIn: number;
+    totalOut: number;
+    currentOccupancy: number;
+    perCamera: Array<{ id: string; name: string; in: number; out: number; occupancy: number }>;
+  }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -625,6 +657,187 @@ export class DatabaseStorage implements IStorage {
     }
 
     return layout;
+  }
+
+  // Camera group operations
+  async createGroup(group: InsertCameraGroup): Promise<CameraGroup> {
+    const [newGroup] = await db.insert(cameraGroups).values(group).returning();
+    return newGroup;
+  }
+
+  async getGroupsByUserId(userId: string): Promise<CameraGroup[]> {
+    return await db
+      .select()
+      .from(cameraGroups)
+      .where(eq(cameraGroups.userId, userId))
+      .orderBy(cameraGroups.name);
+  }
+
+  async getGroupById(id: string): Promise<CameraGroup | undefined> {
+    const [group] = await db.select().from(cameraGroups).where(eq(cameraGroups.id, id));
+    return group;
+  }
+
+  async updateGroup(id: string, data: Partial<InsertCameraGroup>): Promise<CameraGroup | undefined> {
+    const [updated] = await db
+      .update(cameraGroups)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(cameraGroups.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteGroup(id: string): Promise<void> {
+    await db.delete(cameraGroups).where(eq(cameraGroups.id, id));
+  }
+
+  async addCameraToGroup(groupId: string, cameraId: string): Promise<void> {
+    await db.insert(cameraGroupMembers).values({ groupId, cameraId }).onConflictDoNothing();
+  }
+
+  async removeCameraFromGroup(groupId: string, cameraId: string): Promise<void> {
+    await db
+      .delete(cameraGroupMembers)
+      .where(
+        and(
+          eq(cameraGroupMembers.groupId, groupId),
+          eq(cameraGroupMembers.cameraId, cameraId)
+        )
+      );
+  }
+
+  async getGroupMembers(groupId: string): Promise<Camera[]> {
+    const members = await db
+      .select({ camera: cameras })
+      .from(cameraGroupMembers)
+      .innerJoin(cameras, eq(cameraGroupMembers.cameraId, cameras.id))
+      .where(eq(cameraGroupMembers.groupId, groupId))
+      .orderBy(cameras.name);
+
+    return members.map((m) => m.camera);
+  }
+
+  async getCameraGroups(cameraId: string): Promise<CameraGroup[]> {
+    const groups = await db
+      .select({ group: cameraGroups })
+      .from(cameraGroupMembers)
+      .innerJoin(cameraGroups, eq(cameraGroupMembers.groupId, cameraGroups.id))
+      .where(eq(cameraGroupMembers.cameraId, cameraId))
+      .orderBy(cameraGroups.name);
+
+    return groups.map((g) => g.group);
+  }
+
+  // Analytics event operations
+  async createAnalyticsEvent(event: InsertAnalyticsEvent): Promise<AnalyticsEvent> {
+    const [newEvent] = await db.insert(analyticsEvents).values(event).returning();
+    return newEvent;
+  }
+
+  async createAnalyticsEventBatch(events: InsertAnalyticsEvent[]): Promise<void> {
+    if (events.length === 0) return;
+    await db.insert(analyticsEvents).values(events);
+  }
+
+  async getAnalyticsEvents(
+    cameraId: string,
+    eventType: string,
+    startDate: Date,
+    endDate: Date
+  ): Promise<AnalyticsEvent[]> {
+    return await db
+      .select()
+      .from(analyticsEvents)
+      .where(
+        and(
+          eq(analyticsEvents.cameraId, cameraId),
+          eq(analyticsEvents.eventType, eventType),
+          gte(analyticsEvents.timestamp, startDate),
+          lte(analyticsEvents.timestamp, endDate)
+        )
+      )
+      .orderBy(analyticsEvents.timestamp);
+  }
+
+  async getLatestAnalyticsEvent(
+    cameraId: string,
+    eventType: string
+  ): Promise<AnalyticsEvent | undefined> {
+    const [event] = await db
+      .select()
+      .from(analyticsEvents)
+      .where(
+        and(
+          eq(analyticsEvents.cameraId, cameraId),
+          eq(analyticsEvents.eventType, eventType)
+        )
+      )
+      .orderBy(desc(analyticsEvents.timestamp))
+      .limit(1);
+    return event;
+  }
+
+  async getGroupCurrentOccupancy(groupId: string): Promise<{
+    total: number;
+    cameras: Array<{ id: string; name: string; occupancy: number }>;
+  }> {
+    const members = await this.getGroupMembers(groupId);
+    const cameraOccupancies = await Promise.all(
+      members.map(async (camera) => {
+        const latest = await this.getLatestAnalyticsEvent(camera.id, "occupancy");
+        return {
+          id: camera.id,
+          name: camera.name,
+          occupancy: latest?.value ?? 0,
+        };
+      })
+    );
+
+    return {
+      total: cameraOccupancies.reduce((sum, c) => sum + c.occupancy, 0),
+      cameras: cameraOccupancies,
+    };
+  }
+
+  async getGroupAnalyticsSummary(
+    groupId: string,
+    startDate: Date,
+    endDate: Date
+  ): Promise<{
+    totalIn: number;
+    totalOut: number;
+    currentOccupancy: number;
+    perCamera: Array<{ id: string; name: string; in: number; out: number; occupancy: number }>;
+  }> {
+    const members = await this.getGroupMembers(groupId);
+    const occupancyData = await this.getGroupCurrentOccupancy(groupId);
+
+    const perCamera = await Promise.all(
+      members.map(async (camera) => {
+        const inEvents = await this.getAnalyticsEvents(camera.id, "people_in", startDate, endDate);
+        const outEvents = await this.getAnalyticsEvents(camera.id, "people_out", startDate, endDate);
+
+        // Sum all values in the range
+        const totalIn = inEvents.reduce((sum, e) => sum + e.value, 0);
+        const totalOut = outEvents.reduce((sum, e) => sum + e.value, 0);
+        const cameraOcc = occupancyData.cameras.find((c) => c.id === camera.id);
+
+        return {
+          id: camera.id,
+          name: camera.name,
+          in: totalIn,
+          out: totalOut,
+          occupancy: cameraOcc?.occupancy ?? 0,
+        };
+      })
+    );
+
+    return {
+      totalIn: perCamera.reduce((sum, c) => sum + c.in, 0),
+      totalOut: perCamera.reduce((sum, c) => sum + c.out, 0),
+      currentOccupancy: occupancyData.total,
+      perCamera,
+    };
   }
 }
 

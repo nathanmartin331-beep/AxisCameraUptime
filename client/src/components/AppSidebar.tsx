@@ -10,7 +10,7 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
-import { Home, Camera, Wifi, FileText, Settings, LogOut, LayoutDashboard } from "lucide-react";
+import { Home, Camera, Wifi, FileText, Settings, LogOut, LayoutDashboard, FolderOpen } from "lucide-react";
 import { Link, useLocation } from "wouter";
 
 const menuItems = [
@@ -28,6 +28,11 @@ const menuItems = [
     title: "Cameras",
     url: "/cameras",
     icon: Camera,
+  },
+  {
+    title: "Groups",
+    url: "/groups",
+    icon: FolderOpen,
   },
   {
     title: "Network Scan",

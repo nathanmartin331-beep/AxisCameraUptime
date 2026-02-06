@@ -6,6 +6,7 @@ import authRoutes from "./authRoutes";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { startCameraMonitoring } from "./cameraMonitor";
+import { startAnalyticsPolling } from "./services/analyticsPoller";
 import { ensureDefaultUser } from "./defaultUser";
 
 const app = express();
@@ -117,5 +118,8 @@ app.use((req, res, next) => {
     
     // Start camera monitoring service
     startCameraMonitoring();
+
+    // Start analytics polling service (people counting, occupancy)
+    startAnalyticsPolling();
   });
 })();

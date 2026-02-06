@@ -2,6 +2,9 @@ import { MTTRWidget } from "./MTTRWidget";
 import { MTBFWidget } from "./MTBFWidget";
 import { NetworkUptimeWidget } from "./NetworkUptimeWidget";
 import { TotalIncidentsWidget } from "./TotalIncidentsWidget";
+import { GroupOccupancyWidget } from "./GroupOccupancyWidget";
+import { PeopleFlowWidget } from "./PeopleFlowWidget";
+import { GroupOverviewWidget } from "./GroupOverviewWidget";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertCircle } from "lucide-react";
 
@@ -16,16 +19,26 @@ export function WidgetRenderer({ type, config }: WidgetRendererProps) {
   switch (type) {
     case 'network-uptime':
       return <NetworkUptimeWidget timeWindow={timeWindow} />;
-    
+
     case 'mttr-card':
       return <MTTRWidget timeWindow={timeWindow} />;
-    
+
     case 'mtbf-card':
       return <MTBFWidget timeWindow={timeWindow} />;
-    
+
     case 'total-incidents':
       return <TotalIncidentsWidget timeWindow={timeWindow} />;
-    
+
+    // Analytics widgets
+    case 'group-occupancy':
+      return <GroupOccupancyWidget />;
+
+    case 'people-flow':
+      return <PeopleFlowWidget />;
+
+    case 'group-overview':
+      return <GroupOverviewWidget />;
+
     case 'sla-compliance':
     case 'video-health':
     case 'incident-leaderboard':
@@ -46,7 +59,7 @@ export function WidgetRenderer({ type, config }: WidgetRendererProps) {
           </CardContent>
         </Card>
       );
-    
+
     default:
       return (
         <Card>
