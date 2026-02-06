@@ -158,6 +158,7 @@ export interface IStorage {
     cameraId: string,
     limit?: number
   ): Promise<UptimeEvent[]>;
+  getEarliestEvent(cameraId: string): Promise<UptimeEvent | undefined>;
   getLatestEventBefore(
     cameraId: string,
     beforeDate: Date
@@ -491,6 +492,16 @@ export class DatabaseStorage implements IStorage {
       .limit(limit);
   }
 
+  async getEarliestEvent(cameraId: string): Promise<UptimeEvent | undefined> {
+    const [event] = await db
+      .select()
+      .from(uptimeEvents)
+      .where(eq(uptimeEvents.cameraId, cameraId))
+      .orderBy(uptimeEvents.timestamp)
+      .limit(1);
+    return event;
+  }
+
   async getLatestEventBefore(
     cameraId: string,
     beforeDate: Date
@@ -535,12 +546,23 @@ export class DatabaseStorage implements IStorage {
     const windowStart = new Date();
     windowStart.setDate(windowStart.getDate() - days);
 
-    // Clamp start date to camera's creation date so we only measure
-    // uptime for the period we've actually been monitoring.
-    // Without this, a camera added 2 hours ago would show ~0.2% uptime
-    // over a 30-day window instead of ~100% over 2 hours.
+    // Determine the effective monitoring start date.
+    // If historical backfill has been performed, use the earliest event
+    // (which may be a synthetic boot event from before the camera was added).
+    // Otherwise, clamp to the camera's createdAt date.
     const camera = await this.getCameraById(cameraId);
-    const monitoringStart = camera?.createdAt ? new Date(camera.createdAt) : windowStart;
+    let monitoringStart = camera?.createdAt ? new Date(camera.createdAt) : windowStart;
+
+    if (camera?.historyBackfilled) {
+      const earliest = await this.getEarliestEvent(cameraId);
+      if (earliest) {
+        const earliestTime = new Date(earliest.timestamp);
+        if (earliestTime < monitoringStart) {
+          monitoringStart = earliestTime;
+        }
+      }
+    }
+
     const startDate = monitoringStart > windowStart ? monitoringStart : windowStart;
 
     const events = await this.getUptimeEventsInRange(
