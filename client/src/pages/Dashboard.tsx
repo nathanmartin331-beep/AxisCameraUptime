@@ -98,15 +98,18 @@ export default function Dashboard() {
 
   const { data: summary, isLoading: summaryLoading } = useQuery<DashboardSummary>({
     queryKey: ["/api/dashboard/summary"],
+    refetchInterval: 30000, // Refresh every 30s to reflect monitor updates
   });
 
   const { data: cameras, isLoading: camerasLoading, error: camerasError } = useQuery<ApiCamera[]>({
     queryKey: ["/api/cameras"],
+    refetchInterval: 30000,
   });
 
   const { data: cameraUptimes } = useQuery<CameraUptime[]>({
     queryKey: ["/api/cameras/uptime/batch"],
     enabled: !!cameras && cameras.length > 0,
+    refetchInterval: 30000,
   });
 
   const deleteMutation = useMutation({

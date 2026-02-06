@@ -38,6 +38,7 @@ export default function Cameras() {
 
   const { data: cameras = [], isLoading } = useQuery<Camera[]>({
     queryKey: ["/api/cameras"],
+    refetchInterval: 30000, // Refresh every 30s to reflect monitor updates
   });
 
   const deleteMutation = useMutation({
