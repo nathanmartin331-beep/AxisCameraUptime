@@ -168,7 +168,12 @@ export class CameraModelDetector {
     } catch (error) {
       // If camera uses modern JSON API or rejects Basic auth, fall back to basicdeviceinfo.cgi
       if (error instanceof DetectionError && (error.details?.jsonResponse || error.code === 'AUTH_FAILED')) {
-        return await this.detectModern(ipAddress, username, password);
+        try {
+          return await this.detectModern(ipAddress, username, password);
+        } catch (modernError) {
+          // If modern API also fails (e.g. 404 on older firmware), throw original error
+          throw error;
+        }
       }
       if (error instanceof DetectionError) {
         throw error;

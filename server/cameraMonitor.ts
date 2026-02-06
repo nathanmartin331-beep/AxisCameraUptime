@@ -121,6 +121,12 @@ async function pollCamera(
     const responseTime = Date.now() - startTime;
 
     // Check HTTP status
+    if (response.status === 404) {
+      // Older firmware without systemready.cgi — fall back to param.cgi health check
+      console.log(`[VAPIX] No systemready.cgi on ${ipAddress}, falling back to param.cgi`);
+      return await pollCameraLegacyFallback(ipAddress, username, password, timeout);
+    }
+
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
@@ -265,6 +271,61 @@ async function pollCameraJsonApi(
       systemReady,
       uptime: parseInt(data.uptime || '0') || 0,
       bootId: data.bootId || data.bootid || "",
+    };
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === "AbortError") {
+      throw new Error(`Timeout after ${timeout}ms`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Fallback health check for older cameras without systemready.cgi
+ * Uses param.cgi to verify the camera is responsive (requires auth)
+ */
+async function pollCameraLegacyFallback(
+  ipAddress: string,
+  username: string,
+  password: string,
+  timeout: number = 5000
+): Promise<SystemReadyResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    // Try param.cgi which most Axis cameras support (even very old firmware)
+    const url = `http://${ipAddress}/axis-cgi/param.cgi?action=list&group=root.Properties.System`;
+
+    const response = await authFetch(url, username, password, {
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const text = await response.text();
+
+    if (process.env.NODE_ENV === "development") {
+      console.log(`[VAPIX] Fallback response from ${ipAddress}:\n${text.substring(0, 300)}`);
+    }
+
+    // Parse key=value response for uptime if available
+    let uptime = 0;
+    const uptimeMatch = text.match(/SystemUpTime=(\d+)/i);
+    if (uptimeMatch) {
+      uptime = parseInt(uptimeMatch[1]);
+    }
+
+    // Camera responded to param.cgi — it's alive and ready
+    return {
+      systemReady: true,
+      uptime,
+      bootId: "", // Not available via param.cgi
     };
   } catch (error: any) {
     clearTimeout(timeoutId);
