@@ -47,6 +47,16 @@ interface ApiCamera {
   username: string;
   createdAt: string;
   updatedAt: string;
+  model?: string | null;
+  series?: string | null;
+  fullName?: string | null;
+  firmwareVersion?: string | null;
+  hasPTZ?: boolean;
+  hasAudio?: boolean;
+  numberOfViews?: number;
+  capabilities?: any;
+  detectedAt?: string | null;
+  detectionMethod?: string | null;
 }
 
 interface CameraUptime {
@@ -82,12 +92,24 @@ function transformCamera(apiCamera: ApiCamera, uptimeMap: Map<string, number>): 
     status: apiCamera.currentStatus as CameraType["status"],
     videoStatus: apiCamera.videoStatus,
     uptime: `${uptime.toFixed(1)}%`,
-    lastSeen: formatLastSeen(apiCamera.lastSeenAt)
+    lastSeen: formatLastSeen(apiCamera.lastSeenAt),
+    model: apiCamera.model || undefined,
+    series: apiCamera.series as CameraType["series"],
+    fullName: apiCamera.fullName || undefined,
+    firmwareVersion: apiCamera.firmwareVersion || undefined,
+    hasPTZ: apiCamera.hasPTZ,
+    hasAudio: apiCamera.hasAudio,
+    numberOfViews: apiCamera.numberOfViews,
+    capabilities: apiCamera.capabilities,
+    modelDetectedAt: apiCamera.detectedAt || undefined
   };
 }
 
 export default function Dashboard() {
   const [addCameraOpen, setAddCameraOpen] = useState(false);
+  const [editCameraOpen, setEditCameraOpen] = useState(false);
+  const [editCameraData, setEditCameraData] = useState<CameraFormData | undefined>(undefined);
+  const [editCameraId, setEditCameraId] = useState<string | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -98,18 +120,18 @@ export default function Dashboard() {
 
   const { data: summary, isLoading: summaryLoading } = useQuery<DashboardSummary>({
     queryKey: ["/api/dashboard/summary"],
-    refetchInterval: 30000, // Refresh every 30s to reflect monitor updates
+    refetchInterval: 10000, // Refresh every 10s to reflect monitor updates
   });
 
   const { data: cameras, isLoading: camerasLoading, error: camerasError } = useQuery<ApiCamera[]>({
     queryKey: ["/api/cameras"],
-    refetchInterval: 30000,
+    refetchInterval: 10000,
   });
 
   const { data: cameraUptimes } = useQuery<CameraUptime[]>({
     queryKey: ["/api/cameras/uptime/batch"],
     enabled: !!cameras && cameras.length > 0,
-    refetchInterval: 30000,
+    refetchInterval: 10000,
   });
 
   const deleteMutation = useMutation({
@@ -253,6 +275,73 @@ export default function Dashboard() {
 
   const handleAddCamera = (data: CameraFormData) => {
     addMutation.mutate(data);
+  };
+
+  const editMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: CameraFormData }) => {
+      // Build the update payload, omitting empty password (keep current)
+      const payload: Record<string, string> = {
+        name: data.name,
+        ipAddress: data.ipAddress,
+        username: data.username,
+        location: data.location,
+        notes: data.notes,
+      };
+      if (data.password) {
+        payload.password = data.password;
+      }
+      await apiRequest("PATCH", `/api/cameras/${id}`, payload);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cameras"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/summary"] });
+      toast({
+        title: "Success",
+        description: "Camera updated successfully",
+      });
+      setEditCameraOpen(false);
+      setEditCameraId(null);
+      setEditCameraData(undefined);
+    },
+    onError: (error: Error) => {
+      if (isUnauthorizedError(error)) {
+        toast({
+          title: "Session Expired",
+          description: "Please log in again",
+          variant: "destructive",
+        });
+        setTimeout(() => {
+          window.location.href = "/api/login";
+        }, 500);
+        return;
+      }
+      toast({
+        title: "Error",
+        description: "Failed to update camera",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleEdit = (camera: CameraType) => {
+    // Find the original API camera to get username and notes
+    const apiCamera = cameras?.find(c => c.id === camera.id);
+    setEditCameraId(camera.id);
+    setEditCameraData({
+      name: camera.name,
+      ipAddress: camera.ipAddress,
+      username: apiCamera?.username || "",
+      password: "", // Password is never sent back from the API; leave blank to keep current
+      location: camera.location === "No location" ? "" : camera.location,
+      notes: apiCamera?.notes || "",
+    });
+    setEditCameraOpen(true);
+  };
+
+  const handleEditSave = (data: CameraFormData) => {
+    if (editCameraId) {
+      editMutation.mutate({ id: editCameraId, data });
+    }
   };
 
   // Export camera data as CSV
@@ -522,6 +611,7 @@ Cameras matching filters: ${filteredCameras.length}
           <CameraTable
             cameras={filteredCameras}
             onViewDetails={handleViewDetails}
+            onEdit={handleEdit}
             onDelete={handleDelete}
           />
         )}
@@ -531,6 +621,21 @@ Cameras matching filters: ${filteredCameras.length}
         open={addCameraOpen}
         onOpenChange={setAddCameraOpen}
         onSave={handleAddCamera}
+        mode="add"
+      />
+
+      <AddCameraModal
+        open={editCameraOpen}
+        onOpenChange={(open) => {
+          setEditCameraOpen(open);
+          if (!open) {
+            setEditCameraId(null);
+            setEditCameraData(undefined);
+          }
+        }}
+        onSave={handleEditSave}
+        initialData={editCameraData}
+        mode="edit"
       />
 
       <NetworkScanModal

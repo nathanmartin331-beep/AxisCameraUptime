@@ -32,20 +32,20 @@ export default function CameraDetail() {
   const { data: camera, isLoading: cameraLoading, error: cameraError } = useQuery<Camera>({
     queryKey: ["/api/cameras", cameraId],
     enabled: !!cameraId,
-    refetchInterval: 30000,
+    refetchInterval: 10000,
   });
 
   const { data: events, isLoading: eventsLoading } = useQuery<EventsResponse, Error, UptimeEvent[]>({
     queryKey: ["/api/cameras", cameraId, "events?limit=100"],
     enabled: !!cameraId,
     select: (data) => data.events ?? [],
-    refetchInterval: 30000,
+    refetchInterval: 10000,
   });
 
   const { data: uptimeData, isLoading: uptimeLoading } = useQuery<UptimeResponse>({
     queryKey: ["/api/cameras", cameraId, "uptime?days=30"],
     enabled: !!cameraId,
-    refetchInterval: 30000,
+    refetchInterval: 10000,
   });
 
   if (cameraError) {

@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useQuery } from "@tanstack/react-query";
-import { Plus, Search, Trash2, Eye, Upload, MapPin } from "lucide-react";
+import { Plus, Search, Trash2, Eye, Upload, MapPin, Pencil } from "lucide-react";
 import { Link } from "wouter";
 import AddCameraModal, { CameraFormData } from "@/components/AddCameraModal";
 import CSVImportModal from "@/components/CSVImportModal";
@@ -23,13 +23,18 @@ interface Camera {
   id: number;
   name: string;
   ipAddress: string;
+  username: string;
   status: string;
   location?: string;
+  notes?: string | null;
   lastSeenAt: string | null;
 }
 
 export default function Cameras() {
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [editCameraId, setEditCameraId] = useState<number | null>(null);
+  const [editCameraData, setEditCameraData] = useState<CameraFormData | undefined>(undefined);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [locationFilter, setLocationFilter] = useState<string>("all");
@@ -38,7 +43,7 @@ export default function Cameras() {
 
   const { data: cameras = [], isLoading } = useQuery<Camera[]>({
     queryKey: ["/api/cameras"],
-    refetchInterval: 30000, // Refresh every 30s to reflect monitor updates
+    refetchInterval: 10000, // Refresh every 10s to reflect monitor updates
   });
 
   const deleteMutation = useMutation({
@@ -114,6 +119,58 @@ export default function Cameras() {
 
   const handleAddCamera = (data: CameraFormData) => {
     addMutation.mutate(data);
+  };
+
+  const editMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: CameraFormData }) => {
+      const payload: Record<string, string> = {
+        name: data.name,
+        ipAddress: data.ipAddress,
+        username: data.username,
+        location: data.location,
+        notes: data.notes,
+      };
+      if (data.password) {
+        payload.password = data.password;
+      }
+      return await apiRequest("PATCH", `/api/cameras/${id}`, payload);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cameras"] });
+      setShowEditDialog(false);
+      setEditCameraId(null);
+      setEditCameraData(undefined);
+      toast({
+        title: "Success",
+        description: "Camera updated successfully",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to update camera",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleEditCamera = (camera: Camera) => {
+    setEditCameraId(camera.id);
+    setEditCameraData({
+      name: camera.name,
+      ipAddress: camera.ipAddress,
+      username: camera.username || "",
+      password: "",
+      location: camera.location || "",
+      notes: camera.notes || "",
+    });
+    setShowEditDialog(true);
+  };
+
+  const handleEditSave = (data: CameraFormData) => {
+    if (editCameraId !== null) {
+      editMutation.mutate({ id: editCameraId, data });
+    }
   };
 
   const handleImport = (cameras: any[]) => {
@@ -264,6 +321,14 @@ export default function Cameras() {
                     <Button
                       variant="ghost"
                       size="icon"
+                      onClick={() => handleEditCamera(camera)}
+                      data-testid={`button-edit-camera-${camera.id}`}
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => handleDeleteCamera(camera.id)}
                       data-testid={`button-delete-camera-${camera.id}`}
                     >
@@ -277,10 +342,24 @@ export default function Cameras() {
         </CardContent>
       </Card>
 
-      <AddCameraModal 
-        open={showAddDialog} 
+      <AddCameraModal
+        open={showAddDialog}
         onOpenChange={setShowAddDialog}
         onSave={handleAddCamera}
+        mode="add"
+      />
+      <AddCameraModal
+        open={showEditDialog}
+        onOpenChange={(open) => {
+          setShowEditDialog(open);
+          if (!open) {
+            setEditCameraId(null);
+            setEditCameraData(undefined);
+          }
+        }}
+        onSave={handleEditSave}
+        initialData={editCameraData}
+        mode="edit"
       />
       <CSVImportModal
         open={showImportDialog}

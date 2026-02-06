@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -19,6 +19,7 @@ interface AddCameraModalProps {
   onOpenChange: (open: boolean) => void;
   onSave?: (camera: CameraFormData) => void;
   initialData?: CameraFormData;
+  mode?: "add" | "edit";
 }
 
 export interface CameraFormData {
@@ -30,29 +31,37 @@ export interface CameraFormData {
   notes: string;
 }
 
+const emptyFormData: CameraFormData = {
+  name: "",
+  ipAddress: "",
+  username: "",
+  password: "",
+  location: "",
+  notes: "",
+};
+
 export default function AddCameraModal({
   open,
   onOpenChange,
   onSave,
-  initialData
+  initialData,
+  mode = "add"
 }: AddCameraModalProps) {
-  const [formData, setFormData] = useState<CameraFormData>(
-    initialData || {
-      name: "",
-      ipAddress: "",
-      username: "",
-      password: "",
-      location: "",
-      notes: ""
-    }
-  );
+  const [formData, setFormData] = useState<CameraFormData>(emptyFormData);
   const [testing, setTesting] = useState(false);
+
+  const isEditMode = mode === "edit";
+
+  // Reset form data when the dialog opens or initialData changes
+  useEffect(() => {
+    if (open) {
+      setFormData(initialData || emptyFormData);
+    }
+  }, [open, initialData]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSave?.(formData);
-    console.log("Camera saved:", formData);
-    onOpenChange(false);
   };
 
   const handleTestConnection = () => {
@@ -69,10 +78,12 @@ export default function AddCameraModal({
       <DialogContent className="max-w-2xl" data-testid="dialog-add-camera">
         <DialogHeader>
           <DialogTitle>
-            {initialData ? "Edit Camera" : "Add New Camera"}
+            {isEditMode ? "Edit Camera" : "Add New Camera"}
           </DialogTitle>
           <DialogDescription>
-            Enter the camera details and credentials for monitoring
+            {isEditMode
+              ? "Update the camera details and credentials"
+              : "Enter the camera details and credentials for monitoring"}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
@@ -117,15 +128,23 @@ export default function AddCameraModal({
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="password">Password *</Label>
+                <Label htmlFor="password">
+                  Password {isEditMode ? "(leave blank to keep current)" : "*"}
+                </Label>
                 <Input
                   id="password"
                   type="password"
                   data-testid="input-password"
                   value={formData.password}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  required
+                  placeholder={isEditMode ? "Enter new password to change" : ""}
+                  required={!isEditMode}
                 />
+                {isEditMode && (
+                  <p className="text-xs text-muted-foreground">
+                    Only fill in if you want to change the password
+                  </p>
+                )}
               </div>
             </div>
             <div className="space-y-2">
@@ -176,7 +195,7 @@ export default function AddCameraModal({
               Cancel
             </Button>
             <Button type="submit" data-testid="button-save">
-              Save Camera
+              {isEditMode ? "Update Camera" : "Save Camera"}
             </Button>
           </DialogFooter>
         </form>
