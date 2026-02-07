@@ -3,8 +3,10 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import CameraDetailView from "@/components/CameraDetailView";
 import UptimeChart from "@/components/UptimeChart";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { BarChart3, Users, ArrowUpDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import type { Camera, UptimeEvent } from "@shared/schema";
@@ -47,6 +49,53 @@ export default function CameraDetail() {
     queryKey: ["/api/cameras", cameraId, "uptime?days=30"],
     enabled: !!cameraId,
     refetchInterval: 10000,
+  });
+
+  // Fetch analytics data if camera has any enabled analytics
+  const hasEnabledAnalytics = camera?.capabilities &&
+    typeof camera.capabilities === "object" &&
+    (camera.capabilities as any)?.enabledAnalytics &&
+    Object.values((camera.capabilities as any).enabledAnalytics).some(Boolean);
+
+  const { data: analyticsData } = useQuery<{
+    latest: { eventType: string; value: number; timestamp: string } | null;
+    events: Array<{ eventType: string; value: number; timestamp: string }>;
+  }>({
+    queryKey: ["/api/cameras", cameraId, "analytics"],
+    queryFn: async () => {
+      const res = await fetch(`/api/cameras/${cameraId}/analytics?days=1`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch analytics");
+      return res.json();
+    },
+    enabled: !!cameraId && !!hasEnabledAnalytics,
+    refetchInterval: 15000,
+  });
+
+  // Also fetch people_in and people_out
+  const { data: peopleInData } = useQuery<{
+    latest: { eventType: string; value: number; timestamp: string } | null;
+  }>({
+    queryKey: ["/api/cameras", cameraId, "analytics-in"],
+    queryFn: async () => {
+      const res = await fetch(`/api/cameras/${cameraId}/analytics?eventType=people_in&days=1`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!cameraId && !!hasEnabledAnalytics,
+    refetchInterval: 15000,
+  });
+
+  const { data: peopleOutData } = useQuery<{
+    latest: { eventType: string; value: number; timestamp: string } | null;
+  }>({
+    queryKey: ["/api/cameras", cameraId, "analytics-out"],
+    queryFn: async () => {
+      const res = await fetch(`/api/cameras/${cameraId}/analytics?eventType=people_out&days=1`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!cameraId && !!hasEnabledAnalytics,
+    refetchInterval: 15000,
   });
 
   if (cameraError) {
@@ -399,6 +448,73 @@ export default function CameraDetail() {
         title="30-Day Uptime History"
         description="Daily availability percentage for this camera"
       />
+
+      {/* Analytics Data Section - only shown when analytics are enabled */}
+      {hasEnabledAnalytics && (analyticsData?.latest || peopleInData?.latest || peopleOutData?.latest) && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <BarChart3 className="h-5 w-5" />
+              Live Analytics
+            </CardTitle>
+            <CardDescription>Real-time analytics data from this camera (last 24h)</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Occupancy */}
+              {analyticsData?.latest && (
+                <div className="rounded-lg border p-4 text-center">
+                  <div className="flex items-center justify-center gap-2 mb-2">
+                    <Users className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm font-medium text-muted-foreground">Current Occupancy</span>
+                  </div>
+                  <div className="text-3xl font-bold">{analyticsData.latest.value}</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {new Date(analyticsData.latest.timestamp).toLocaleTimeString()}
+                  </div>
+                </div>
+              )}
+
+              {/* People In */}
+              {peopleInData?.latest && (
+                <div className="rounded-lg border p-4 text-center">
+                  <div className="flex items-center justify-center gap-2 mb-2">
+                    <ArrowUpDown className="h-4 w-4 text-green-600" />
+                    <span className="text-sm font-medium text-muted-foreground">People In</span>
+                  </div>
+                  <div className="text-3xl font-bold text-green-600">{peopleInData.latest.value}</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {new Date(peopleInData.latest.timestamp).toLocaleTimeString()}
+                  </div>
+                </div>
+              )}
+
+              {/* People Out */}
+              {peopleOutData?.latest && (
+                <div className="rounded-lg border p-4 text-center">
+                  <div className="flex items-center justify-center gap-2 mb-2">
+                    <ArrowUpDown className="h-4 w-4 text-red-600" />
+                    <span className="text-sm font-medium text-muted-foreground">People Out</span>
+                  </div>
+                  <div className="text-3xl font-bold text-red-600">{peopleOutData.latest.value}</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {new Date(peopleOutData.latest.timestamp).toLocaleTimeString()}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Recent events count */}
+            {analyticsData?.events && analyticsData.events.length > 0 && (
+              <div className="mt-4 pt-4 border-t">
+                <Badge variant="secondary">
+                  {analyticsData.events.length} data points collected in last 24h
+                </Badge>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

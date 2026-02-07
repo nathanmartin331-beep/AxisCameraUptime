@@ -138,6 +138,103 @@ async function queryOccupancy(
 }
 
 /**
+ * Query AXIS Object Analytics (AOA) for live counting/occupancy data.
+ * Uses the getAccumulatedCounts or getData method.
+ */
+async function queryObjectAnalyticsData(
+  ipAddress: string,
+  username: string,
+  password: string,
+  timeout: number = 8000
+): Promise<Array<{ eventType: string; value: number; metadata?: Record<string, any> }>> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const events: Array<{ eventType: string; value: number; metadata?: Record<string, any> }> = [];
+
+  try {
+    // Query AOA for accumulated counts from all scenarios
+    const response = await authFetch(
+      `http://${ipAddress}/local/objectanalytics/.api`,
+      username,
+      password,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiVersion: "1.0",
+          method: "getAccumulatedCounts",
+        }),
+        signal: controller.signal,
+      }
+    );
+    clearTimeout(timeoutId);
+
+    if (!response.ok) return events;
+
+    const json = await response.json();
+
+    // Process accumulated counts from scenarios
+    const scenarios = json?.data?.scenarios || json?.data?.devices?.[0]?.channels?.[0]?.scenarios || [];
+
+    for (const scenario of scenarios) {
+      const name = scenario.name || "Unnamed";
+      const type = (scenario.type || "").toLowerCase();
+
+      // Crossline counting scenarios
+      if (type.includes("crossline") || type.includes("line_crossing") || type.includes("crossing")) {
+        const passings = scenario.passings || scenario.counts || [];
+        for (const passing of passings) {
+          if (passing.in !== undefined || passing.enters !== undefined) {
+            events.push({
+              eventType: "people_in",
+              value: parseInt(passing.in || passing.enters || "0") || 0,
+              metadata: { scenario: name, source: "objectanalytics" },
+            });
+          }
+          if (passing.out !== undefined || passing.exits !== undefined) {
+            events.push({
+              eventType: "people_out",
+              value: parseInt(passing.out || passing.exits || "0") || 0,
+              metadata: { scenario: name, source: "objectanalytics" },
+            });
+          }
+        }
+
+        // Also check for direct in/out counts on the scenario itself
+        if (scenario.in !== undefined) {
+          events.push({
+            eventType: "people_in",
+            value: parseInt(scenario.in) || 0,
+            metadata: { scenario: name, source: "objectanalytics" },
+          });
+        }
+        if (scenario.out !== undefined) {
+          events.push({
+            eventType: "people_out",
+            value: parseInt(scenario.out) || 0,
+            metadata: { scenario: name, source: "objectanalytics" },
+          });
+        }
+      }
+
+      // Occupancy in area scenarios
+      if (type.includes("occupancy") || type.includes("object_in_area")) {
+        const count = scenario.currentOccupancy || scenario.count || scenario.objects || 0;
+        events.push({
+          eventType: "occupancy",
+          value: parseInt(String(count)) || 0,
+          metadata: { scenario: name, source: "objectanalytics" },
+        });
+      }
+    }
+
+    return events;
+  } catch {
+    return events;
+  }
+}
+
+/**
  * Query installed ACAP applications via /axis-cgi/applications/list.cgi
  * Returns list of installed application names and their status.
  */
@@ -403,8 +500,9 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
   // Check if analytic is both available AND enabled (undefined enabledAnalytics = legacy, allow)
   const pcEnabled = caps?.analytics?.peopleCount && enabled?.peopleCount !== false;
   const occEnabled = caps?.analytics?.occupancyEstimation && enabled?.occupancyEstimation !== false;
+  const oaEnabled = caps?.analytics?.objectAnalytics && enabled?.objectAnalytics !== false;
 
-  // Try People Counter
+  // Try People Counter ACAP first
   if (pcEnabled) {
     try {
       const data = await queryPeopleCounter(camera.ipAddress, camera.username, password);
@@ -431,6 +529,32 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
       events.push({ eventType: "occupancy", value: occ });
     } catch {
       // Occupancy failed
+    }
+  }
+
+  // Try Object Analytics (AOA) if enabled - this can provide crossline counting,
+  // occupancy-in-area, and other scenario-based data
+  if (oaEnabled && events.length === 0) {
+    // Only query AOA if we didn't already get data from People Counter/Occupancy
+    try {
+      const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password);
+      events.push(...aoaEvents);
+    } catch {
+      // AOA query failed
+    }
+  } else if (oaEnabled) {
+    // Even if we got people counter data, still try AOA for additional scenario data
+    // but don't duplicate people_in/people_out/occupancy
+    try {
+      const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password);
+      const existingTypes = new Set(events.map((e) => e.eventType));
+      for (const evt of aoaEvents) {
+        if (!existingTypes.has(evt.eventType)) {
+          events.push(evt);
+        }
+      }
+    } catch {
+      // AOA query failed
     }
   }
 
@@ -463,7 +587,8 @@ async function pollAllCameraAnalytics(): Promise<void> {
       // Require both detected and not explicitly disabled (undefined = legacy allow)
       return (
         (caps?.analytics?.peopleCount === true && enabled?.peopleCount !== false) ||
-        (caps?.analytics?.occupancyEstimation === true && enabled?.occupancyEstimation !== false)
+        (caps?.analytics?.occupancyEstimation === true && enabled?.occupancyEstimation !== false) ||
+        (caps?.analytics?.objectAnalytics === true && enabled?.objectAnalytics !== false)
       );
     });
 
