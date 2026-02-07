@@ -315,10 +315,13 @@ export class CameraModelDetector {
 
       const capabilities: CameraCapabilities = {};
 
-      if (props.Architecture || props.Soc) {
+      if (props.Architecture || props.Soc || props.SerialNumber || props.HardwareID) {
         capabilities.system = {
           architecture: props.Architecture,
           soc: props.Soc,
+          serialNumber: props.SerialNumber,
+          hardwareId: props.HardwareID,
+          buildDate: props.BuildDate,
         };
       }
 
@@ -454,10 +457,16 @@ export class CameraModelDetector {
     // System info
     const architecture = VAPIXResponseParser.get(properties, 'Properties.System.Architecture');
     const soc = VAPIXResponseParser.get(properties, 'Properties.System.Soc');
-    if (architecture || soc) {
+    const serialNumber = VAPIXResponseParser.get(properties, 'Properties.System.SerialNumber');
+    const hardwareId = VAPIXResponseParser.get(properties, 'Properties.System.HardwareID');
+    const buildDate = VAPIXResponseParser.get(properties, 'Properties.Firmware.BuildDate');
+    if (architecture || soc || serialNumber || hardwareId) {
       capabilities.system = {
         architecture,
         soc,
+        serialNumber,
+        hardwareId,
+        buildDate,
       };
     }
 

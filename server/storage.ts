@@ -44,6 +44,14 @@ export interface CameraModelInfo {
  */
 export interface ModelUpdateData {
   model: string;
+  fullName?: string;
+  series?: string;
+  firmwareVersion?: string;
+  vapixVersion?: string;
+  hasPTZ?: boolean;
+  hasAudio?: boolean;
+  audioChannels?: number;
+  numberOfViews?: number;
   capabilities?: Record<string, any>;
 }
 
@@ -321,9 +329,19 @@ export class DatabaseStorage implements IStorage {
     try {
       const updateData: any = {
         model: modelData.model,
-        modelDetectedAt: new Date(),
+        detectedAt: new Date(),
         updatedAt: new Date(),
       };
+
+      // Save all available model fields to their dedicated columns
+      if (modelData.fullName) updateData.fullName = modelData.fullName;
+      if (modelData.series) updateData.series = modelData.series;
+      if (modelData.firmwareVersion) updateData.firmwareVersion = modelData.firmwareVersion;
+      if (modelData.vapixVersion) updateData.vapixVersion = modelData.vapixVersion;
+      if (modelData.hasPTZ !== undefined) updateData.hasPTZ = modelData.hasPTZ;
+      if (modelData.hasAudio !== undefined) updateData.hasAudio = modelData.hasAudio;
+      if (modelData.audioChannels !== undefined) updateData.audioChannels = modelData.audioChannels;
+      if (modelData.numberOfViews !== undefined) updateData.numberOfViews = modelData.numberOfViews;
 
       // Add capabilities if provided
       if (modelData.capabilities) {

@@ -44,7 +44,15 @@ interface CameraDetails {
   resolution?: string;
   maxFramerate?: number;
   numberOfViews?: number;
-  capabilities?: Record<string, any>;
+  capabilities?: Record<string, any> & {
+    system?: {
+      architecture?: string;
+      soc?: string;
+      serialNumber?: string;
+      hardwareId?: string;
+      buildDate?: string;
+    };
+  };
   modelDetectedAt?: string;
 }
 
@@ -175,6 +183,36 @@ export default function CameraDetailView({
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Firmware</span>
                 <code className="text-sm font-mono">{camera.firmwareVersion}</code>
+              </div>
+            )}
+            {camera.capabilities?.system?.serialNumber && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Serial Number</span>
+                <code className="text-sm font-mono">{camera.capabilities.system.serialNumber}</code>
+              </div>
+            )}
+            {camera.capabilities?.system?.hardwareId && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Hardware ID</span>
+                <code className="text-sm font-mono">{camera.capabilities.system.hardwareId}</code>
+              </div>
+            )}
+            {camera.capabilities?.system?.architecture && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Architecture</span>
+                <span className="text-sm font-medium">{camera.capabilities.system.architecture}</span>
+              </div>
+            )}
+            {camera.capabilities?.system?.soc && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">SoC</span>
+                <span className="text-sm font-medium">{camera.capabilities.system.soc}</span>
+              </div>
+            )}
+            {camera.capabilities?.system?.buildDate && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Build Date</span>
+                <span className="text-sm">{camera.capabilities.system.buildDate}</span>
               </div>
             )}
             {camera.modelDetectedAt && (

@@ -119,6 +119,9 @@ export interface CameraCapabilities {
     architecture?: string;       // "armv7hf"
     soc?: string;               // "Artpec-7"
     edgeStorage?: boolean;
+    serialNumber?: string;       // "ACCC8E6AB0E1"
+    hardwareId?: string;         // "1A3"
+    buildDate?: string;          // "2023-01-01"
   };
 }
 
