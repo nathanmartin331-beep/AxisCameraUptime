@@ -412,16 +412,24 @@ async function checkAllCameras() {
                     camera.username,
                     decryptedPassword
                   );
-                  if (analyticsProbe.peopleCount || analyticsProbe.occupancyEstimation || analyticsProbe.lineCrossing) {
+                  const hasAny = analyticsProbe.peopleCount || analyticsProbe.occupancyEstimation ||
+                    analyticsProbe.lineCrossing || analyticsProbe.objectAnalytics ||
+                    analyticsProbe.loiteringGuard || analyticsProbe.fenceGuard || analyticsProbe.motionGuard;
+                  if (hasAny) {
                     await storage.updateCameraCapabilities(camera.id, {
                       analytics: {
                         ...detection.capabilities?.analytics,
                         peopleCount: analyticsProbe.peopleCount,
                         occupancyEstimation: analyticsProbe.occupancyEstimation,
                         lineCrossing: analyticsProbe.lineCrossing,
+                        objectAnalytics: analyticsProbe.objectAnalytics,
+                        loiteringGuard: analyticsProbe.loiteringGuard,
+                        fenceGuard: analyticsProbe.fenceGuard,
+                        motionGuard: analyticsProbe.motionGuard,
+                        acapInstalled: analyticsProbe.acapInstalled,
+                        objectAnalyticsScenarios: analyticsProbe.objectAnalyticsScenarios,
                       },
                     }, true);
-                    console.log(`[Monitor] ✓ Analytics probe for ${camera.name}: PC=${analyticsProbe.peopleCount} OCC=${analyticsProbe.occupancyEstimation} LC=${analyticsProbe.lineCrossing}`);
                   }
                 } catch (probeErr: any) {
                   console.warn(`[Monitor] ⚠ Analytics probe failed for ${camera.name}: ${probeErr.message}`);

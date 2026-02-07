@@ -84,15 +84,23 @@ export interface CameraCapabilities {
     panoramic: boolean;          // Stitched view available
   };
 
-  // Analytics
+  // Analytics (detected availability from VAPIX + ACAP probing)
   analytics?: {
     motionDetection: boolean;
     tampering: boolean;
-    objectDetection: boolean;
-    peopleCount: boolean;
-    occupancyEstimation?: boolean;
-    lineCrossing?: boolean;
-    acapInstalled?: string[];
+    objectDetection: boolean;       // AXIS Object Analytics installed
+    peopleCount: boolean;           // People Counter ACAP or AOA scenario
+    occupancyEstimation?: boolean;  // Occupancy Estimator ACAP or AOA scenario
+    lineCrossing?: boolean;         // Cross Line Detection or AOA scenario
+    loiteringGuard?: boolean;       // AXIS Loitering Guard ACAP
+    fenceGuard?: boolean;           // AXIS Fence Guard ACAP
+    motionGuard?: boolean;          // AXIS Motion Guard ACAP
+    objectAnalytics?: boolean;      // AXIS Object Analytics (AOA) master flag
+    acapInstalled?: string[];       // Full list of installed ACAP names
+    objectAnalyticsScenarios?: Array<{
+      name: string;
+      type: string;                 // "crosslinecounting", "occupancy_in_area", "object_in_area", etc.
+    }>;
   };
 
   // User-enabled analytics (what to actively poll)
@@ -100,6 +108,10 @@ export interface CameraCapabilities {
     peopleCount?: boolean;
     occupancyEstimation?: boolean;
     lineCrossing?: boolean;
+    objectAnalytics?: boolean;
+    loiteringGuard?: boolean;
+    fenceGuard?: boolean;
+    motionGuard?: boolean;
   };
 
   // System

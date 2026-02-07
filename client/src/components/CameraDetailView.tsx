@@ -289,110 +289,121 @@ export default function CameraDetailView({
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            {/* People Counter */}
-            <div className="flex justify-between items-center">
-              <div>
-                <span className="text-sm font-medium">People Counter</span>
-                <p className="text-xs text-muted-foreground">Count people entering and exiting</p>
-              </div>
-              <div className="flex items-center gap-2">
-                {camera.capabilities?.analytics?.peopleCount ? (
-                  <>
-                    <Badge variant="outline" className="border-green-500 text-green-700 bg-green-50">
-                      Available
-                    </Badge>
-                    <Switch
-                      checked={camera.capabilities?.enabledAnalytics?.peopleCount ?? false}
-                      onCheckedChange={(checked) => onToggleAnalytic?.("peopleCount", checked)}
-                    />
-                  </>
-                ) : (
-                  <span className="text-xs text-muted-foreground">Not detected</span>
-                )}
-              </div>
-            </div>
+            {(() => {
+              const analytics = camera.capabilities?.analytics;
+              const enabled = camera.capabilities?.enabledAnalytics;
 
-            {/* Occupancy Estimator */}
-            <div className="flex justify-between items-center">
-              <div>
-                <span className="text-sm font-medium">Occupancy Estimator</span>
-                <p className="text-xs text-muted-foreground">Real-time room occupancy count</p>
-              </div>
-              <div className="flex items-center gap-2">
-                {camera.capabilities?.analytics?.occupancyEstimation ? (
-                  <>
-                    <Badge variant="outline" className="border-green-500 text-green-700 bg-green-50">
-                      Available
-                    </Badge>
-                    <Switch
-                      checked={camera.capabilities?.enabledAnalytics?.occupancyEstimation ?? false}
-                      onCheckedChange={(checked) => onToggleAnalytic?.("occupancyEstimation", checked)}
-                    />
-                  </>
-                ) : (
-                  <span className="text-xs text-muted-foreground">Not detected</span>
-                )}
-              </div>
-            </div>
+              // Pollable analytics - shown with enable/disable switch
+              const pollableAnalytics = [
+                { key: "peopleCount", label: "People Counter", desc: "Count people entering and exiting", detected: analytics?.peopleCount },
+                { key: "occupancyEstimation", label: "Occupancy Estimator", desc: "Real-time room occupancy count", detected: analytics?.occupancyEstimation },
+                { key: "lineCrossing", label: "Line Crossing", desc: "Directional line crossing detection", detected: analytics?.lineCrossing },
+                { key: "objectAnalytics", label: "Object Analytics (AOA)", desc: "AXIS Object Analytics platform", detected: analytics?.objectAnalytics },
+                { key: "loiteringGuard", label: "Loitering Guard", desc: "Detect loitering in defined areas", detected: analytics?.loiteringGuard },
+                { key: "fenceGuard", label: "Fence Guard", desc: "Virtual fence intrusion detection", detected: analytics?.fenceGuard },
+                { key: "motionGuard", label: "Motion Guard", desc: "Advanced motion detection zones", detected: analytics?.motionGuard },
+              ];
 
-            {/* Line Crossing */}
-            <div className="flex justify-between items-center">
-              <div>
-                <span className="text-sm font-medium">Line Crossing</span>
-                <p className="text-xs text-muted-foreground">Directional line crossing detection</p>
-              </div>
-              <div className="flex items-center gap-2">
-                {camera.capabilities?.analytics?.lineCrossing ? (
-                  <>
-                    <Badge variant="outline" className="border-green-500 text-green-700 bg-green-50">
-                      Available
-                    </Badge>
-                    <Switch
-                      checked={camera.capabilities?.enabledAnalytics?.lineCrossing ?? false}
-                      onCheckedChange={(checked) => onToggleAnalytic?.("lineCrossing", checked)}
-                    />
-                  </>
-                ) : (
-                  <span className="text-xs text-muted-foreground">Not detected</span>
-                )}
-              </div>
-            </div>
+              const detectedPollable = pollableAnalytics.filter((a) => a.detected);
+              const undetectedPollable = pollableAnalytics.filter((a) => !a.detected);
 
-            {/* Motion Detection (read-only, from VAPIX properties) */}
-            {camera.capabilities?.analytics?.motionDetection && (
-              <div className="flex justify-between items-center">
-                <div>
-                  <span className="text-sm font-medium">Motion Detection</span>
-                  <p className="text-xs text-muted-foreground">Built-in motion detection</p>
-                </div>
-                <Badge variant="secondary">Built-in</Badge>
-              </div>
-            )}
+              // Built-in analytics (read-only)
+              const builtIn = [
+                { label: "Motion Detection", detected: analytics?.motionDetection },
+                { label: "Tampering Detection", detected: analytics?.tampering },
+              ].filter((a) => a.detected);
 
-            {/* Tampering Detection (read-only, from VAPIX properties) */}
-            {camera.capabilities?.analytics?.tampering && (
-              <div className="flex justify-between items-center">
-                <div>
-                  <span className="text-sm font-medium">Tampering Detection</span>
-                  <p className="text-xs text-muted-foreground">Camera tampering alerts</p>
-                </div>
-                <Badge variant="secondary">Built-in</Badge>
-              </div>
-            )}
+              const hasAnything = detectedPollable.length > 0 || builtIn.length > 0;
 
-            {/* Hint if nothing detected */}
-            {!camera.capabilities?.analytics?.peopleCount &&
-             !camera.capabilities?.analytics?.occupancyEstimation &&
-             !camera.capabilities?.analytics?.lineCrossing &&
-             !camera.capabilities?.analytics?.motionDetection &&
-             !camera.capabilities?.analytics?.tampering && (
-              <div className="flex items-start gap-2 pt-2 border-t">
-                <Info className="w-4 h-4 text-muted-foreground mt-0.5" />
-                <p className="text-xs text-muted-foreground">
-                  No analytics detected. Click the refresh button to probe for installed analytics ACAPs.
-                </p>
-              </div>
-            )}
+              return (
+                <>
+                  {/* Detected pollable analytics with toggle switches */}
+                  {detectedPollable.map((item) => (
+                    <div key={item.key} className="flex justify-between items-center">
+                      <div>
+                        <span className="text-sm font-medium">{item.label}</span>
+                        <p className="text-xs text-muted-foreground">{item.desc}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="border-green-500 text-green-700 bg-green-50">
+                          Available
+                        </Badge>
+                        <Switch
+                          checked={(enabled as any)?.[item.key] ?? false}
+                          onCheckedChange={(checked) => onToggleAnalytic?.(item.key, checked)}
+                        />
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Object Analytics scenarios (if any) */}
+                  {analytics?.objectAnalyticsScenarios && analytics.objectAnalyticsScenarios.length > 0 && (
+                    <div className="pt-2 border-t">
+                      <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                        Configured AOA Scenarios
+                      </span>
+                      <div className="mt-2 space-y-1">
+                        {analytics.objectAnalyticsScenarios.map((s: any, i: number) => (
+                          <div key={i} className="flex items-center justify-between text-sm">
+                            <span>{s.name}</span>
+                            <Badge variant="secondary" className="text-xs">{s.type}</Badge>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Built-in analytics (read-only) */}
+                  {builtIn.length > 0 && (
+                    <>
+                      {detectedPollable.length > 0 && <div className="border-t pt-2" />}
+                      {builtIn.map((item) => (
+                        <div key={item.label} className="flex justify-between items-center">
+                          <div>
+                            <span className="text-sm font-medium">{item.label}</span>
+                            <p className="text-xs text-muted-foreground">Built-in firmware feature</p>
+                          </div>
+                          <Badge variant="secondary">Built-in</Badge>
+                        </div>
+                      ))}
+                    </>
+                  )}
+
+                  {/* Installed ACAPs list */}
+                  {analytics?.acapInstalled && analytics.acapInstalled.length > 0 && (
+                    <div className="pt-2 border-t">
+                      <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                        Installed Applications ({analytics.acapInstalled.length})
+                      </span>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {analytics.acapInstalled.map((app: string, i: number) => (
+                          <Badge key={i} variant="outline" className="text-xs">{app}</Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Not-detected analytics (collapsed) */}
+                  {undetectedPollable.length > 0 && undetectedPollable.length < pollableAnalytics.length && (
+                    <div className="pt-2 border-t">
+                      <span className="text-xs text-muted-foreground">
+                        Not detected: {undetectedPollable.map((a) => a.label).join(", ")}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Hint if nothing at all detected */}
+                  {!hasAnything && (
+                    <div className="flex items-start gap-2">
+                      <Info className="w-4 h-4 text-muted-foreground mt-0.5" />
+                      <p className="text-xs text-muted-foreground">
+                        No analytics detected. Click the refresh button to probe for installed analytics ACAPs.
+                      </p>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </CardContent>
         </Card>
 

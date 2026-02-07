@@ -395,7 +395,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { probeAnalyticsCapabilities } = await import("./services/analyticsPoller");
       const probeResult = await probeAnalyticsCapabilities(camera.ipAddress, camera.username, password);
 
-      // Merge probe results into capabilities.analytics
+      // Merge all probe results into capabilities.analytics
       const existingAnalytics = (camera.capabilities as any)?.analytics || {};
       await storage.updateCameraCapabilities(cameraId, {
         analytics: {
@@ -403,6 +403,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           peopleCount: probeResult.peopleCount,
           occupancyEstimation: probeResult.occupancyEstimation,
           lineCrossing: probeResult.lineCrossing,
+          objectAnalytics: probeResult.objectAnalytics,
+          loiteringGuard: probeResult.loiteringGuard,
+          fenceGuard: probeResult.fenceGuard,
+          motionGuard: probeResult.motionGuard,
+          acapInstalled: probeResult.acapInstalled,
+          objectAnalyticsScenarios: probeResult.objectAnalyticsScenarios,
         },
       }, true);
 
@@ -427,6 +433,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         peopleCount: z.boolean().optional(),
         occupancyEstimation: z.boolean().optional(),
         lineCrossing: z.boolean().optional(),
+        objectAnalytics: z.boolean().optional(),
+        loiteringGuard: z.boolean().optional(),
+        fenceGuard: z.boolean().optional(),
+        motionGuard: z.boolean().optional(),
       });
 
       const enabledAnalytics = configSchema.parse(req.body);

@@ -138,41 +138,255 @@ async function queryOccupancy(
 }
 
 /**
- * Probe if a camera has analytics ACAPs installed.
- * Tries known ACAP endpoints to detect capabilities.
+ * Query installed ACAP applications via /axis-cgi/applications/list.cgi
+ * Returns list of installed application names and their status.
  */
+async function queryInstalledApplications(
+  ipAddress: string,
+  username: string,
+  password: string,
+  timeout: number = 8000
+): Promise<Array<{ name: string; niceName: string; status: string; id?: string }>> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await authFetch(
+      `http://${ipAddress}/axis-cgi/applications/list.cgi`,
+      username,
+      password,
+      { signal: controller.signal }
+    );
+    clearTimeout(timeoutId);
+
+    if (!response.ok) return [];
+
+    const text = await response.text();
+    const apps: Array<{ name: string; niceName: string; status: string; id?: string }> = [];
+
+    // Parse key=value format: each app block separated by blank lines
+    // Format: Name=app\nNiceName=Nice Name\nStatus=Running\n...
+    const blocks = text.split(/\n\s*\n/);
+    for (const block of blocks) {
+      const lines = block.trim().split("\n");
+      const entry: Record<string, string> = {};
+      for (const line of lines) {
+        const eqIdx = line.indexOf("=");
+        if (eqIdx > 0) {
+          entry[line.substring(0, eqIdx).trim().toLowerCase()] = line.substring(eqIdx + 1).trim();
+        }
+      }
+      if (entry.name) {
+        apps.push({
+          name: entry.name,
+          niceName: entry.nicename || entry.name,
+          status: entry.status || "Unknown",
+          id: entry.applicationid,
+        });
+      }
+    }
+    return apps;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Probe AXIS Object Analytics (AOA) for configured scenarios.
+ * AOA is the primary analytics framework on modern Axis cameras.
+ */
+async function queryObjectAnalyticsScenarios(
+  ipAddress: string,
+  username: string,
+  password: string,
+  timeout: number = 8000
+): Promise<Array<{ name: string; type: string }>> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    // AOA uses JSON API
+    const response = await authFetch(
+      `http://${ipAddress}/local/objectanalytics/.api`,
+      username,
+      password,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiVersion: "1.0", method: "getConfiguration", context: "probe" }),
+        signal: controller.signal,
+      }
+    );
+    clearTimeout(timeoutId);
+
+    if (!response.ok) return [];
+
+    const json = await response.json();
+
+    // Extract scenarios from the configuration
+    const scenarios: Array<{ name: string; type: string }> = [];
+
+    // AOA configuration has devices > channels > scenarios
+    const devices = json?.data?.devices || json?.data?.configuration?.devices || [];
+    for (const device of devices) {
+      const channels = device.channels || [];
+      for (const channel of channels) {
+        const channelScenarios = channel.scenarios || [];
+        for (const scenario of channelScenarios) {
+          scenarios.push({
+            name: scenario.name || scenario.niceName || "Unnamed",
+            type: scenario.type || scenario.objectType || "unknown",
+          });
+        }
+      }
+    }
+
+    // Some firmware versions have a simpler structure
+    if (scenarios.length === 0) {
+      const simpleScenarios = json?.data?.scenarios || json?.data?.configuration?.scenarios || [];
+      for (const scenario of simpleScenarios) {
+        scenarios.push({
+          name: scenario.name || scenario.niceName || "Unnamed",
+          type: scenario.type || "unknown",
+        });
+      }
+    }
+
+    return scenarios;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Probe a specific ACAP endpoint to check if it exists.
+ * Returns true if the endpoint responds (200 or 405).
+ */
+async function probeEndpoint(
+  ipAddress: string,
+  username: string,
+  password: string,
+  path: string,
+  timeout: number = 5000
+): Promise<boolean> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await authFetch(
+      `http://${ipAddress}${path}`,
+      username,
+      password,
+      { method: "HEAD", signal: controller.signal }
+    );
+    clearTimeout(timeoutId);
+    return response.ok || response.status === 405 || response.status === 200;
+  } catch {
+    clearTimeout(timeoutId);
+    return false;
+  }
+}
+
+/**
+ * Comprehensive analytics capability probe.
+ * Queries the applications list, probes known ACAP endpoints,
+ * and checks Object Analytics scenarios.
+ */
+export interface AnalyticsProbeResult {
+  peopleCount: boolean;
+  occupancyEstimation: boolean;
+  lineCrossing: boolean;
+  objectAnalytics: boolean;
+  loiteringGuard: boolean;
+  fenceGuard: boolean;
+  motionGuard: boolean;
+  acapInstalled: string[];
+  objectAnalyticsScenarios: Array<{ name: string; type: string }>;
+}
+
 export async function probeAnalyticsCapabilities(
   ipAddress: string,
   username: string,
   password: string
-): Promise<{ peopleCount: boolean; occupancyEstimation: boolean; lineCrossing: boolean }> {
-  const results = { peopleCount: false, occupancyEstimation: false, lineCrossing: false };
+): Promise<AnalyticsProbeResult> {
+  const results: AnalyticsProbeResult = {
+    peopleCount: false,
+    occupancyEstimation: false,
+    lineCrossing: false,
+    objectAnalytics: false,
+    loiteringGuard: false,
+    fenceGuard: false,
+    motionGuard: false,
+    acapInstalled: [],
+    objectAnalyticsScenarios: [],
+  };
 
-  // Probe People Counter ACAP
-  try {
-    const pcResponse = await authFetch(
-      `http://${ipAddress}/local/peoplecounter/.api`,
-      username,
-      password,
-      { method: "HEAD" }
-    );
-    results.peopleCount = pcResponse.ok || pcResponse.status === 405; // 405 = method not allowed but endpoint exists
-  } catch {
-    // Not available
+  // Step 1: Query installed applications list (the most reliable source)
+  const apps = await queryInstalledApplications(ipAddress, username, password);
+  results.acapInstalled = apps
+    .filter((a) => a.status === "Running" || a.status === "Idle")
+    .map((a) => a.niceName);
+
+  console.log(`[Analytics] Installed ACAPs on ${ipAddress}: ${results.acapInstalled.join(", ") || "none found"}`);
+
+  // Map known ACAP names to capability flags
+  const appNames = apps.map((a) => a.name.toLowerCase());
+  const appNiceNames = apps.map((a) => a.niceName.toLowerCase());
+  const allNames = [...appNames, ...appNiceNames];
+
+  const hasApp = (keywords: string[]): boolean =>
+    allNames.some((name) => keywords.some((kw) => name.includes(kw)));
+
+  if (hasApp(["peoplecounter", "people counter"])) results.peopleCount = true;
+  if (hasApp(["occupancy"])) results.occupancyEstimation = true;
+  if (hasApp(["crossline", "cross line"])) results.lineCrossing = true;
+  if (hasApp(["objectanalytics", "object analytics"])) results.objectAnalytics = true;
+  if (hasApp(["loitering", "loiteringguard"])) results.loiteringGuard = true;
+  if (hasApp(["fenceguard", "fence guard"])) results.fenceGuard = true;
+  if (hasApp(["motionguard", "motion guard"])) results.motionGuard = true;
+
+  // Step 2: Probe specific ACAP endpoints in parallel for cameras where app list may be incomplete
+  const [pcAvail, occAvail, oaAvail, lgAvail, fgAvail, mgAvail] = await Promise.all([
+    !results.peopleCount ? probeEndpoint(ipAddress, username, password, "/local/peoplecounter/.api") : Promise.resolve(true),
+    !results.occupancyEstimation ? probeEndpoint(ipAddress, username, password, "/local/occupancy/.api") : Promise.resolve(true),
+    !results.objectAnalytics ? probeEndpoint(ipAddress, username, password, "/local/objectanalytics/.api") : Promise.resolve(true),
+    !results.loiteringGuard ? probeEndpoint(ipAddress, username, password, "/local/loiteringguard/.api") : Promise.resolve(true),
+    !results.fenceGuard ? probeEndpoint(ipAddress, username, password, "/local/fenceguard/.api") : Promise.resolve(true),
+    !results.motionGuard ? probeEndpoint(ipAddress, username, password, "/local/motionguard/.api") : Promise.resolve(true),
+  ]);
+
+  if (pcAvail) results.peopleCount = true;
+  if (occAvail) results.occupancyEstimation = true;
+  if (oaAvail) results.objectAnalytics = true;
+  if (lgAvail) results.loiteringGuard = true;
+  if (fgAvail) results.fenceGuard = true;
+  if (mgAvail) results.motionGuard = true;
+
+  // Step 3: If Object Analytics is available, query configured scenarios
+  if (results.objectAnalytics) {
+    results.objectAnalyticsScenarios = await queryObjectAnalyticsScenarios(ipAddress, username, password);
+    console.log(`[Analytics] AOA scenarios on ${ipAddress}: ${results.objectAnalyticsScenarios.map((s) => `${s.name}(${s.type})`).join(", ") || "none configured"}`);
+
+    // Infer capabilities from scenario types
+    for (const scenario of results.objectAnalyticsScenarios) {
+      const type = scenario.type.toLowerCase();
+      if (type.includes("crossline") || type.includes("line_crossing")) results.lineCrossing = true;
+      if (type.includes("occupancy")) results.occupancyEstimation = true;
+      if (type.includes("people") || type.includes("counting")) results.peopleCount = true;
+    }
   }
 
-  // Probe Occupancy Estimator ACAP
-  try {
-    const occResponse = await authFetch(
-      `http://${ipAddress}/local/occupancy/.api`,
-      username,
-      password,
-      { method: "HEAD" }
-    );
-    results.occupancyEstimation = occResponse.ok || occResponse.status === 405;
-  } catch {
-    // Not available
-  }
+  const detected = [
+    results.peopleCount && "PeopleCount",
+    results.occupancyEstimation && "Occupancy",
+    results.lineCrossing && "LineCrossing",
+    results.objectAnalytics && "ObjectAnalytics",
+    results.loiteringGuard && "LoiteringGuard",
+    results.fenceGuard && "FenceGuard",
+    results.motionGuard && "MotionGuard",
+  ].filter(Boolean);
+
+  console.log(`[Analytics] Probe result for ${ipAddress}: ${detected.join(", ") || "no analytics"}`);
 
   return results;
 }
