@@ -263,9 +263,38 @@ async function queryInstalledApplications(
 
     const text = await response.text();
     const apps: Array<{ name: string; niceName: string; status: string; id?: string }> = [];
-
-    // Try JSON format first (some newer firmware with ?type=json or default JSON)
     const trimmed = text.trim();
+
+    // Format 1: XML response (most common on modern firmware)
+    // <reply result="ok">
+    //   <application Name="objectanalytics" NiceName="AXIS Object Analytics" Status="Running" ... />
+    // </reply>
+    if (trimmed.includes("<application ")) {
+      const appRegex = /<application\s+([^>]*?)\/?\s*>/gi;
+      let match;
+      while ((match = appRegex.exec(text)) !== null) {
+        const attrs = match[1];
+        const getAttr = (name: string): string => {
+          const m = new RegExp(`${name}="([^"]*)"`, "i").exec(attrs);
+          return m ? m[1] : "";
+        };
+        const name = getAttr("Name");
+        if (name) {
+          apps.push({
+            name,
+            niceName: getAttr("NiceName") || name,
+            status: getAttr("Status") || "Unknown",
+            id: getAttr("ApplicationID"),
+          });
+        }
+      }
+      if (apps.length > 0) {
+        console.log(`[Analytics] Parsed ${apps.length} apps from XML on ${ipAddress}`);
+        return apps;
+      }
+    }
+
+    // Format 2: JSON response (some firmware with ?type=json)
     if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
       try {
         const json = JSON.parse(trimmed);
@@ -284,13 +313,7 @@ async function queryInstalledApplications(
       }
     }
 
-    // Parse Axis VAPIX ApplicationN.Key=Value format:
-    // Application1.Name=loiteringguard
-    // Application1.NiceName=AXIS Loitering Guard
-    // Application1.Status=Running
-    // Application1.ApplicationID=143440
-    // Application2.Name=objectanalytics
-    // ...
+    // Format 3: Key=value format (ApplicationN.Key=Value)
     const appMap = new Map<string, Record<string, string>>();
     for (const line of text.split(/\r?\n/)) {
       const t = line.trim();
@@ -299,23 +322,12 @@ async function queryInstalledApplications(
       const fullKey = t.substring(0, eqIdx).trim();
       const value = t.substring(eqIdx + 1).trim();
 
-      // Match "ApplicationN.Key" pattern
       const prefixMatch = fullKey.match(/^Application(\d+)\.(.+)$/i);
       if (prefixMatch) {
         const appNum = prefixMatch[1];
         const key = prefixMatch[2].toLowerCase();
         if (!appMap.has(appNum)) appMap.set(appNum, {});
         appMap.get(appNum)![key] = value;
-      } else {
-        // Also handle simple "Key=Value" blocks (separated by blank lines)
-        // as a fallback for non-numbered format
-        const simpleKey = fullKey.toLowerCase();
-        if (simpleKey === "name" && !appMap.has("simple_" + apps.length)) {
-          appMap.set("simple_" + apps.length, { [simpleKey]: value });
-        } else if (appMap.size > 0) {
-          const lastEntry = Array.from(appMap.values()).pop();
-          if (lastEntry) lastEntry[simpleKey] = value;
-        }
       }
     }
 
@@ -330,9 +342,8 @@ async function queryInstalledApplications(
       }
     }
 
-    // Debug: log raw response if no apps parsed
-    if (apps.length === 0 && text.trim().length > 0) {
-      console.log(`[Analytics] applications/list.cgi raw response (first 500 chars): ${text.substring(0, 500)}`);
+    if (apps.length === 0 && trimmed.length > 0) {
+      console.log(`[Analytics] applications/list.cgi unparsed response (first 500 chars): ${trimmed.substring(0, 500)}`);
     }
 
     return apps;
@@ -370,21 +381,33 @@ async function queryObjectAnalyticsScenarios(
     );
     clearTimeout(timeoutId);
 
-    if (!response.ok) return [];
+    if (!response.ok) {
+      console.log(`[Analytics] AOA getConfiguration on ${ipAddress}: HTTP ${response.status}`);
+      return [];
+    }
 
     const text = await response.text();
+    console.log(`[Analytics] AOA getConfiguration on ${ipAddress}: raw response (first 500 chars): ${text.substring(0, 500)}`);
+
     let json: any;
     try {
       json = JSON.parse(text);
     } catch {
-      console.log(`[Analytics] AOA getConfiguration on ${ipAddress}: non-JSON response (first 300 chars): ${text.substring(0, 300)}`);
+      console.log(`[Analytics] AOA getConfiguration on ${ipAddress}: non-JSON response`);
+      return [];
+    }
+
+    // Check for API errors
+    if (json.error) {
+      console.log(`[Analytics] AOA getConfiguration on ${ipAddress}: API error: ${JSON.stringify(json.error)}`);
       return [];
     }
 
     // Extract scenarios from the configuration
     const scenarios: Array<{ name: string; type: string }> = [];
 
-    // AOA configuration has devices > channels > scenarios
+    // Try multiple known AOA response structures:
+    // Structure 1: data.devices[].channels[].scenarios[]
     const devices = json?.data?.devices || json?.data?.configuration?.devices || [];
     for (const device of devices) {
       const channels = device.channels || [];
@@ -399,7 +422,7 @@ async function queryObjectAnalyticsScenarios(
       }
     }
 
-    // Some firmware versions have a simpler structure
+    // Structure 2: data.scenarios[] (simpler)
     if (scenarios.length === 0) {
       const simpleScenarios = json?.data?.scenarios || json?.data?.configuration?.scenarios || [];
       for (const scenario of simpleScenarios) {
@@ -410,9 +433,21 @@ async function queryObjectAnalyticsScenarios(
       }
     }
 
-    // Debug: if no scenarios found, log the response structure
+    // Structure 3: data.cameras[].scenarios[] (some firmware)
     if (scenarios.length === 0) {
-      console.log(`[Analytics] AOA getConfiguration on ${ipAddress}: response keys = ${JSON.stringify(Object.keys(json?.data || json || {}))}`);
+      const cams = json?.data?.cameras || [];
+      for (const cam of cams) {
+        for (const scenario of (cam.scenarios || [])) {
+          scenarios.push({
+            name: scenario.name || "Unnamed",
+            type: scenario.type || "unknown",
+          });
+        }
+      }
+    }
+
+    if (scenarios.length === 0) {
+      console.log(`[Analytics] AOA getConfiguration on ${ipAddress}: no scenarios in response. Top-level keys: ${JSON.stringify(Object.keys(json || {}))}. Data keys: ${JSON.stringify(Object.keys(json?.data || {}))}`);
     }
 
     return scenarios;
