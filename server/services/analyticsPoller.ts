@@ -239,8 +239,6 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
  * Poll all cameras with analytics capabilities
  */
 async function pollAllCameraAnalytics(): Promise<void> {
-  console.log("[Analytics] Starting analytics polling cycle...");
-
   try {
     const allCameras = await db.select().from(cameras);
 
@@ -280,7 +278,15 @@ async function pollAllCameraAnalytics(): Promise<void> {
  * Start the analytics polling service.
  * Polls every 1 minute (configurable via ANALYTICS_POLL_INTERVAL env var).
  */
+let analyticsPollingStarted = false;
+
 export function startAnalyticsPolling() {
+  if (analyticsPollingStarted) {
+    console.log("[Analytics] Polling service already running, skipping duplicate start");
+    return;
+  }
+  analyticsPollingStarted = true;
+
   const intervalMinutes = parseInt(process.env.ANALYTICS_POLL_INTERVAL || "1", 10);
   console.log(`[Analytics] Initializing analytics polling service (every ${intervalMinutes} min)...`);
 
