@@ -256,23 +256,70 @@ async function queryInstalledApplications(
     );
     clearTimeout(timeoutId);
 
-    if (!response.ok) return [];
+    if (!response.ok) {
+      console.log(`[Analytics] applications/list.cgi on ${ipAddress}: HTTP ${response.status}`);
+      return [];
+    }
 
     const text = await response.text();
     const apps: Array<{ name: string; niceName: string; status: string; id?: string }> = [];
 
-    // Parse key=value format: each app block separated by blank lines
-    // Format: Name=app\nNiceName=Nice Name\nStatus=Running\n...
-    const blocks = text.split(/\n\s*\n/);
-    for (const block of blocks) {
-      const lines = block.trim().split("\n");
-      const entry: Record<string, string> = {};
-      for (const line of lines) {
-        const eqIdx = line.indexOf("=");
-        if (eqIdx > 0) {
-          entry[line.substring(0, eqIdx).trim().toLowerCase()] = line.substring(eqIdx + 1).trim();
+    // Try JSON format first (some newer firmware with ?type=json or default JSON)
+    const trimmed = text.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        const json = JSON.parse(trimmed);
+        const appList = json.data?.applications || json.applications || (Array.isArray(json) ? json : []);
+        for (const app of appList) {
+          apps.push({
+            name: app.name || app.Name || "",
+            niceName: app.niceName || app.NiceName || app.name || app.Name || "",
+            status: app.status || app.Status || "Unknown",
+            id: app.applicationID || app.ApplicationID || app.id,
+          });
+        }
+        if (apps.length > 0) return apps;
+      } catch {
+        // Not valid JSON, continue to text parsing
+      }
+    }
+
+    // Parse Axis VAPIX ApplicationN.Key=Value format:
+    // Application1.Name=loiteringguard
+    // Application1.NiceName=AXIS Loitering Guard
+    // Application1.Status=Running
+    // Application1.ApplicationID=143440
+    // Application2.Name=objectanalytics
+    // ...
+    const appMap = new Map<string, Record<string, string>>();
+    for (const line of text.split(/\r?\n/)) {
+      const t = line.trim();
+      if (!t || !t.includes("=")) continue;
+      const eqIdx = t.indexOf("=");
+      const fullKey = t.substring(0, eqIdx).trim();
+      const value = t.substring(eqIdx + 1).trim();
+
+      // Match "ApplicationN.Key" pattern
+      const prefixMatch = fullKey.match(/^Application(\d+)\.(.+)$/i);
+      if (prefixMatch) {
+        const appNum = prefixMatch[1];
+        const key = prefixMatch[2].toLowerCase();
+        if (!appMap.has(appNum)) appMap.set(appNum, {});
+        appMap.get(appNum)![key] = value;
+      } else {
+        // Also handle simple "Key=Value" blocks (separated by blank lines)
+        // as a fallback for non-numbered format
+        const simpleKey = fullKey.toLowerCase();
+        if (simpleKey === "name" && !appMap.has("simple_" + apps.length)) {
+          appMap.set("simple_" + apps.length, { [simpleKey]: value });
+        } else if (appMap.size > 0) {
+          const lastEntry = Array.from(appMap.values()).pop();
+          if (lastEntry) lastEntry[simpleKey] = value;
         }
       }
+    }
+
+    for (const entry of appMap.values()) {
       if (entry.name) {
         apps.push({
           name: entry.name,
@@ -282,8 +329,15 @@ async function queryInstalledApplications(
         });
       }
     }
+
+    // Debug: log raw response if no apps parsed
+    if (apps.length === 0 && text.trim().length > 0) {
+      console.log(`[Analytics] applications/list.cgi raw response (first 500 chars): ${text.substring(0, 500)}`);
+    }
+
     return apps;
-  } catch {
+  } catch (err: any) {
+    console.log(`[Analytics] applications/list.cgi error on ${ipAddress}: ${err.message}`);
     return [];
   }
 }
@@ -318,7 +372,14 @@ async function queryObjectAnalyticsScenarios(
 
     if (!response.ok) return [];
 
-    const json = await response.json();
+    const text = await response.text();
+    let json: any;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      console.log(`[Analytics] AOA getConfiguration on ${ipAddress}: non-JSON response (first 300 chars): ${text.substring(0, 300)}`);
+      return [];
+    }
 
     // Extract scenarios from the configuration
     const scenarios: Array<{ name: string; type: string }> = [];
@@ -349,8 +410,14 @@ async function queryObjectAnalyticsScenarios(
       }
     }
 
+    // Debug: if no scenarios found, log the response structure
+    if (scenarios.length === 0) {
+      console.log(`[Analytics] AOA getConfiguration on ${ipAddress}: response keys = ${JSON.stringify(Object.keys(json?.data || json || {}))}`);
+    }
+
     return scenarios;
-  } catch {
+  } catch (err: any) {
+    console.log(`[Analytics] AOA getConfiguration error on ${ipAddress}: ${err.message}`);
     return [];
   }
 }
@@ -370,16 +437,27 @@ async function probeEndpoint(
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
+    // Use GET instead of HEAD - many Axis ACAP endpoints don't support HEAD
     const response = await authFetch(
       `http://${ipAddress}${path}`,
       username,
       password,
-      { method: "HEAD", signal: controller.signal }
+      { method: "GET", signal: controller.signal }
     );
     clearTimeout(timeoutId);
-    return response.ok || response.status === 405 || response.status === 200;
-  } catch {
+    const found = response.ok || response.status === 405;
+    if (found) {
+      console.log(`[Analytics] Endpoint probe ${path} on ${ipAddress}: found (HTTP ${response.status})`);
+    }
+    // 404 = not installed, 401 still means it exists (auth issue), 503 = exists but not ready
+    if (response.status === 401 || response.status === 503) {
+      console.log(`[Analytics] Endpoint probe ${path} on ${ipAddress}: exists but HTTP ${response.status}`);
+      return true;
+    }
+    return found;
+  } catch (err: any) {
     clearTimeout(timeoutId);
+    console.log(`[Analytics] Endpoint probe ${path} on ${ipAddress}: error - ${err.message}`);
     return false;
   }
 }
@@ -418,34 +496,63 @@ export async function probeAnalyticsCapabilities(
     objectAnalyticsScenarios: [],
   };
 
-  // Step 1: Query installed applications list (the most reliable source)
+  console.log(`[Analytics] Starting probe for ${ipAddress}...`);
+
+  // Step 1: Query installed applications list
   const apps = await queryInstalledApplications(ipAddress, username, password);
-  results.acapInstalled = apps
-    .filter((a) => a.status === "Running" || a.status === "Idle")
-    .map((a) => a.niceName);
 
-  console.log(`[Analytics] Installed ACAPs on ${ipAddress}: ${results.acapInstalled.join(", ") || "none found"}`);
+  if (apps.length > 0) {
+    console.log(`[Analytics] All ACAPs on ${ipAddress}: ${apps.map((a) => `${a.niceName}(${a.status})`).join(", ")}`);
 
-  // Map known ACAP names to capability flags
-  const appNames = apps.map((a) => a.name.toLowerCase());
-  const appNiceNames = apps.map((a) => a.niceName.toLowerCase());
-  const allNames = [...appNames, ...appNiceNames];
+    results.acapInstalled = apps
+      .filter((a) => {
+        const s = a.status.toLowerCase();
+        return s === "running" || s === "idle" || s === "stopped";
+      })
+      .map((a) => a.niceName);
 
-  const hasApp = (keywords: string[]): boolean =>
-    allNames.some((name) => keywords.some((kw) => name.includes(kw)));
+    // Map known ACAP names to capability flags
+    const allNames = apps.flatMap((a) => [a.name.toLowerCase(), a.niceName.toLowerCase()]);
 
-  if (hasApp(["peoplecounter", "people counter"])) results.peopleCount = true;
-  if (hasApp(["occupancy"])) results.occupancyEstimation = true;
-  if (hasApp(["crossline", "cross line"])) results.lineCrossing = true;
-  if (hasApp(["objectanalytics", "object analytics"])) results.objectAnalytics = true;
-  if (hasApp(["loitering", "loiteringguard"])) results.loiteringGuard = true;
-  if (hasApp(["fenceguard", "fence guard"])) results.fenceGuard = true;
-  if (hasApp(["motionguard", "motion guard"])) results.motionGuard = true;
+    const hasApp = (keywords: string[]): boolean =>
+      allNames.some((name) => keywords.some((kw) => name.includes(kw)));
 
-  // Step 2: Probe specific ACAP endpoints in parallel for cameras where app list may be incomplete
+    if (hasApp(["peoplecounter", "people counter", "people_counter"])) results.peopleCount = true;
+    if (hasApp(["occupancy", "occupancy estimator"])) results.occupancyEstimation = true;
+    if (hasApp(["crossline", "cross line", "linecrossing"])) results.lineCrossing = true;
+    if (hasApp(["objectanalytics", "object analytics", "object_analytics", "aoa"])) results.objectAnalytics = true;
+    if (hasApp(["loitering", "loiteringguard", "loitering_guard"])) results.loiteringGuard = true;
+    if (hasApp(["fenceguard", "fence guard", "fence_guard"])) results.fenceGuard = true;
+    if (hasApp(["motionguard", "motion guard", "motion_guard", "vmd"])) results.motionGuard = true;
+  }
+
+  console.log(`[Analytics] Installed ACAPs on ${ipAddress}: ${results.acapInstalled.join(", ") || "none found (app list empty or unavailable)"}`);
+
+  // Step 2: Always try AOA directly via POST - this is the most common analytics platform
+  // and the most reliable way to detect it (app list can fail on some firmware)
+  console.log(`[Analytics] Probing AOA on ${ipAddress}...`);
+  const scenarios = await queryObjectAnalyticsScenarios(ipAddress, username, password);
+  if (scenarios.length > 0) {
+    results.objectAnalytics = true;
+    results.objectAnalyticsScenarios = scenarios;
+    console.log(`[Analytics] AOA scenarios on ${ipAddress}: ${scenarios.map((s) => `${s.name}(${s.type})`).join(", ")}`);
+
+    // Infer capabilities from scenario types
+    for (const scenario of scenarios) {
+      const type = scenario.type.toLowerCase();
+      if (type.includes("crossline") || type.includes("line_crossing") || type.includes("crossing")) results.lineCrossing = true;
+      if (type.includes("occupancy") || type.includes("object_in_area")) results.occupancyEstimation = true;
+      if (type.includes("people") || type.includes("counting")) results.peopleCount = true;
+    }
+  } else {
+    console.log(`[Analytics] AOA on ${ipAddress}: no scenarios found or not available`);
+  }
+
+  // Step 3: Probe remaining ACAP endpoints in parallel for anything not yet detected
+  console.log(`[Analytics] Probing ACAP endpoints on ${ipAddress}...`);
   const [pcAvail, occAvail, oaAvail, lgAvail, fgAvail, mgAvail] = await Promise.all([
-    !results.peopleCount ? probeEndpoint(ipAddress, username, password, "/local/peoplecounter/.api") : Promise.resolve(true),
-    !results.occupancyEstimation ? probeEndpoint(ipAddress, username, password, "/local/occupancy/.api") : Promise.resolve(true),
+    !results.peopleCount ? probeEndpoint(ipAddress, username, password, "/local/peoplecounter/query.cgi") : Promise.resolve(true),
+    !results.occupancyEstimation ? probeEndpoint(ipAddress, username, password, "/local/occupancy/.api?method=getOccupancy") : Promise.resolve(true),
     !results.objectAnalytics ? probeEndpoint(ipAddress, username, password, "/local/objectanalytics/.api") : Promise.resolve(true),
     !results.loiteringGuard ? probeEndpoint(ipAddress, username, password, "/local/loiteringguard/.api") : Promise.resolve(true),
     !results.fenceGuard ? probeEndpoint(ipAddress, username, password, "/local/fenceguard/.api") : Promise.resolve(true),
@@ -459,17 +566,18 @@ export async function probeAnalyticsCapabilities(
   if (fgAvail) results.fenceGuard = true;
   if (mgAvail) results.motionGuard = true;
 
-  // Step 3: If Object Analytics is available, query configured scenarios
-  if (results.objectAnalytics) {
-    results.objectAnalyticsScenarios = await queryObjectAnalyticsScenarios(ipAddress, username, password);
-    console.log(`[Analytics] AOA scenarios on ${ipAddress}: ${results.objectAnalyticsScenarios.map((s) => `${s.name}(${s.type})`).join(", ") || "none configured"}`);
-
-    // Infer capabilities from scenario types
-    for (const scenario of results.objectAnalyticsScenarios) {
-      const type = scenario.type.toLowerCase();
-      if (type.includes("crossline") || type.includes("line_crossing")) results.lineCrossing = true;
-      if (type.includes("occupancy")) results.occupancyEstimation = true;
-      if (type.includes("people") || type.includes("counting")) results.peopleCount = true;
+  // If AOA was found by endpoint probe but we haven't queried scenarios yet, do it now
+  if (results.objectAnalytics && results.objectAnalyticsScenarios.length === 0) {
+    const lateScenarios = await queryObjectAnalyticsScenarios(ipAddress, username, password);
+    if (lateScenarios.length > 0) {
+      results.objectAnalyticsScenarios = lateScenarios;
+      console.log(`[Analytics] AOA scenarios (late probe) on ${ipAddress}: ${lateScenarios.map((s) => `${s.name}(${s.type})`).join(", ")}`);
+      for (const scenario of lateScenarios) {
+        const type = scenario.type.toLowerCase();
+        if (type.includes("crossline") || type.includes("line_crossing") || type.includes("crossing")) results.lineCrossing = true;
+        if (type.includes("occupancy") || type.includes("object_in_area")) results.occupancyEstimation = true;
+        if (type.includes("people") || type.includes("counting")) results.peopleCount = true;
+      }
     }
   }
 
@@ -483,7 +591,7 @@ export async function probeAnalyticsCapabilities(
     results.motionGuard && "MotionGuard",
   ].filter(Boolean);
 
-  console.log(`[Analytics] Probe result for ${ipAddress}: ${detected.join(", ") || "no analytics"}`);
+  console.log(`[Analytics] Probe complete for ${ipAddress}: ${detected.join(", ") || "no analytics detected"}`);
 
   return results;
 }
