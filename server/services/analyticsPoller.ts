@@ -183,10 +183,15 @@ export async function probeAnalyticsCapabilities(
 async function pollCameraAnalytics(camera: any): Promise<void> {
   const password = await decryptPassword(camera.encryptedPassword);
   const caps = camera.capabilities as CameraCapabilities | null;
+  const enabled = caps?.enabledAnalytics;
   const events: Array<{ eventType: string; value: number; metadata?: Record<string, any> }> = [];
 
+  // Check if analytic is both available AND enabled (undefined enabledAnalytics = legacy, allow)
+  const pcEnabled = caps?.analytics?.peopleCount && enabled?.peopleCount !== false;
+  const occEnabled = caps?.analytics?.occupancyEstimation && enabled?.occupancyEstimation !== false;
+
   // Try People Counter
-  if (caps?.analytics?.peopleCount) {
+  if (pcEnabled) {
     try {
       const data = await queryPeopleCounter(camera.ipAddress, camera.username, password);
       events.push(
@@ -196,7 +201,7 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
       );
     } catch (err: any) {
       // People counter failed, try standalone occupancy
-      if (caps?.analytics?.occupancyEstimation) {
+      if (occEnabled) {
         try {
           const occ = await queryOccupancy(camera.ipAddress, camera.username, password);
           events.push({ eventType: "occupancy", value: occ });
@@ -205,8 +210,8 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
         }
       }
     }
-  } else if (caps?.analytics?.occupancyEstimation) {
-    // Only occupancy estimator available
+  } else if (occEnabled) {
+    // Only occupancy estimator available and enabled
     try {
       const occ = await queryOccupancy(camera.ipAddress, camera.username, password);
       events.push({ eventType: "occupancy", value: occ });
@@ -239,12 +244,14 @@ async function pollAllCameraAnalytics(): Promise<void> {
   try {
     const allCameras = await db.select().from(cameras);
 
-    // Filter to cameras with analytics capability
+    // Filter to cameras with analytics available AND enabled
     const analyticsCameras = allCameras.filter((c) => {
       const caps = c.capabilities as CameraCapabilities | null;
+      const enabled = caps?.enabledAnalytics;
+      // Require both detected and not explicitly disabled (undefined = legacy allow)
       return (
-        caps?.analytics?.peopleCount === true ||
-        caps?.analytics?.occupancyEstimation === true
+        (caps?.analytics?.peopleCount === true && enabled?.peopleCount !== false) ||
+        (caps?.analytics?.occupancyEstimation === true && enabled?.occupancyEstimation !== false)
       );
     });
 

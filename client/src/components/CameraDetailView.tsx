@@ -2,7 +2,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import StatusIndicator, { CameraStatus } from "./StatusIndicator";
-import { Edit, Trash2, ArrowLeft, RefreshCw, Move, Mic, Camera as CameraIcon, Info } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Edit, Trash2, ArrowLeft, RefreshCw, Move, Mic, Camera as CameraIcon, Info, BarChart3 } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -54,6 +55,9 @@ interface CameraDetailViewProps {
   onDelete?: () => void;
   onDetectModel?: () => void;
   detectingModel?: boolean;
+  onProbeAnalytics?: () => void;
+  probingAnalytics?: boolean;
+  onToggleAnalytic?: (key: string, enabled: boolean) => void;
 }
 
 export default function CameraDetailView({
@@ -62,7 +66,10 @@ export default function CameraDetailView({
   onEdit,
   onDelete,
   onDetectModel,
-  detectingModel = false
+  detectingModel = false,
+  onProbeAnalytics,
+  probingAnalytics = false,
+  onToggleAnalytic,
 }: CameraDetailViewProps) {
   return (
     <div className="space-y-6" data-testid="camera-detail-view">
@@ -245,6 +252,144 @@ export default function CameraDetailView({
                 <Info className="w-4 h-4 text-muted-foreground mt-0.5" />
                 <p className="text-xs text-muted-foreground">
                   Click the refresh button above to detect model information
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Analytics Card */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <BarChart3 className="h-5 w-5" />
+                  Analytics
+                </CardTitle>
+                <CardDescription>Installed ACAP analytics and polling configuration</CardDescription>
+              </div>
+              {onProbeAnalytics && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={onProbeAnalytics}
+                        disabled={probingAnalytics}
+                      >
+                        <RefreshCw className={`h-4 w-4 ${probingAnalytics ? "animate-spin" : ""}`} />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Probe camera for analytics ACAPs</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* People Counter */}
+            <div className="flex justify-between items-center">
+              <div>
+                <span className="text-sm font-medium">People Counter</span>
+                <p className="text-xs text-muted-foreground">Count people entering and exiting</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {camera.capabilities?.analytics?.peopleCount ? (
+                  <>
+                    <Badge variant="outline" className="border-green-500 text-green-700 bg-green-50">
+                      Available
+                    </Badge>
+                    <Switch
+                      checked={camera.capabilities?.enabledAnalytics?.peopleCount ?? false}
+                      onCheckedChange={(checked) => onToggleAnalytic?.("peopleCount", checked)}
+                    />
+                  </>
+                ) : (
+                  <span className="text-xs text-muted-foreground">Not detected</span>
+                )}
+              </div>
+            </div>
+
+            {/* Occupancy Estimator */}
+            <div className="flex justify-between items-center">
+              <div>
+                <span className="text-sm font-medium">Occupancy Estimator</span>
+                <p className="text-xs text-muted-foreground">Real-time room occupancy count</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {camera.capabilities?.analytics?.occupancyEstimation ? (
+                  <>
+                    <Badge variant="outline" className="border-green-500 text-green-700 bg-green-50">
+                      Available
+                    </Badge>
+                    <Switch
+                      checked={camera.capabilities?.enabledAnalytics?.occupancyEstimation ?? false}
+                      onCheckedChange={(checked) => onToggleAnalytic?.("occupancyEstimation", checked)}
+                    />
+                  </>
+                ) : (
+                  <span className="text-xs text-muted-foreground">Not detected</span>
+                )}
+              </div>
+            </div>
+
+            {/* Line Crossing */}
+            <div className="flex justify-between items-center">
+              <div>
+                <span className="text-sm font-medium">Line Crossing</span>
+                <p className="text-xs text-muted-foreground">Directional line crossing detection</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {camera.capabilities?.analytics?.lineCrossing ? (
+                  <>
+                    <Badge variant="outline" className="border-green-500 text-green-700 bg-green-50">
+                      Available
+                    </Badge>
+                    <Switch
+                      checked={camera.capabilities?.enabledAnalytics?.lineCrossing ?? false}
+                      onCheckedChange={(checked) => onToggleAnalytic?.("lineCrossing", checked)}
+                    />
+                  </>
+                ) : (
+                  <span className="text-xs text-muted-foreground">Not detected</span>
+                )}
+              </div>
+            </div>
+
+            {/* Motion Detection (read-only, from VAPIX properties) */}
+            {camera.capabilities?.analytics?.motionDetection && (
+              <div className="flex justify-between items-center">
+                <div>
+                  <span className="text-sm font-medium">Motion Detection</span>
+                  <p className="text-xs text-muted-foreground">Built-in motion detection</p>
+                </div>
+                <Badge variant="secondary">Built-in</Badge>
+              </div>
+            )}
+
+            {/* Tampering Detection (read-only, from VAPIX properties) */}
+            {camera.capabilities?.analytics?.tampering && (
+              <div className="flex justify-between items-center">
+                <div>
+                  <span className="text-sm font-medium">Tampering Detection</span>
+                  <p className="text-xs text-muted-foreground">Camera tampering alerts</p>
+                </div>
+                <Badge variant="secondary">Built-in</Badge>
+              </div>
+            )}
+
+            {/* Hint if nothing detected */}
+            {!camera.capabilities?.analytics?.peopleCount &&
+             !camera.capabilities?.analytics?.occupancyEstimation &&
+             !camera.capabilities?.analytics?.lineCrossing &&
+             !camera.capabilities?.analytics?.motionDetection &&
+             !camera.capabilities?.analytics?.tampering && (
+              <div className="flex items-start gap-2 pt-2 border-t">
+                <Info className="w-4 h-4 text-muted-foreground mt-0.5" />
+                <p className="text-xs text-muted-foreground">
+                  No analytics detected. Click the refresh button to probe for installed analytics ACAPs.
                 </p>
               </div>
             )}

@@ -28,6 +28,7 @@ export default function CameraDetail() {
   const queryClient = useQueryClient();
   const cameraId = params.id;
   const [detectingModel, setDetectingModel] = useState(false);
+  const [probingAnalytics, setProbingAnalytics] = useState(false);
 
   const { data: camera, isLoading: cameraLoading, error: cameraError } = useQuery<Camera>({
     queryKey: ["/api/cameras", cameraId],
@@ -294,6 +295,51 @@ export default function CameraDetail() {
     }
   };
 
+  const handleProbeAnalytics = async () => {
+    if (!cameraId) return;
+    setProbingAnalytics(true);
+    try {
+      const response = await fetch(`/api/cameras/${cameraId}/probe-analytics`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to probe analytics");
+      await queryClient.invalidateQueries({ queryKey: ["/api/cameras", cameraId] });
+      toast({
+        title: "Analytics Probed",
+        description: "Analytics capabilities have been updated.",
+      });
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Probe Failed",
+        description: "Could not probe analytics capabilities.",
+      });
+    } finally {
+      setProbingAnalytics(false);
+    }
+  };
+
+  const handleToggleAnalytic = async (key: string, enabled: boolean) => {
+    if (!cameraId) return;
+    try {
+      const response = await fetch(`/api/cameras/${cameraId}/analytics-config`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ [key]: enabled }),
+      });
+      if (!response.ok) throw new Error("Failed to update");
+      await queryClient.invalidateQueries({ queryKey: ["/api/cameras", cameraId] });
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Update Failed",
+        description: "Could not update analytics configuration.",
+      });
+    }
+  };
+
   const cameraDetails = {
     id: camera.id,
     name: camera.name,
@@ -342,6 +388,9 @@ export default function CameraDetail() {
         onDelete={handleDelete}
         onDetectModel={handleDetectModel}
         detectingModel={detectingModel}
+        onProbeAnalytics={handleProbeAnalytics}
+        probingAnalytics={probingAnalytics}
+        onToggleAnalytic={handleToggleAnalytic}
       />
 
       <UptimeChart

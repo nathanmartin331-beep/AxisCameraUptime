@@ -8,6 +8,7 @@ import { detectionCache } from "./services/detectionCache";
 import { eq } from "drizzle-orm";
 import { authFetch } from "./services/digestAuth";
 import { backfillFromUptimeSeconds, backfillFromSystemLog } from "./services/historyBackfill";
+import { probeAnalyticsCapabilities } from "./services/analyticsPoller";
 
 interface SystemReadyResponse {
   systemReady: boolean;
@@ -403,6 +404,28 @@ async function checkAllCameras() {
                   .where(eq(cameras.id, camera.id));
 
                 console.log(`[Monitor] ✓ Detected model for ${camera.name}: ${detection.model} (${detection.series}-series)`);
+
+                // Also probe analytics capabilities (non-blocking)
+                try {
+                  const analyticsProbe = await probeAnalyticsCapabilities(
+                    camera.ipAddress,
+                    camera.username,
+                    decryptedPassword
+                  );
+                  if (analyticsProbe.peopleCount || analyticsProbe.occupancyEstimation || analyticsProbe.lineCrossing) {
+                    await storage.updateCameraCapabilities(camera.id, {
+                      analytics: {
+                        ...detection.capabilities?.analytics,
+                        peopleCount: analyticsProbe.peopleCount,
+                        occupancyEstimation: analyticsProbe.occupancyEstimation,
+                        lineCrossing: analyticsProbe.lineCrossing,
+                      },
+                    }, true);
+                    console.log(`[Monitor] ✓ Analytics probe for ${camera.name}: PC=${analyticsProbe.peopleCount} OCC=${analyticsProbe.occupancyEstimation} LC=${analyticsProbe.lineCrossing}`);
+                  }
+                } catch (probeErr: any) {
+                  console.warn(`[Monitor] ⚠ Analytics probe failed for ${camera.name}: ${probeErr.message}`);
+                }
               })
               .catch((err) => {
                 console.warn(`[Monitor] ⚠ Model detection failed for ${camera.name}: ${err.message}`);

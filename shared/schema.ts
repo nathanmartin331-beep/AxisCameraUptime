@@ -95,6 +95,13 @@ export interface CameraCapabilities {
     acapInstalled?: string[];
   };
 
+  // User-enabled analytics (what to actively poll)
+  enabledAnalytics?: {
+    peopleCount?: boolean;
+    occupancyEstimation?: boolean;
+    lineCrossing?: boolean;
+  };
+
   // System
   system?: {
     architecture?: string;       // "armv7hf"

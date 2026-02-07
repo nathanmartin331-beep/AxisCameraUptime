@@ -379,6 +379,72 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // POST /api/cameras/:id/probe-analytics - Probe for installed analytics ACAPs
+  app.post("/api/cameras/:id/probe-analytics", requireAuth, async (req: any, res) => {
+    try {
+      const userId = getUserId(req);
+      const cameraId = req.params.id;
+
+      const camera = await storage.getCameraById(cameraId);
+      if (!camera) return res.status(404).json({ message: "Camera not found" });
+      if (camera.userId !== userId) return res.status(403).json({ message: "Forbidden" });
+
+      const { decryptPassword } = await import("./encryption");
+      const password = await decryptPassword(camera.encryptedPassword);
+
+      const { probeAnalyticsCapabilities } = await import("./services/analyticsPoller");
+      const probeResult = await probeAnalyticsCapabilities(camera.ipAddress, camera.username, password);
+
+      // Merge probe results into capabilities.analytics
+      const existingAnalytics = (camera.capabilities as any)?.analytics || {};
+      await storage.updateCameraCapabilities(cameraId, {
+        analytics: {
+          ...existingAnalytics,
+          peopleCount: probeResult.peopleCount,
+          occupancyEstimation: probeResult.occupancyEstimation,
+          lineCrossing: probeResult.lineCrossing,
+        },
+      }, true);
+
+      res.json({ success: true, analytics: probeResult });
+    } catch (error: any) {
+      console.error("Analytics probe error:", error);
+      res.status(500).json({ success: false, message: error.message || "Failed to probe analytics" });
+    }
+  });
+
+  // PATCH /api/cameras/:id/analytics-config - Enable/disable analytics polling
+  app.patch("/api/cameras/:id/analytics-config", requireAuth, async (req: any, res) => {
+    try {
+      const userId = getUserId(req);
+      const cameraId = req.params.id;
+
+      const camera = await storage.getCameraById(cameraId);
+      if (!camera) return res.status(404).json({ message: "Camera not found" });
+      if (camera.userId !== userId) return res.status(403).json({ message: "Forbidden" });
+
+      const configSchema = z.object({
+        peopleCount: z.boolean().optional(),
+        occupancyEstimation: z.boolean().optional(),
+        lineCrossing: z.boolean().optional(),
+      });
+
+      const enabledAnalytics = configSchema.parse(req.body);
+
+      await storage.updateCameraCapabilities(cameraId, {
+        enabledAnalytics,
+      }, true);
+
+      res.json({ success: true, enabledAnalytics });
+    } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Analytics config error:", error);
+      res.status(500).json({ message: error.message || "Failed to update analytics config" });
+    }
+  });
+
   // GET /api/cameras/:id/capabilities - Get camera capabilities
   app.get("/api/cameras/:id/capabilities", requireAuth, async (req: any, res) => {
     try {
