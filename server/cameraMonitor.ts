@@ -16,6 +16,10 @@ import type { InsertUptimeEvent } from "@shared/schema";
 const POLL_CONCURRENCY = parseInt(process.env.POLL_CONCURRENCY || "25", 10);
 const limit = pLimit(POLL_CONCURRENCY);
 
+// Cache the VAPIX protocol variant per camera IP to avoid redundant GET→POST retries.
+// "json" = modern JSON POST API, "legacy" = key=value GET, "param" = param.cgi fallback
+const protocolCache = new Map<string, "json" | "legacy" | "param">();
+
 interface SystemReadyResponse {
   systemReady: boolean;
   uptime: number;
@@ -113,6 +117,15 @@ async function pollCamera(
   password: string,
   timeout: number = 5000
 ): Promise<SystemReadyResponse> {
+  // Fast path: if we already know this camera's protocol, skip discovery
+  const knownProtocol = protocolCache.get(ipAddress);
+  if (knownProtocol === "json") {
+    return await pollCameraJsonApi(ipAddress, username, password, timeout);
+  }
+  if (knownProtocol === "param") {
+    return await pollCameraLegacyFallback(ipAddress, username, password, timeout);
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
@@ -134,7 +147,8 @@ async function pollCamera(
     // Check HTTP status
     if (response.status === 404) {
       // Older firmware without systemready.cgi — fall back to param.cgi health check
-      console.log(`[VAPIX] No systemready.cgi on ${ipAddress}, falling back to param.cgi`);
+      console.log(`[VAPIX] No systemready.cgi on ${ipAddress}, caching param.cgi fallback`);
+      protocolCache.set(ipAddress, "param");
       return await pollCameraLegacyFallback(ipAddress, username, password, timeout);
     }
 
@@ -143,18 +157,17 @@ async function pollCamera(
     }
 
     const text = await response.text();
-    
-    // Log raw response for debugging (first time only per camera)
-    if (process.env.NODE_ENV === "development") {
-      console.log(`[VAPIX] Raw response from ${ipAddress}:\n${text.substring(0, 500)}`);
-    }
 
-    // Detect JSON response (modern VAPIX API v1.4+)
+    // Detect JSON response (modern VAPIX API v1.2+/v1.4+)
     const trimmed = text.trim();
     if (trimmed.startsWith('{')) {
-      console.log(`[VAPIX] Detected JSON API on ${ipAddress}, retrying with JSON POST`);
+      console.log(`[VAPIX] Detected JSON API on ${ipAddress}, caching for future polls`);
+      protocolCache.set(ipAddress, "json");
       return await pollCameraJsonApi(ipAddress, username, password, timeout);
     }
+
+    // This is a legacy key=value camera — cache it
+    protocolCache.set(ipAddress, "legacy");
 
     // Validate response contains expected legacy VAPIX format
     if (!text.includes("systemready=") && !text.includes("=")) {
