@@ -52,10 +52,8 @@ function updateUserSession(
 
 async function upsertUser(claims: any) {
   await storage.upsertUser(claims["email"], {
-    id: claims["sub"],
     firstName: claims["first_name"],
     lastName: claims["last_name"],
-    profileImageUrl: claims["profile_image_url"],
   });
 }
 

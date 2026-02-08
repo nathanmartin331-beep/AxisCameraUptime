@@ -17,6 +17,7 @@ import {
   type CameraGroupMember,
   type AnalyticsEvent,
   type InsertAnalyticsEvent,
+  type CameraCapabilities,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, gte, lte, sql, isNull } from "drizzle-orm";
@@ -256,7 +257,7 @@ export class DatabaseStorage implements IStorage {
 
   // Camera operations
   async createCamera(camera: InsertCamera): Promise<Camera> {
-    const [newCamera] = await db.insert(cameras).values(camera).returning();
+    const [newCamera] = await db.insert(cameras).values(camera as any).returning();
     return newCamera;
   }
 
@@ -279,7 +280,7 @@ export class DatabaseStorage implements IStorage {
   ): Promise<Camera | undefined> {
     const [updated] = await db
       .update(cameras)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...data, updatedAt: new Date() } as any)
       .where(eq(cameras.id, id))
       .returning();
     return updated;
@@ -366,7 +367,7 @@ export class DatabaseStorage implements IStorage {
       const [camera] = await db
         .select({
           model: cameras.model,
-          modelDetectedAt: cameras.modelDetectedAt,
+          detectedAt: cameras.detectedAt,
           capabilities: cameras.capabilities,
         })
         .from(cameras)
@@ -378,8 +379,8 @@ export class DatabaseStorage implements IStorage {
 
       return {
         model: camera.model,
-        modelDetectedAt: camera.modelDetectedAt || new Date(),
-        capabilities: camera.capabilities || {},
+        modelDetectedAt: camera.detectedAt || new Date(),
+        capabilities: (camera.capabilities as Record<string, any>) || {},
       };
     } catch (error) {
       console.error(`Error getting camera model for ${cameraId}:`, error);
@@ -439,7 +440,7 @@ export class DatabaseStorage implements IStorage {
       const [updated] = await db
         .update(cameras)
         .set({
-          capabilities: finalCapabilities,
+          capabilities: finalCapabilities as CameraCapabilities,
           updatedAt: new Date(),
         })
         .where(eq(cameras.id, cameraId))

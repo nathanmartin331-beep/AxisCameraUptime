@@ -331,7 +331,7 @@ async function queryInstalledApplications(
       }
     }
 
-    for (const entry of appMap.values()) {
+    for (const entry of Array.from(appMap.values())) {
       if (entry.name) {
         apps.push({
           name: entry.name,

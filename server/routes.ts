@@ -31,15 +31,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Filter by model
       if (model && typeof model === 'string') {
-        cameras = await storage.getCamerasByModel(userId, model);
+        cameras = await storage.getCamerasByModel(model, userId);
       }
       // Filter by PTZ capability
       else if (hasPTZ === 'true') {
-        cameras = await storage.getCamerasByCapability(userId, 'hasPTZ');
+        cameras = await storage.getCamerasByCapability('hasPTZ', undefined, userId);
       }
       // Filter by audio capability
       else if (hasAudio === 'true') {
-        cameras = await storage.getCamerasByCapability(userId, 'hasAudio');
+        cameras = await storage.getCamerasByCapability('hasAudio', undefined, userId);
       }
       // Default: return all cameras
       else {

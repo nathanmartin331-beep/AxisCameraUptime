@@ -4,7 +4,7 @@
  * This module extends the DatabaseStorage class with model-related methods.
  *
  * PREREQUISITES:
- * - Schema must be updated with model, modelDetectedAt, and capabilities fields
+ * - Schema must be updated with model, detectedAt, and capabilities fields
  * - See: docs/storage-model-extension-plan.md
  *
  * INTEGRATION:
@@ -74,7 +74,7 @@ export class ModelStorageMethods {
     try {
       const updateData: any = {
         model: modelData.model,
-        modelDetectedAt: new Date(),
+        detectedAt: new Date(),
         updatedAt: new Date(),
       };
 
@@ -113,7 +113,7 @@ export class ModelStorageMethods {
       const [camera] = await db
         .select({
           model: cameras.model,
-          modelDetectedAt: cameras.modelDetectedAt,
+          detectedAt: cameras.detectedAt,
           capabilities: cameras.capabilities,
         })
         .from(cameras)
@@ -125,8 +125,8 @@ export class ModelStorageMethods {
 
       return {
         model: camera.model,
-        modelDetectedAt: camera.modelDetectedAt || new Date(),
-        capabilities: camera.capabilities || {},
+        modelDetectedAt: camera.detectedAt || new Date(),
+        capabilities: (camera.capabilities as Record<string, any>) || {},
       };
     } catch (error) {
       console.error(`Error getting camera model for ${cameraId}:`, error);
@@ -216,7 +216,7 @@ export class ModelStorageMethods {
         .set({
           capabilities: finalCapabilities,
           updatedAt: new Date(),
-        })
+        } as any)
         .where(eq(cameras.id, cameraId))
         .returning();
 

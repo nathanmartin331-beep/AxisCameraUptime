@@ -73,7 +73,7 @@ export default function Groups() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: async (groupId: number) => {
+    mutationFn: async (groupId: string) => {
       return await apiRequest("DELETE", `/api/groups/${groupId}`);
     },
     onSuccess: () => {
@@ -125,7 +125,7 @@ export default function Groups() {
     }
   };
 
-  const handleCardClick = (groupId: number) => {
+  const handleCardClick = (groupId: string) => {
     setLocation(`/groups/${groupId}`);
   };
 
