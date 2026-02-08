@@ -28,7 +28,7 @@ export interface Camera {
   capabilities?: Record<string, any>;
 
   // Metadata
-  modelDetectedAt?: string;
+  detectedAt?: string;
 }
 
 /**

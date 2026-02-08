@@ -42,7 +42,7 @@ export interface Camera {
   maxFramerate?: number;
   numberOfViews?: number;
   capabilities?: Record<string, any>;
-  modelDetectedAt?: string;
+  detectedAt?: string;
 }
 
 interface CameraTableProps {

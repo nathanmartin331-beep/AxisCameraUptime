@@ -5,39 +5,98 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/hooks/useAuth";
-import { Bell, Clock, Database, User, Lock, AlertTriangle } from "lucide-react";
-import { useState } from "react";
+import { Bell, Clock, Database, User, Lock, AlertTriangle, Loader2 } from "lucide-react";
+import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+
+interface UserSettingsData {
+  id: string;
+  userId: string;
+  pollingInterval: number | null;
+  dataRetentionDays: number | null;
+  emailNotifications: boolean | null;
+}
 
 export default function Settings() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [pollingInterval, setPollingInterval] = useState("5");
-  const [emailNotifications, setEmailNotifications] = useState(true);
-  const [dataRetention, setDataRetention] = useState("365");
-  
+  const [emailNotifications, setEmailNotifications] = useState(false);
+  const [dataRetention, setDataRetention] = useState("90");
+  const [isSaving, setIsSaving] = useState(false);
+  const [isCleaningUp, setIsCleaningUp] = useState(false);
+
   // Password change state
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isChangingPassword, setIsChangingPassword] = useState(false);
 
-  const handleSaveSettings = () => {
-    toast({
-      title: "Settings Saved",
-      description: "Your preferences have been updated",
-    });
+  // Load settings from API
+  const { data: settings, isLoading: settingsLoading } = useQuery<UserSettingsData>({
+    queryKey: ["/api/settings"],
+  });
+
+  // Sync local state when settings load
+  useEffect(() => {
+    if (settings) {
+      setPollingInterval(String(settings.pollingInterval ?? 5));
+      setEmailNotifications(settings.emailNotifications ?? false);
+      setDataRetention(String(settings.dataRetentionDays ?? 90));
+    }
+  }, [settings]);
+
+  const handleSaveSettings = async () => {
+    setIsSaving(true);
+    try {
+      await apiRequest("PATCH", "/api/settings", {
+        pollingInterval: parseInt(pollingInterval),
+        dataRetentionDays: parseInt(dataRetention),
+        emailNotifications,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      toast({
+        title: "Settings Saved",
+        description: "Your preferences have been updated",
+      });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Failed to Save Settings",
+        description: error.message || "Please try again",
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleRunCleanup = async () => {
+    setIsCleaningUp(true);
+    try {
+      const response = await apiRequest("POST", "/api/admin/cleanup");
+      const data = await response.json();
+      toast({
+        title: "Cleanup Complete",
+        description: data.message || "Old data has been removed",
+      });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Cleanup Failed",
+        description: error.message || "Please try again",
+      });
+    } finally {
+      setIsCleaningUp(false);
+    }
   };
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    console.log("Password change started");
-    
+
     if (newPassword !== confirmPassword) {
-      console.log("Password mismatch");
       toast({
         variant: "destructive",
         title: "Password Mismatch",
@@ -47,7 +106,6 @@ export default function Settings() {
     }
 
     if (newPassword.length < 8) {
-      console.log("Password too short");
       toast({
         variant: "destructive",
         title: "Weak Password",
@@ -57,28 +115,21 @@ export default function Settings() {
     }
 
     setIsChangingPassword(true);
-    console.log("Sending password change request...");
     try {
       const response = await apiRequest("POST", "/api/auth/change-password", {
         currentPassword,
         newPassword,
       });
-      console.log("Password change response received:", response);
-      
-      const data = await response.json();
-      console.log("Password change data:", data);
-
       toast({
         title: "Password Changed",
         description: "Your password has been updated successfully",
       });
-      
+
       // Clear form
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
     } catch (error: any) {
-      console.error("Password change error:", error);
       toast({
         variant: "destructive",
         title: "Failed to Change Password",
@@ -86,7 +137,6 @@ export default function Settings() {
       });
     } finally {
       setIsChangingPassword(false);
-      console.log("Password change completed (success or failure)");
     }
   };
 
@@ -102,7 +152,7 @@ export default function Settings() {
           <Alert variant="destructive">
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription>
-              <strong>Security Warning:</strong> You are using the default admin account with factory credentials. 
+              <strong>Security Warning:</strong> You are using the default admin account with factory credentials.
               Please change your password immediately using the form below.
             </AlertDescription>
           </Alert>
@@ -219,7 +269,7 @@ export default function Settings() {
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="polling-interval">Polling Interval (minutes)</Label>
-              <Select value={pollingInterval} onValueChange={setPollingInterval}>
+              <Select value={pollingInterval} onValueChange={setPollingInterval} disabled={settingsLoading}>
                 <SelectTrigger id="polling-interval" data-testid="select-polling-interval">
                   <SelectValue />
                 </SelectTrigger>
@@ -247,6 +297,7 @@ export default function Settings() {
                 id="email-notifications"
                 checked={emailNotifications}
                 onCheckedChange={setEmailNotifications}
+                disabled={settingsLoading}
                 data-testid="switch-email-notifications"
               />
             </div>
@@ -264,7 +315,7 @@ export default function Settings() {
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="data-retention">Data Retention (days)</Label>
-              <Select value={dataRetention} onValueChange={setDataRetention}>
+              <Select value={dataRetention} onValueChange={setDataRetention} disabled={settingsLoading}>
                 <SelectTrigger id="data-retention" data-testid="select-data-retention">
                   <SelectValue />
                 </SelectTrigger>
@@ -276,7 +327,7 @@ export default function Settings() {
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                How long to keep historical uptime data (default: 365 days)
+                How long to keep historical uptime data (default: 90 days)
               </p>
             </div>
 
@@ -284,17 +335,37 @@ export default function Settings() {
               <p className="text-sm text-muted-foreground mb-2">
                 Cleanup old data to free up database storage
               </p>
-              <Button variant="outline" data-testid="button-cleanup-data">
-                <Database className="w-4 h-4 mr-2" />
-                Run Cleanup
+              <Button
+                variant="outline"
+                onClick={handleRunCleanup}
+                disabled={isCleaningUp}
+                data-testid="button-cleanup-data"
+              >
+                {isCleaningUp ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Database className="w-4 h-4 mr-2" />
+                )}
+                {isCleaningUp ? "Cleaning up..." : "Run Cleanup"}
               </Button>
             </div>
           </CardContent>
         </Card>
 
         <div className="flex justify-end">
-          <Button onClick={handleSaveSettings} data-testid="button-save-settings">
-            Save Settings
+          <Button
+            onClick={handleSaveSettings}
+            disabled={isSaving || settingsLoading}
+            data-testid="button-save-settings"
+          >
+            {isSaving ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              "Save Settings"
+            )}
           </Button>
         </div>
       </div>

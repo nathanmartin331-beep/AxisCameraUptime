@@ -6,6 +6,7 @@ import {
   cameraGroups,
   cameraGroupMembers,
   analyticsEvents,
+  userSettings,
   type User,
   type InsertUser,
   type Camera,
@@ -18,6 +19,7 @@ import {
   type AnalyticsEvent,
   type InsertAnalyticsEvent,
   type CameraCapabilities,
+  type UserSettings,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, gte, lte, sql, isNull } from "drizzle-orm";
@@ -36,7 +38,7 @@ function sanitizeUser(user: User): SafeUser {
  */
 export interface CameraModelInfo {
   model: string;
-  modelDetectedAt: Date;
+  detectedAt: Date;
   capabilities: Record<string, any>;
 }
 
@@ -213,6 +215,13 @@ export interface IStorage {
     currentOccupancy: number;
     perCamera: Array<{ id: string; name: string; in: number; out: number; occupancy: number }>;
   }>;
+
+  // User settings operations
+  getUserSettings(userId: string): Promise<UserSettings>;
+  updateUserSettings(userId: string, settings: Partial<Pick<UserSettings, 'pollingInterval' | 'dataRetentionDays' | 'emailNotifications'>>): Promise<UserSettings>;
+
+  // Data retention cleanup
+  deleteOldUptimeEvents(beforeDate: Date): Promise<number>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -379,7 +388,7 @@ export class DatabaseStorage implements IStorage {
 
       return {
         model: camera.model,
-        modelDetectedAt: camera.detectedAt || new Date(),
+        detectedAt: camera.detectedAt || new Date(),
         capabilities: (camera.capabilities as Record<string, any>) || {},
       };
     } catch (error) {
@@ -857,6 +866,50 @@ export class DatabaseStorage implements IStorage {
       currentOccupancy: occupancyData.total,
       perCamera,
     };
+  }
+
+  // User settings operations
+  async getUserSettings(userId: string): Promise<UserSettings> {
+    const [existing] = await db
+      .select()
+      .from(userSettings)
+      .where(eq(userSettings.userId, userId));
+
+    if (existing) return existing;
+
+    // Create default settings for user
+    const [created] = await db
+      .insert(userSettings)
+      .values({ userId })
+      .returning();
+
+    return created;
+  }
+
+  async updateUserSettings(
+    userId: string,
+    settings: Partial<Pick<UserSettings, 'pollingInterval' | 'dataRetentionDays' | 'emailNotifications'>>
+  ): Promise<UserSettings> {
+    // Ensure settings row exists
+    await this.getUserSettings(userId);
+
+    const [updated] = await db
+      .update(userSettings)
+      .set({ ...settings, updatedAt: new Date() })
+      .where(eq(userSettings.userId, userId))
+      .returning();
+
+    return updated;
+  }
+
+  // Data retention cleanup
+  async deleteOldUptimeEvents(beforeDate: Date): Promise<number> {
+    const result = await db
+      .delete(uptimeEvents)
+      .where(lte(uptimeEvents.timestamp, beforeDate));
+
+    // SQLite returns changes count via result
+    return (result as any)?.changes ?? 0;
   }
 }
 

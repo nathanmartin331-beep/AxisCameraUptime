@@ -53,22 +53,59 @@ export default function Reports() {
     },
   });
 
+  // Fetch batch uptime data for CSV export
+  const { data: uptimeData } = useQuery<Array<{ cameraId: string; uptime: number; monitoredSince: string }>>({
+    queryKey: ["/api/cameras/uptime/batch", timeRange],
+    queryFn: async () => {
+      const response = await fetch(`/api/cameras/uptime/batch?days=${timeRange}`, {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to fetch uptime data");
+      return response.json();
+    },
+    enabled: cameras.length > 0,
+  });
+
+  // Build a lookup map from cameraId to uptime info
+  const uptimeLookup = useMemo(() => {
+    const map = new Map<string, { uptime: number; monitoredSince: string }>();
+    if (uptimeData) {
+      for (const entry of uptimeData) {
+        map.set(entry.cameraId, { uptime: entry.uptime, monitoredSince: entry.monitoredSince });
+      }
+    }
+    return map;
+  }, [uptimeData]);
+
   const handleExportCSV = () => {
     // Export only filtered cameras
     const camerasToExport = filteredCameras;
-    
+
+    // Helper to escape CSV fields that may contain commas or quotes
+    const escapeCSV = (val: string) => {
+      if (val.includes(",") || val.includes('"') || val.includes("\n")) {
+        return `"${val.replace(/"/g, '""')}"`;
+      }
+      return val;
+    };
+
     const csvContent = [
-      ["Camera Name", "IP Address", "Location", "Status", "Uptime %", "Last Seen"].join(","),
-      ...camerasToExport.map((camera) =>
-        [
-          camera.name,
+      ["Camera Name", "IP Address", "Location", "Status", "Uptime %", "Monitored Since"].join(","),
+      ...camerasToExport.map((camera) => {
+        const info = uptimeLookup.get(String(camera.id));
+        const uptimePct = info ? `${info.uptime.toFixed(1)}%` : "N/A";
+        const monitoredSince = info?.monitoredSince
+          ? format(new Date(info.monitoredSince), "yyyy-MM-dd HH:mm")
+          : "N/A";
+        return [
+          escapeCSV(camera.name),
           camera.ipAddress,
-          camera.location || "N/A",
+          escapeCSV(camera.location || "N/A"),
           camera.status,
-          "N/A",
-          "N/A"
-        ].join(",")
-      ),
+          uptimePct,
+          monitoredSince,
+        ].join(",");
+      }),
     ].join("\n");
 
     const blob = new Blob([csvContent], { type: "text/csv" });

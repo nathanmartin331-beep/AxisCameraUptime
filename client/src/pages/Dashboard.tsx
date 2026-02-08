@@ -101,7 +101,7 @@ function transformCamera(apiCamera: ApiCamera, uptimeMap: Map<string, number>): 
     hasAudio: apiCamera.hasAudio,
     numberOfViews: apiCamera.numberOfViews,
     capabilities: apiCamera.capabilities,
-    modelDetectedAt: apiCamera.detectedAt || undefined
+    detectedAt: apiCamera.detectedAt || undefined
   };
 }
 

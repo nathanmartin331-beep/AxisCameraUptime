@@ -411,7 +411,7 @@ export default function CameraDetail() {
     maxFramerate: camera.capabilities?.maxFramerate,
     numberOfViews: camera.numberOfViews ?? undefined,
     capabilities: camera.capabilities ?? undefined,
-    modelDetectedAt: camera.detectedAt ? new Date(camera.detectedAt).toISOString() : undefined,
+    detectedAt: camera.detectedAt ? new Date(camera.detectedAt).toISOString() : undefined,
   };
 
   const chartData = transformEventsToChartData();

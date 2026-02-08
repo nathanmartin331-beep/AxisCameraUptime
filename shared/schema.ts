@@ -329,3 +329,26 @@ export const insertAnalyticsEventSchema = createInsertSchema(analyticsEvents).om
 
 export type InsertAnalyticsEvent = z.infer<typeof insertAnalyticsEventSchema>;
 export type AnalyticsEvent = typeof analyticsEvents.$inferSelect;
+
+// User settings - per-user application preferences
+export const userSettings = sqliteTable("user_settings", {
+  id: text("id").primaryKey().$defaultFn(generateId),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" })
+    .unique(),
+  pollingInterval: integer("polling_interval").default(5),
+  dataRetentionDays: integer("data_retention_days").default(90),
+  emailNotifications: integer("email_notifications", { mode: "boolean" }).default(false),
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+});
+
+export const insertUserSettingsSchema = createInsertSchema(userSettings).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertUserSettings = z.infer<typeof insertUserSettingsSchema>;
+export type UserSettings = typeof userSettings.$inferSelect;

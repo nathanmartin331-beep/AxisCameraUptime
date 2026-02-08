@@ -53,7 +53,7 @@ interface CameraDetails {
       buildDate?: string;
     };
   };
-  modelDetectedAt?: string;
+  detectedAt?: string;
 }
 
 interface CameraDetailViewProps {
@@ -215,11 +215,11 @@ export default function CameraDetailView({
                 <span className="text-sm">{camera.capabilities.system.buildDate}</span>
               </div>
             )}
-            {camera.modelDetectedAt && (
+            {camera.detectedAt && (
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Detected</span>
                 <span className="text-sm">
-                  {new Date(camera.modelDetectedAt).toLocaleString('en-US', {
+                  {new Date(camera.detectedAt).toLocaleString('en-US', {
                     month: 'short',
                     day: 'numeric',
                     hour: '2-digit',

@@ -67,7 +67,7 @@ describe('ModelStorageMethods', () => {
 
       expect(result).toBeDefined();
       expect(result?.model).toBe('AXIS M3046-V');
-      expect(result?.modelDetectedAt).toBeInstanceOf(Date);
+      expect(result?.detectedAt).toBeInstanceOf(Date);
       expect(result?.capabilities).toMatchObject({
         ptz: false,
         audio: true,
@@ -82,7 +82,7 @@ describe('ModelStorageMethods', () => {
 
       expect(result).toBeDefined();
       expect(result?.model).toBe('AXIS P1455-LE');
-      expect(result?.modelDetectedAt).toBeInstanceOf(Date);
+      expect(result?.detectedAt).toBeInstanceOf(Date);
     });
 
     it('should handle non-existent camera ID', async () => {
@@ -117,7 +117,7 @@ describe('ModelStorageMethods', () => {
 
       expect(modelInfo).not.toBeNull();
       expect(modelInfo?.model).toBe('AXIS M3046-V');
-      expect(modelInfo?.modelDetectedAt).toBeInstanceOf(Date);
+      expect(modelInfo?.detectedAt).toBeInstanceOf(Date);
       expect(modelInfo?.capabilities).toMatchObject({
         ptz: false,
         audio: true,

@@ -20,7 +20,7 @@ import { eq, isNull, sql, desc } from "drizzle-orm";
  */
 export interface CameraModelInfo {
   model: string;
-  modelDetectedAt: Date;
+  detectedAt: Date;
   capabilities: Record<string, any>;
 }
 
@@ -125,7 +125,7 @@ export class ModelStorageMethods {
 
       return {
         model: camera.model,
-        modelDetectedAt: camera.detectedAt || new Date(),
+        detectedAt: camera.detectedAt || new Date(),
         capabilities: (camera.capabilities as Record<string, any>) || {},
       };
     } catch (error) {
