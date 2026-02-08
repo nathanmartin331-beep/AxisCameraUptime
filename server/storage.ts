@@ -21,7 +21,7 @@ import {
   type CameraCapabilities,
   type UserSettings,
 } from "@shared/schema";
-import { db } from "./db";
+import { db, sqlite } from "./db";
 import { eq, and, desc, gte, lte, sql, isNull } from "drizzle-orm";
 
 // Safe user type without password (for API responses)
@@ -173,6 +173,14 @@ export interface IStorage {
 
   // Uptime event operations
   createUptimeEvent(event: InsertUptimeEvent): Promise<UptimeEvent>;
+  createUptimeEventBatch(events: InsertUptimeEvent[]): Promise<void>;
+  batchUpdateCameraStatuses(updates: Array<{
+    id: string;
+    status: string;
+    bootId?: string;
+    lastSeenAt?: Date;
+    videoStatus: string;
+  }>): Promise<void>;
   getUptimeEventsByCameraId(
     cameraId: string,
     limit?: number
@@ -222,7 +230,13 @@ export interface IStorage {
 
   // Data retention cleanup
   deleteOldUptimeEvents(beforeDate: Date): Promise<number>;
+  deleteOldAnalyticsEvents(beforeDate: Date): Promise<number>;
 }
+
+// In-memory TTL cache for uptime percentage calculations
+// Avoids re-querying DB for the same camera+days within 60 seconds
+const uptimeCache = new Map<string, { value: number; expiresAt: number }>();
+const UPTIME_CACHE_TTL_MS = 60_000; // 60 seconds
 
 export class DatabaseStorage implements IStorage {
   // User operations
@@ -540,6 +554,48 @@ export class DatabaseStorage implements IStorage {
     return newEvent;
   }
 
+  async createUptimeEventBatch(events: InsertUptimeEvent[]): Promise<void> {
+    if (events.length === 0) return;
+    // Insert in chunks of 100 to stay within SQLite's 999-variable limit
+    // (~6 columns per event → max ~166, use 100 for safety)
+    const CHUNK_SIZE = 100;
+    for (let i = 0; i < events.length; i += CHUNK_SIZE) {
+      const chunk = events.slice(i, i + CHUNK_SIZE);
+      await db.insert(uptimeEvents).values(chunk);
+    }
+  }
+
+  async batchUpdateCameraStatuses(updates: Array<{
+    id: string;
+    status: string;
+    bootId?: string;
+    lastSeenAt?: Date;
+    videoStatus: string;
+  }>): Promise<void> {
+    if (updates.length === 0) return;
+    // Wrap all status updates in a single transaction
+    const transaction = sqlite.transaction((items: typeof updates) => {
+      for (const update of items) {
+        const setData: any = {
+          currentStatus: update.status,
+          videoStatus: update.videoStatus,
+          updatedAt: new Date(),
+        };
+        if (update.bootId) setData.currentBootId = update.bootId;
+        if (update.lastSeenAt) setData.lastSeenAt = update.lastSeenAt;
+        if (update.videoStatus) {
+          setData.lastVideoCheck = new Date();
+        }
+
+        db.update(cameras)
+          .set(setData)
+          .where(eq(cameras.id, update.id))
+          .run();
+      }
+    });
+    transaction(updates);
+  }
+
   async getUptimeEventsByCameraId(
     cameraId: string,
     limit: number = 100
@@ -602,6 +658,13 @@ export class DatabaseStorage implements IStorage {
     cameraId: string,
     days: number
   ): Promise<number> {
+    // Check TTL cache first
+    const cacheKey = `${cameraId}:${days}`;
+    const cached = uptimeCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
+
     const endDate = new Date();
     const windowStart = new Date();
     windowStart.setDate(windowStart.getDate() - days);
@@ -641,12 +704,17 @@ export class DatabaseStorage implements IStorage {
       status: e.status
     }));
 
-    return calculateUptimeFromEvents(
+    const result = calculateUptimeFromEvents(
       eventList,
       startDate,
       endDate,
       priorEvent?.status
     );
+
+    // Store in TTL cache
+    uptimeCache.set(cacheKey, { value: result, expiresAt: Date.now() + UPTIME_CACHE_TTL_MS });
+
+    return result;
   }
 
   // Dashboard layout methods
@@ -764,7 +832,13 @@ export class DatabaseStorage implements IStorage {
 
   async createAnalyticsEventBatch(events: InsertAnalyticsEvent[]): Promise<void> {
     if (events.length === 0) return;
-    await db.insert(analyticsEvents).values(events);
+    // Insert in chunks of 100 to stay within SQLite's 999-variable limit
+    // (~5 columns per event → max ~199, use 100 for safety)
+    const CHUNK_SIZE = 100;
+    for (let i = 0; i < events.length; i += CHUNK_SIZE) {
+      const chunk = events.slice(i, i + CHUNK_SIZE);
+      await db.insert(analyticsEvents).values(chunk);
+    }
   }
 
   async getAnalyticsEvents(
@@ -902,14 +976,33 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  // Data retention cleanup
+  // Data retention cleanup — batched deletes to avoid long write locks
   async deleteOldUptimeEvents(beforeDate: Date): Promise<number> {
-    const result = await db
-      .delete(uptimeEvents)
-      .where(lte(uptimeEvents.timestamp, beforeDate));
+    let totalDeleted = 0;
+    const BATCH_SIZE = 10000;
+    while (true) {
+      const result = sqlite.prepare(
+        `DELETE FROM uptime_events WHERE rowid IN (SELECT rowid FROM uptime_events WHERE timestamp <= ? LIMIT ?)`
+      ).run(Math.floor(beforeDate.getTime() / 1000), BATCH_SIZE);
+      const deleted = result.changes;
+      totalDeleted += deleted;
+      if (deleted < BATCH_SIZE) break;
+    }
+    return totalDeleted;
+  }
 
-    // SQLite returns changes count via result
-    return (result as any)?.changes ?? 0;
+  async deleteOldAnalyticsEvents(beforeDate: Date): Promise<number> {
+    let totalDeleted = 0;
+    const BATCH_SIZE = 10000;
+    while (true) {
+      const result = sqlite.prepare(
+        `DELETE FROM analytics_events WHERE rowid IN (SELECT rowid FROM analytics_events WHERE timestamp <= ? LIMIT ?)`
+      ).run(Math.floor(beforeDate.getTime() / 1000), BATCH_SIZE);
+      const deleted = result.changes;
+      totalDeleted += deleted;
+      if (deleted < BATCH_SIZE) break;
+    }
+    return totalDeleted;
   }
 }
 

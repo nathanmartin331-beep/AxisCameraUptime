@@ -7,6 +7,8 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { startCameraMonitoring } from "./cameraMonitor";
 import { startAnalyticsPolling } from "./services/analyticsPoller";
+import { startDataRetentionService } from "./services/dataRetention";
+import { startDataAggregationService } from "./services/dataAggregation";
 import { ensureDefaultUser } from "./defaultUser";
 
 const app = express();
@@ -125,5 +127,11 @@ app.use((req, res, next) => {
 
     // Start analytics polling service (people counting, occupancy)
     startAnalyticsPolling();
+
+    // Start data retention service (daily cleanup of old events)
+    startDataRetentionService();
+
+    // Start data aggregation service (hourly/daily rollups for scale)
+    startDataAggregationService();
   });
 })();

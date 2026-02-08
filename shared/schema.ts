@@ -331,6 +331,98 @@ export const insertAnalyticsEventSchema = createInsertSchema(analyticsEvents).om
 export type InsertAnalyticsEvent = z.infer<typeof insertAnalyticsEventSchema>;
 export type AnalyticsEvent = typeof analyticsEvents.$inferSelect;
 
+// ===== Aggregation Summary Tables (for 2500+ camera scale) =====
+
+// Hourly uptime rollup — one row per camera per hour
+export const uptimeHourlySummary = sqliteTable(
+  "uptime_hourly_summary",
+  {
+    id: text("id").primaryKey().$defaultFn(generateId),
+    cameraId: text("camera_id")
+      .notNull()
+      .references(() => cameras.id, { onDelete: "cascade" }),
+    hourStart: integer("hour_start", { mode: "timestamp" }).notNull(),
+    onlineCount: integer("online_count").notNull().default(0),
+    offlineCount: integer("offline_count").notNull().default(0),
+    totalChecks: integer("total_checks").notNull().default(0),
+    avgResponseTimeMs: integer("avg_response_time_ms"),
+    uptimePercentage: integer("uptime_percentage"), // stored as 0-10000 (2 decimal places × 100)
+  },
+  (table) => ({
+    uniqueHour: uniqueIndex("idx_uptime_hourly_camera_hour").on(table.cameraId, table.hourStart),
+  })
+);
+
+export type UptimeHourlySummary = typeof uptimeHourlySummary.$inferSelect;
+
+// Daily uptime rollup — one row per camera per day
+export const uptimeDailySummary = sqliteTable(
+  "uptime_daily_summary",
+  {
+    id: text("id").primaryKey().$defaultFn(generateId),
+    cameraId: text("camera_id")
+      .notNull()
+      .references(() => cameras.id, { onDelete: "cascade" }),
+    dayStart: integer("day_start", { mode: "timestamp" }).notNull(),
+    onlineCount: integer("online_count").notNull().default(0),
+    offlineCount: integer("offline_count").notNull().default(0),
+    totalChecks: integer("total_checks").notNull().default(0),
+    avgResponseTimeMs: integer("avg_response_time_ms"),
+    uptimePercentage: integer("uptime_percentage"),
+  },
+  (table) => ({
+    uniqueDay: uniqueIndex("idx_uptime_daily_camera_day").on(table.cameraId, table.dayStart),
+  })
+);
+
+export type UptimeDailySummary = typeof uptimeDailySummary.$inferSelect;
+
+// Hourly analytics rollup — one row per camera per event type per hour
+export const analyticsHourlySummary = sqliteTable(
+  "analytics_hourly_summary",
+  {
+    id: text("id").primaryKey().$defaultFn(generateId),
+    cameraId: text("camera_id")
+      .notNull()
+      .references(() => cameras.id, { onDelete: "cascade" }),
+    hourStart: integer("hour_start", { mode: "timestamp" }).notNull(),
+    eventType: text("event_type").notNull(),
+    sumValue: integer("sum_value").notNull().default(0),
+    avgValue: integer("avg_value"),
+    maxValue: integer("max_value"),
+    minValue: integer("min_value"),
+    sampleCount: integer("sample_count").notNull().default(0),
+  },
+  (table) => ({
+    uniqueHour: uniqueIndex("idx_analytics_hourly_camera_type_hour").on(table.cameraId, table.eventType, table.hourStart),
+  })
+);
+
+export type AnalyticsHourlySummary = typeof analyticsHourlySummary.$inferSelect;
+
+// Daily analytics rollup — one row per camera per event type per day
+export const analyticsDailySummary = sqliteTable(
+  "analytics_daily_summary",
+  {
+    id: text("id").primaryKey().$defaultFn(generateId),
+    cameraId: text("camera_id")
+      .notNull()
+      .references(() => cameras.id, { onDelete: "cascade" }),
+    dayStart: integer("day_start", { mode: "timestamp" }).notNull(),
+    eventType: text("event_type").notNull(),
+    sumValue: integer("sum_value").notNull().default(0),
+    avgValue: integer("avg_value"),
+    maxValue: integer("max_value"),
+    minValue: integer("min_value"),
+    sampleCount: integer("sample_count").notNull().default(0),
+  },
+  (table) => ({
+    uniqueDay: uniqueIndex("idx_analytics_daily_camera_type_day").on(table.cameraId, table.eventType, table.dayStart),
+  })
+);
+
+export type AnalyticsDailySummary = typeof analyticsDailySummary.$inferSelect;
+
 // User settings - per-user application preferences
 export const userSettings = sqliteTable("user_settings", {
   id: text("id").primaryKey().$defaultFn(generateId),

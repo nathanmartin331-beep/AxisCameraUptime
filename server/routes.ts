@@ -47,6 +47,10 @@ function sendError(res: Response, status: number, message: string) {
   return res.status(status).json({ message, error: message });
 }
 
+// Dashboard response cache — serves stale data for up to 30s to avoid 7500+ queries per request
+const dashboardCache = new Map<string, { data: any; expiresAt: number }>();
+const DASHBOARD_CACHE_TTL_MS = 30_000; // 30 seconds
+
 // Schema for accepting plain password from frontend (used for both manual add and CSV import)
 // Frontend doesn't send userId or encryptedPassword - userId comes from session, password is encrypted server-side
 const createCameraSchema = insertCameraSchema
@@ -367,10 +371,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Dashboard summary route
+  // Dashboard summary route (with 30s response cache per user)
   app.get("/api/dashboard/summary", requireAuth, async (req: any, res) => {
     try {
       const userId = getUserId(req);
+
+      // Check response cache
+      const cacheKey = `dashboard:${userId}`;
+      const cached = dashboardCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return res.json(cached.data);
+      }
+
       const cameras = await storage.getCamerasByUserId(userId);
 
       const totalCameras = cameras.length;
@@ -427,7 +439,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }));
       }
 
-      res.json({
+      const responseData = {
         totalCameras,
         onlineCameras,
         offlineCameras,
@@ -440,7 +452,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         totalPeopleOut,
         currentOccupancy,
         analyticsEnabled,
-      });
+      };
+
+      // Store in response cache
+      dashboardCache.set(cacheKey, { data: responseData, expiresAt: Date.now() + DASHBOARD_CACHE_TTL_MS });
+
+      res.json(responseData);
     } catch (error) {
       console.error("Error fetching dashboard summary:", error);
       sendError(res, 500, "Failed to fetch dashboard summary");

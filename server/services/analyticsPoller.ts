@@ -11,11 +11,16 @@
  */
 
 import cron from "node-cron";
+import pLimit from "p-limit";
 import { db } from "../db";
 import { cameras, type CameraCapabilities } from "@shared/schema";
 import { decryptPassword } from "../encryption";
 import { authFetch } from "./digestAuth";
 import { storage } from "../storage";
+
+// Configurable concurrency for analytics HTTP polling (default 25 parallel requests)
+const ANALYTICS_CONCURRENCY = parseInt(process.env.POLL_CONCURRENCY || "25", 10);
+const analyticsLimit = pLimit(ANALYTICS_CONCURRENCY);
 
 interface PeopleCountData {
   in: number;
@@ -856,7 +861,7 @@ async function pollAllCameraAnalytics(): Promise<void> {
     console.log(`[Analytics] Polling ${analyticsCameras.length} cameras with analytics`);
 
     const results = await Promise.allSettled(
-      analyticsCameras.map((camera) => pollCameraAnalytics(camera))
+      analyticsCameras.map((camera) => analyticsLimit(() => pollCameraAnalytics(camera)))
     );
 
     const succeeded = results.filter((r) => r.status === "fulfilled").length;

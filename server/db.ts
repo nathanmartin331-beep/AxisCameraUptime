@@ -11,4 +11,15 @@ const __dirname = dirname(__filename);
 const dbPath = process.env.DATABASE_URL?.replace('sqlite:', '') || join(__dirname, '..', 'data', 'camera-uptime.db');
 
 const sqlite = new Database(dbPath);
+
+// SQLite performance PRAGMAs for high-concurrency workloads (2500+ cameras)
+sqlite.pragma('journal_mode = WAL');           // Concurrent reads during writes
+sqlite.pragma('busy_timeout = 5000');          // Wait 5s on lock vs instant SQLITE_BUSY
+sqlite.pragma('synchronous = NORMAL');         // Safe with WAL, fewer fsyncs
+sqlite.pragma('cache_size = -64000');          // 64MB page cache
+sqlite.pragma('foreign_keys = ON');
+sqlite.pragma('temp_store = MEMORY');
+sqlite.pragma('mmap_size = 268435456');        // 256MB memory-mapped I/O
+
 export const db = drizzle(sqlite, { schema });
+export { sqlite };
