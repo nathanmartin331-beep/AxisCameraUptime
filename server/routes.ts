@@ -382,11 +382,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Calculate average uptime across all cameras (30 days)
       let avgUptime = 0;
       if (totalCameras > 0) {
-        const uptimePromises = cameras.map(c => 
+        const uptimePromises = cameras.map(c =>
           storage.calculateUptimePercentage(c.id, 30)
         );
         const uptimes = await Promise.all(uptimePromises);
         avgUptime = uptimes.reduce((a, b) => a + b, 0) / totalCameras;
+      }
+
+      // Aggregate analytics metrics across all cameras with enabled analytics
+      let totalPeopleIn = 0;
+      let totalPeopleOut = 0;
+      let currentOccupancy = 0;
+      let analyticsEnabled = 0;
+
+      const analyticsCameras = cameras.filter(c => {
+        const caps = c.capabilities as any;
+        const enabled = caps?.enabledAnalytics;
+        return enabled && Object.values(enabled).some(Boolean);
+      });
+
+      if (analyticsCameras.length > 0) {
+        analyticsEnabled = analyticsCameras.length;
+        const today = new Date();
+        const dayStart = new Date(today);
+        dayStart.setHours(0, 0, 0, 0);
+
+        await Promise.all(analyticsCameras.map(async (cam) => {
+          try {
+            const [inEvents, outEvents, latestOcc] = await Promise.all([
+              storage.getAnalyticsEvents(cam.id, "people_in", dayStart, today),
+              storage.getAnalyticsEvents(cam.id, "people_out", dayStart, today),
+              storage.getLatestAnalyticsEvent(cam.id, "occupancy"),
+            ]);
+            totalPeopleIn += inEvents.reduce((sum, e) => sum + e.value, 0);
+            totalPeopleOut += outEvents.reduce((sum, e) => sum + e.value, 0);
+            currentOccupancy += latestOcc?.value ?? 0;
+          } catch {
+            // Skip camera on error
+          }
+        }));
       }
 
       res.json({
@@ -398,6 +432,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         videoFailed,
         videoUnknown,
         avgUptime: Math.round(avgUptime * 100) / 100,
+        totalPeopleIn,
+        totalPeopleOut,
+        currentOccupancy,
+        analyticsEnabled,
       });
     } catch (error) {
       console.error("Error fetching dashboard summary:", error);
@@ -1470,15 +1508,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Bucket into hourly intervals
       const buckets: Record<string, number> = {};
-      for (const event of allEvents) {
-        const hour = new Date(event.timestamp);
-        hour.setMinutes(0, 0, 0);
-        const key = hour.toISOString();
-        if (eventType === "occupancy") {
-          // For occupancy, take the latest value per bucket (not sum)
-          buckets[key] = (buckets[key] || 0) + event.value;
-        } else {
-          // For people_in/out, sum
+      if (eventType === "occupancy") {
+        // For occupancy (point-in-time value), take the latest reading per camera per bucket,
+        // then sum across cameras to get group total per bucket
+        const perCameraBuckets: Record<string, Record<string, number>> = {};
+        for (const event of allEvents) {
+          const hour = new Date(event.timestamp);
+          hour.setMinutes(0, 0, 0);
+          const key = hour.toISOString();
+          if (!perCameraBuckets[key]) perCameraBuckets[key] = {};
+          // Overwrite with latest value per camera (events are sorted by timestamp asc)
+          perCameraBuckets[key][event.cameraId] = event.value;
+        }
+        for (const [key, cameraValues] of Object.entries(perCameraBuckets)) {
+          buckets[key] = Object.values(cameraValues).reduce((sum, v) => sum + v, 0);
+        }
+      } else {
+        // For people_in/out/line_crossing, sum all values per bucket
+        for (const event of allEvents) {
+          const hour = new Date(event.timestamp);
+          hour.setMinutes(0, 0, 0);
+          const key = hour.toISOString();
           buckets[key] = (buckets[key] || 0) + event.value;
         }
       }

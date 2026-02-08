@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Camera, Wifi, TrendingUp, Plus, Upload, Search as SearchIcon, AlertTriangle, Download, Filter } from "lucide-react";
+import { Camera, Wifi, TrendingUp, Plus, Upload, Search as SearchIcon, AlertTriangle, Download, Filter, Users, ArrowUpDown } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
@@ -31,6 +31,10 @@ interface DashboardSummary {
   videoFailed: number;
   videoUnknown: number;
   avgUptime: number;
+  totalPeopleIn: number;
+  totalPeopleOut: number;
+  currentOccupancy: number;
+  analyticsEnabled: number;
 }
 
 interface ApiCamera {
@@ -496,6 +500,33 @@ Cameras matching filters: ${filteredCameras.length}
             subtitle="Filtered cameras"
             icon={TrendingUp}
             accentColor="green"
+          />
+        </div>
+      )}
+
+      {/* Analytics metrics row - shown when any cameras have analytics enabled */}
+      {summary && summary.analyticsEnabled > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <MetricCard
+            title="Current Occupancy"
+            value={summary.currentOccupancy}
+            subtitle={`${summary.analyticsEnabled} cameras with analytics`}
+            icon={Users}
+            accentColor="blue"
+          />
+          <MetricCard
+            title="People In Today"
+            value={summary.totalPeopleIn}
+            subtitle="Total entries across all cameras"
+            icon={ArrowUpDown}
+            accentColor="green"
+          />
+          <MetricCard
+            title="People Out Today"
+            value={summary.totalPeopleOut}
+            subtitle="Total exits across all cameras"
+            icon={ArrowUpDown}
+            accentColor="amber"
           />
         </div>
       )}

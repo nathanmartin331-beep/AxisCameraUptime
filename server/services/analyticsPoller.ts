@@ -154,19 +154,26 @@ function parseAoaAccumulatedCounts(
 
     // Crossline counting scenarios
     if (type.includes("crossline") || type.includes("line_crossing") || type.includes("crossing")) {
+      let scenarioIn = 0;
+      let scenarioOut = 0;
+
       const passings = scenario.passings || scenario.counts || [];
       for (const passing of passings) {
         if (passing.in !== undefined || passing.enters !== undefined) {
+          const val = parseInt(passing.in || passing.enters || "0") || 0;
+          scenarioIn += val;
           events.push({
             eventType: "people_in",
-            value: parseInt(passing.in || passing.enters || "0") || 0,
+            value: val,
             metadata: { scenario: name, source: "objectanalytics" },
           });
         }
         if (passing.out !== undefined || passing.exits !== undefined) {
+          const val = parseInt(passing.out || passing.exits || "0") || 0;
+          scenarioOut += val;
           events.push({
             eventType: "people_out",
-            value: parseInt(passing.out || passing.exits || "0") || 0,
+            value: val,
             metadata: { scenario: name, source: "objectanalytics" },
           });
         }
@@ -174,17 +181,31 @@ function parseAoaAccumulatedCounts(
 
       // Also check for direct in/out counts on the scenario itself
       if (scenario.in !== undefined) {
+        const val = parseInt(scenario.in) || 0;
+        scenarioIn += val;
         events.push({
           eventType: "people_in",
-          value: parseInt(scenario.in) || 0,
+          value: val,
           metadata: { scenario: name, source: "objectanalytics" },
         });
       }
       if (scenario.out !== undefined) {
+        const val = parseInt(scenario.out) || 0;
+        scenarioOut += val;
         events.push({
           eventType: "people_out",
-          value: parseInt(scenario.out) || 0,
+          value: val,
           metadata: { scenario: name, source: "objectanalytics" },
+        });
+      }
+
+      // Generate a line_crossing event with total crossings (in + out)
+      const totalCrossings = scenarioIn + scenarioOut;
+      if (totalCrossings > 0) {
+        events.push({
+          eventType: "line_crossing",
+          value: totalCrossings,
+          metadata: { scenario: name, source: "objectanalytics", in: scenarioIn, out: scenarioOut },
         });
       }
     }

@@ -6,7 +6,7 @@ import UptimeChart from "@/components/UptimeChart";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BarChart3, Users, ArrowUpDown } from "lucide-react";
+import { BarChart3, Users, ArrowUpDown, GitBranchPlus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import type { Camera, UptimeEvent } from "@shared/schema";
@@ -91,6 +91,19 @@ export default function CameraDetail() {
     queryKey: ["/api/cameras", cameraId, "analytics-out"],
     queryFn: async () => {
       const res = await fetch(`/api/cameras/${cameraId}/analytics?eventType=people_out&days=1`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!cameraId && !!hasEnabledAnalytics,
+    refetchInterval: 15000,
+  });
+
+  const { data: lineCrossingData } = useQuery<{
+    latest: { eventType: string; value: number; timestamp: string } | null;
+  }>({
+    queryKey: ["/api/cameras", cameraId, "analytics-lc"],
+    queryFn: async () => {
+      const res = await fetch(`/api/cameras/${cameraId}/analytics?eventType=line_crossing&days=1`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
@@ -450,7 +463,7 @@ export default function CameraDetail() {
       />
 
       {/* Analytics Data Section - only shown when analytics are enabled */}
-      {hasEnabledAnalytics && (analyticsData?.latest || peopleInData?.latest || peopleOutData?.latest) && (
+      {hasEnabledAnalytics && (analyticsData?.latest || peopleInData?.latest || peopleOutData?.latest || lineCrossingData?.latest) && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -460,7 +473,7 @@ export default function CameraDetail() {
             <CardDescription>Real-time analytics data from this camera (last 24h)</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* Occupancy */}
               {analyticsData?.latest && (
                 <div className="rounded-lg border p-4 text-center">
@@ -499,6 +512,20 @@ export default function CameraDetail() {
                   <div className="text-3xl font-bold text-red-600">{peopleOutData.latest.value}</div>
                   <div className="text-xs text-muted-foreground mt-1">
                     {new Date(peopleOutData.latest.timestamp).toLocaleTimeString()}
+                  </div>
+                </div>
+              )}
+
+              {/* Line Crossing */}
+              {lineCrossingData?.latest && (
+                <div className="rounded-lg border p-4 text-center">
+                  <div className="flex items-center justify-center gap-2 mb-2">
+                    <GitBranchPlus className="h-4 w-4 text-purple-600" />
+                    <span className="text-sm font-medium text-muted-foreground">Line Crossings</span>
+                  </div>
+                  <div className="text-3xl font-bold text-purple-600">{lineCrossingData.latest.value}</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {new Date(lineCrossingData.latest.timestamp).toLocaleTimeString()}
                   </div>
                 </div>
               )}
