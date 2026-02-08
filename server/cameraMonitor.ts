@@ -8,6 +8,7 @@ import { detectCameraModel } from "./services/cameraDetection";
 import { detectionCache } from "./services/detectionCache";
 import { eq } from "drizzle-orm";
 import { authFetch } from "./services/digestAuth";
+import { buildCameraUrl, getCameraDispatcher, getConnectionInfo, type CameraConnectionInfo } from "./services/cameraUrl";
 import { backfillFromUptimeSeconds, backfillFromSystemLog } from "./services/historyBackfill";
 import { probeAnalyticsCapabilities } from "./services/analyticsPoller";
 import type { InsertUptimeEvent } from "@shared/schema";
@@ -114,12 +115,15 @@ export async function checkVideoStream(
   password: string,
   endpoint: string = "/axis-cgi/jpg/image.cgi",
   timeout: number = 5000,
-  thumbnailResolution: string = "160x90"
+  thumbnailResolution: string = "160x90",
+  conn?: CameraConnectionInfo
 ): Promise<VideoCheckResponse> {
+  const dispatcher = getCameraDispatcher(conn);
+
   // Try with thumbnail resolution first, then fall back to no resolution param
   const separator = endpoint.includes('?') ? '&' : '?';
-  const thumbnailUrl = `http://${ipAddress}${endpoint}${separator}resolution=${thumbnailResolution}`;
-  const fallbackUrl = `http://${ipAddress}${endpoint}`;
+  const thumbnailUrl = buildCameraUrl(ipAddress, `${endpoint}${separator}resolution=${thumbnailResolution}`, conn);
+  const fallbackUrl = buildCameraUrl(ipAddress, endpoint, conn);
 
   for (const url of [thumbnailUrl, fallbackUrl]) {
     const controller = new AbortController();
@@ -130,6 +134,7 @@ export async function checkVideoStream(
 
       const response = await authFetch(url, username, password, {
         signal: controller.signal,
+        dispatcher,
       });
 
       clearTimeout(timeoutId);
@@ -183,11 +188,11 @@ export async function checkVideoStream(
       if (error.message?.includes("endpoint not found") && url === fallbackUrl) {
         // Last resort: very old VAPIX 1/2 cameras use /jpg/image.jpg
         try {
-          const legacyUrl = `http://${ipAddress}/jpg/image.jpg`;
+          const legacyUrl = buildCameraUrl(ipAddress, "/jpg/image.jpg", conn);
           const legacyController = new AbortController();
           const legacyTimeoutId = setTimeout(() => legacyController.abort(), timeout);
           const legacyStart = Date.now();
-          const legacyResponse = await authFetch(legacyUrl, username, password, { signal: legacyController.signal });
+          const legacyResponse = await authFetch(legacyUrl, username, password, { signal: legacyController.signal, dispatcher });
           clearTimeout(legacyTimeoutId);
           if (legacyResponse.ok) {
             const ct = legacyResponse.headers.get('content-type');
@@ -219,31 +224,37 @@ async function pollCamera(
   ipAddress: string,
   username: string,
   password: string,
-  timeout: number = 5000
+  timeout: number = 5000,
+  conn?: CameraConnectionInfo
 ): Promise<SystemReadyResponse> {
+  const dispatcher = getCameraDispatcher(conn);
+
   // Fast path: if we already know this camera's protocol, skip discovery
   const knownProtocol = protocolCache.get(ipAddress);
   if (knownProtocol === "json") {
-    return await pollCameraJsonApi(ipAddress, username, password, timeout);
+    return await pollCameraJsonApi(ipAddress, username, password, timeout, conn);
   }
   if (knownProtocol === "param") {
-    return await pollCameraLegacyFallback(ipAddress, username, password, timeout);
+    return await pollCameraLegacyFallback(ipAddress, username, password, timeout, conn);
   }
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
-    const url = `http://${ipAddress}/axis-cgi/systemready.cgi`;
+    const url = buildCameraUrl(ipAddress, "/axis-cgi/systemready.cgi", conn);
     const startTime = Date.now();
 
     // VAPIX Systemready API doesn't require authentication
-    const response = await fetch(url, {
+    const fetchOpts: any = {
       signal: controller.signal,
       headers: {
         "User-Agent": "AxisCameraMonitor/1.0",
       },
-    });
+    };
+    if (dispatcher) fetchOpts.dispatcher = dispatcher;
+
+    const response = await fetch(url, fetchOpts);
 
     clearTimeout(timeoutId);
     const responseTime = Date.now() - startTime;
@@ -253,7 +264,7 @@ async function pollCamera(
       // Older firmware without systemready.cgi, or server error — fall back to param.cgi
       console.log(`[VAPIX] systemready.cgi returned ${response.status} on ${ipAddress}, caching param.cgi fallback`);
       protocolCache.set(ipAddress, "param");
-      return await pollCameraLegacyFallback(ipAddress, username, password, timeout);
+      return await pollCameraLegacyFallback(ipAddress, username, password, timeout, conn);
     }
 
     if (!response.ok) {
@@ -267,14 +278,14 @@ async function pollCamera(
     if (trimmed.startsWith('<') || (response.headers.get('content-type') || '').includes('text/html')) {
       console.log(`[VAPIX] HTML response from systemready.cgi on ${ipAddress}, falling back to param.cgi`);
       protocolCache.set(ipAddress, "param");
-      return await pollCameraLegacyFallback(ipAddress, username, password, timeout);
+      return await pollCameraLegacyFallback(ipAddress, username, password, timeout, conn);
     }
 
     // Detect JSON response (modern VAPIX API v1.2+/v1.4+)
     if (trimmed.startsWith('{')) {
       console.log(`[VAPIX] Detected JSON API on ${ipAddress}, caching for future polls`);
       protocolCache.set(ipAddress, "json");
-      return await pollCameraJsonApi(ipAddress, username, password, timeout);
+      return await pollCameraJsonApi(ipAddress, username, password, timeout, conn);
     }
 
     // This is a legacy key=value camera — cache it
@@ -356,15 +367,17 @@ async function pollCameraJsonApi(
   ipAddress: string,
   _username: string,
   _password: string,
-  timeout: number = 5000
+  timeout: number = 5000,
+  conn?: CameraConnectionInfo
 ): Promise<SystemReadyResponse> {
+  const dispatcher = getCameraDispatcher(conn);
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
-    const url = `http://${ipAddress}/axis-cgi/systemready.cgi`;
+    const url = buildCameraUrl(ipAddress, "/axis-cgi/systemready.cgi", conn);
 
-    const response = await fetch(url, {
+    const fetchOpts: any = {
       method: 'POST',
       signal: controller.signal,
       headers: {
@@ -375,7 +388,10 @@ async function pollCameraJsonApi(
         apiVersion: "1.0",
         method: "systemReady",
       }),
-    });
+    };
+    if (dispatcher) fetchOpts.dispatcher = dispatcher;
+
+    const response = await fetch(url, fetchOpts);
 
     clearTimeout(timeoutId);
 
@@ -424,17 +440,20 @@ async function pollCameraLegacyFallback(
   ipAddress: string,
   username: string,
   password: string,
-  timeout: number = 5000
+  timeout: number = 5000,
+  conn?: CameraConnectionInfo
 ): Promise<SystemReadyResponse> {
+  const dispatcher = getCameraDispatcher(conn);
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
     // Try param.cgi which most Axis cameras support (even very old firmware)
-    const url = `http://${ipAddress}/axis-cgi/param.cgi?action=list&group=root.Properties.System`;
+    const url = buildCameraUrl(ipAddress, "/axis-cgi/param.cgi?action=list&group=root.Properties.System", conn);
 
     const response = await authFetch(url, username, password, {
       signal: controller.signal,
+      dispatcher,
     });
 
     clearTimeout(timeoutId);
@@ -497,10 +516,14 @@ async function checkAllCameras() {
         try {
           const decryptedPassword = await decryptPassword(camera.encryptedPassword);
 
+          const conn = getConnectionInfo(camera);
+
           const result = await pollCamera(
             camera.ipAddress,
             camera.username,
-            decryptedPassword
+            decryptedPassword,
+            5000,
+            conn
           );
 
           // Lazy model detection (non-blocking)
@@ -524,7 +547,7 @@ async function checkAllCameras() {
                 console.warn(`[Monitor] ⚠ Failed to update cached model for ${camera.name}: ${err.message}`);
               }
             } else {
-              detectCameraModel(camera.ipAddress, camera.username, decryptedPassword)
+              detectCameraModel(camera.ipAddress, camera.username, decryptedPassword, undefined, conn)
                 .then(async (detection) => {
                   detectionCache.set(camera.ipAddress, camera.username, detection);
 
@@ -544,7 +567,8 @@ async function checkAllCameras() {
                     const analyticsProbe = await probeAnalyticsCapabilities(
                       camera.ipAddress,
                       camera.username,
-                      decryptedPassword
+                      decryptedPassword,
+                      conn
                     );
                     const hasAny = analyticsProbe.peopleCount || analyticsProbe.occupancyEstimation ||
                       analyticsProbe.lineCrossing || analyticsProbe.objectAnalytics ||
@@ -589,7 +613,8 @@ async function checkAllCameras() {
               decryptedPassword,
               getVideoEndpoint(camera),
               3000,
-              getThumbnailResolution(camera)
+              getThumbnailResolution(camera),
+              conn
             );
 
             videoStatus = "video_ok";
@@ -637,7 +662,8 @@ async function checkAllCameras() {
                   camera.id,
                   camera.ipAddress,
                   camera.username,
-                  decryptedPassword
+                  decryptedPassword,
+                  conn
                 ).catch(() => {});
               }
             }).catch(() => {});
@@ -721,7 +747,8 @@ async function checkCameraCohort(cohortIndex: number) {
 
         try {
           const decryptedPassword = await decryptPassword(camera.encryptedPassword);
-          const result = await pollCamera(camera.ipAddress, camera.username, decryptedPassword);
+          const conn = getConnectionInfo(camera);
+          const result = await pollCamera(camera.ipAddress, camera.username, decryptedPassword, 5000, conn);
 
           // Lazy model detection (non-blocking)
           if (!camera.model) {
@@ -735,14 +762,14 @@ async function checkCameraCohort(cohortIndex: number) {
                 console.warn(`[Monitor] ⚠ Failed to update cached model for ${camera.name}: ${err.message}`);
               }
             } else {
-              detectCameraModel(camera.ipAddress, camera.username, decryptedPassword)
+              detectCameraModel(camera.ipAddress, camera.username, decryptedPassword, undefined, conn)
                 .then(async (detection) => {
                   detectionCache.set(camera.ipAddress, camera.username, detection);
                   await db.update(cameras)
                     .set({ model: detection.model, series: detection.series, numberOfViews: detection.numberOfViews, capabilities: detection.capabilities, updatedAt: new Date() })
                     .where(eq(cameras.id, camera.id));
                   try {
-                    const analyticsProbe = await probeAnalyticsCapabilities(camera.ipAddress, camera.username, decryptedPassword);
+                    const analyticsProbe = await probeAnalyticsCapabilities(camera.ipAddress, camera.username, decryptedPassword, conn);
                     const hasAny = analyticsProbe.peopleCount || analyticsProbe.occupancyEstimation || analyticsProbe.lineCrossing || analyticsProbe.objectAnalytics || analyticsProbe.loiteringGuard || analyticsProbe.fenceGuard || analyticsProbe.motionGuard;
                     if (hasAny) {
                       await storage.updateCameraCapabilities(camera.id, { analytics: { ...detection.capabilities?.analytics, ...analyticsProbe } }, true);
@@ -756,7 +783,7 @@ async function checkCameraCohort(cohortIndex: number) {
           const rebooted = camera.currentBootId && camera.currentBootId !== result.bootId;
           let videoStatus = "unknown";
           try {
-            await checkVideoStream(camera.ipAddress, camera.username, decryptedPassword, getVideoEndpoint(camera), 3000, getThumbnailResolution(camera));
+            await checkVideoStream(camera.ipAddress, camera.username, decryptedPassword, getVideoEndpoint(camera), 3000, getThumbnailResolution(camera), conn);
             videoStatus = "video_ok";
             console.log(`[Monitor] ✓ ${camera.name} (${camera.ipAddress}) - Online, Video OK ${rebooted ? "(REBOOTED)" : ""}`);
           } catch (videoError: any) {
@@ -769,7 +796,7 @@ async function checkCameraCohort(cohortIndex: number) {
 
           if (!camera.historyBackfilled && result.uptime > 0) {
             backfillFromUptimeSeconds(camera.id, new Date(), result.uptime, result.bootId)
-              .then((backfilled) => { if (backfilled) backfillFromSystemLog(camera.id, camera.ipAddress, camera.username, decryptedPassword).catch(() => {}); })
+              .then((backfilled) => { if (backfilled) backfillFromSystemLog(camera.id, camera.ipAddress, camera.username, decryptedPassword, conn).catch(() => {}); })
               .catch(() => {});
           }
         } catch (error: any) {

@@ -1,6 +1,7 @@
 // Network scanner for discovering Axis cameras on a subnet
 // Supports HTTP probing, Bonjour/mDNS, and SSDP discovery
 import os from 'os';
+import { Agent } from 'undici';
 import { detectCameraModel, type CameraModelInfo } from './cameraModelDetection';
 
 export interface ScanResult {
@@ -10,7 +11,8 @@ export interface ScanResult {
   serial?: string;
   firmware?: string;
   series?: string; // P, Q, M, F
-  discoveryMethod?: 'http' | 'bonjour' | 'ssdp';
+  discoveryMethod?: 'http' | 'https' | 'bonjour' | 'ssdp';
+  detectedProtocol?: 'http' | 'https';
   capabilities?: {
     hasPTZ?: boolean;
     hasAudio?: boolean;
@@ -77,27 +79,33 @@ function calculateNetworkAddress(ip: string, netmask: string): string {
  * Probe camera using unauthenticated basicdeviceinfo.cgi
  * Returns model/serial/firmware without needing credentials
  */
+// Reusable HTTPS agent for discovery (accept self-signed certs)
+const discoveryHttpsAgent = new Agent({ connect: { rejectUnauthorized: false } });
+
 async function probeBasicDeviceInfo(
   ipAddress: string,
-  timeout: number = 3000
+  timeout: number = 3000,
+  protocol: 'http' | 'https' = 'http'
 ): Promise<{ model?: string; serial?: string; firmware?: string } | null> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
-    const url = `http://${ipAddress}/axis-cgi/basicdeviceinfo.cgi`;
-    const response = await fetch(url, {
+    const url = `${protocol}://${ipAddress}/axis-cgi/basicdeviceinfo.cgi`;
+    const fetchOpts: any = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'AxisCameraMonitor/1.0',
+        'User-Agent': 'AxisCameraMonitor/2.0',
       },
       body: JSON.stringify({
         apiVersion: '1.0',
         method: 'getAllUnrestrictedProperties',
       }),
       signal: controller.signal,
-    });
+    };
+    if (protocol === 'https') fetchOpts.dispatcher = discoveryHttpsAgent;
+    const response = await fetch(url, fetchOpts);
 
     clearTimeout(timeoutId);
 
@@ -133,56 +141,67 @@ async function detectCameraModelSafe(ipAddress: string): Promise<CameraModelInfo
 }
 
 async function checkAxisCamera(ipAddress: string, timeout: number = 3000): Promise<ScanResult> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  // Try HTTP first, then HTTPS fallback (AXIS OS 13+ may have HTTP disabled)
+  for (const protocol of ['http', 'https'] as const) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-  try {
-    // Try systemready.cgi first (unauthenticated, fastest check)
-    const url = `http://${ipAddress}/axis-cgi/systemready.cgi`;
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "AxisCameraMonitor/1.0" },
-    });
+    try {
+      const url = `${protocol}://${ipAddress}/axis-cgi/systemready.cgi`;
+      const fetchOpts: any = {
+        signal: controller.signal,
+        headers: { "User-Agent": "AxisCameraMonitor/2.0" },
+      };
+      if (protocol === 'https') fetchOpts.dispatcher = discoveryHttpsAgent;
+      const response = await fetch(url, fetchOpts);
 
-    clearTimeout(timeoutId);
+      clearTimeout(timeoutId);
 
-    if (response.ok) {
-      const text = await response.text();
-      if (text.includes("systemready=")) {
-        // Confirmed Axis camera - get device info without auth
-        const deviceInfo = await probeBasicDeviceInfo(ipAddress, 3000);
+      if (response.ok) {
+        const text = await response.text();
+        if (text.includes("systemready=")) {
+          // Confirmed Axis camera - get device info without auth
+          const deviceInfo = await probeBasicDeviceInfo(ipAddress, 3000, protocol);
 
-        // Fall back to model detection if basicdeviceinfo didn't work
-        let model = deviceInfo?.model;
-        let series: string | undefined;
+          // Fall back to model detection if basicdeviceinfo didn't work
+          let model = deviceInfo?.model;
+          let series: string | undefined;
 
-        if (!model) {
-          const modelInfo = await detectCameraModelSafe(ipAddress);
-          model = modelInfo.model || modelInfo.fullName || "Axis Camera";
-          series = modelInfo.series;
-        } else {
-          // Parse series from model string
-          const seriesMatch = model.match(/AXIS\s+([PQMF])\d/i);
-          series = seriesMatch ? seriesMatch[1].toUpperCase() : undefined;
+          if (!model) {
+            const modelInfo = await detectCameraModelSafe(ipAddress);
+            model = modelInfo.model || modelInfo.fullName || "Axis Camera";
+            series = modelInfo.series;
+          } else {
+            // Parse series from model string
+            const seriesMatch = model.match(/AXIS\s+([PQMFAITDW])\d/i);
+            series = seriesMatch ? seriesMatch[1].toUpperCase() : undefined;
+          }
+
+          return {
+            ipAddress,
+            isAxis: true,
+            model,
+            serial: deviceInfo?.serial,
+            firmware: deviceInfo?.firmware,
+            series,
+            discoveryMethod: protocol,
+            detectedProtocol: protocol,
+          };
         }
-
-        return {
-          ipAddress,
-          isAxis: true,
-          model,
-          serial: deviceInfo?.serial,
-          firmware: deviceInfo?.firmware,
-          series,
-          discoveryMethod: 'http',
-        };
       }
-    }
 
-    return { ipAddress, isAxis: false, error: `HTTP ${response.status}` };
-  } catch (error: any) {
-    clearTimeout(timeoutId);
-    return { ipAddress, isAxis: false, error: error.message };
+      // If HTTP gave a non-200 response, try HTTPS next
+      if (protocol === 'http') continue;
+      return { ipAddress, isAxis: false, error: `HTTP ${response.status}` };
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      // If HTTP failed (connection refused/timeout), try HTTPS
+      if (protocol === 'http') continue;
+      return { ipAddress, isAxis: false, error: error.message };
+    }
   }
+
+  return { ipAddress, isAxis: false, error: 'No response on HTTP or HTTPS' };
 }
 
 /**

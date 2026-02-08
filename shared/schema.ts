@@ -146,6 +146,11 @@ export const cameras = sqliteTable("cameras", {
   createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
   updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 
+  // SSL/TLS connection settings
+  protocol: text("protocol").default("http"),        // "http" or "https"
+  port: integer("port").default(80),                 // 80 for HTTP, 443 for HTTPS, or custom
+  verifySslCert: integer("verify_ssl_cert", { mode: "boolean" }).default(false), // Accept self-signed by default
+
   // NEW FIELDS: Camera model information (all optional for backward compatibility)
   model: text("model"),                    // e.g., "P3255-LVE"
   series: text("series"),                  // e.g., "P", "Q", "M", "F"

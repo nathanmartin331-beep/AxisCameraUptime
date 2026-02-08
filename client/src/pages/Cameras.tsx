@@ -68,7 +68,18 @@ export default function Cameras() {
 
   const addMutation = useMutation({
     mutationFn: async (data: CameraFormData) => {
-      return await apiRequest("POST", "/api/cameras", data);
+      const payload: Record<string, any> = {
+        name: data.name,
+        ipAddress: data.ipAddress,
+        username: data.username,
+        password: data.password,
+        location: data.location,
+        notes: data.notes,
+        protocol: data.protocol,
+        port: data.port ? parseInt(data.port, 10) : undefined,
+        verifySslCert: data.verifySslCert,
+      };
+      return await apiRequest("POST", "/api/cameras", payload);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/cameras"] });
@@ -123,12 +134,15 @@ export default function Cameras() {
 
   const editMutation = useMutation({
     mutationFn: async ({ id, data }: { id: number; data: CameraFormData }) => {
-      const payload: Record<string, string> = {
+      const payload: Record<string, any> = {
         name: data.name,
         ipAddress: data.ipAddress,
         username: data.username,
         location: data.location,
         notes: data.notes,
+        protocol: data.protocol,
+        port: data.port ? parseInt(data.port, 10) : undefined,
+        verifySslCert: data.verifySslCert,
       };
       if (data.password) {
         payload.password = data.password;
@@ -163,6 +177,9 @@ export default function Cameras() {
       password: "",
       location: camera.location || "",
       notes: camera.notes || "",
+      protocol: (camera as any).protocol || "http",
+      port: (camera as any).port ? String((camera as any).port) : "",
+      verifySslCert: (camera as any).verifySslCert ?? false,
     });
     setShowEditDialog(true);
   };

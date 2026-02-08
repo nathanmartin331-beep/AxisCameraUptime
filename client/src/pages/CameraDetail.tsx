@@ -425,6 +425,9 @@ export default function CameraDetail() {
     numberOfViews: camera.numberOfViews ?? undefined,
     capabilities: camera.capabilities ?? undefined,
     detectedAt: camera.detectedAt ? new Date(camera.detectedAt).toISOString() : undefined,
+    protocol: (camera as any).protocol ?? undefined,
+    port: (camera as any).port ?? undefined,
+    verifySslCert: (camera as any).verifySslCert ?? undefined,
   };
 
   const chartData = transformEventsToChartData();

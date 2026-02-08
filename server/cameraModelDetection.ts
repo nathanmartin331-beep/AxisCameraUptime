@@ -113,17 +113,21 @@ export function extractFeatures(series?: string, variant?: string): string[] {
 export async function detectCameraModel(
   ipAddress: string,
   timeout: number = 5000,
-  credentials?: { username: string; password: string }
+  credentials?: { username: string; password: string },
+  conn?: { protocol?: string; port?: number; verifySslCert?: boolean }
 ): Promise<CameraModelInfo> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
-    // Try to access VAPIX param.cgi API
-    const url = `http://${ipAddress}/axis-cgi/param.cgi?action=list&group=root.Brand,root.Properties`;
+    const protocol = conn?.protocol || 'http';
+    const port = conn?.port || (protocol === 'https' ? 443 : 80);
+    const isDefaultPort = (protocol === 'http' && port === 80) || (protocol === 'https' && port === 443);
+    const portSuffix = isDefaultPort ? '' : `:${port}`;
+    const url = `${protocol}://${ipAddress}${portSuffix}/axis-cgi/param.cgi?action=list&group=root.Brand,root.Properties`;
 
     const headers: Record<string, string> = {
-      'User-Agent': 'AxisCameraMonitor/1.0',
+      'User-Agent': 'AxisCameraMonitor/2.0',
     };
 
     // Add basic auth if credentials provided
@@ -132,10 +136,20 @@ export async function detectCameraModel(
       headers['Authorization'] = `Basic ${auth}`;
     }
 
-    const response = await fetch(url, {
+    const fetchOpts: any = {
       signal: controller.signal,
       headers,
-    });
+    };
+
+    // Add HTTPS dispatcher for self-signed certs
+    if (protocol === 'https') {
+      const { Agent } = await import('undici');
+      fetchOpts.dispatcher = new Agent({
+        connect: { rejectUnauthorized: conn?.verifySslCert ?? false },
+      });
+    }
+
+    const response = await fetch(url, fetchOpts);
 
     clearTimeout(timeoutId);
 

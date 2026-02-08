@@ -108,6 +108,7 @@ export interface AuthFetchOptions {
   headers?: Record<string, string>;
   body?: string;
   signal?: AbortSignal;
+  dispatcher?: any; // undici Agent for HTTPS connections (pass-through to fetch)
 }
 
 /**
@@ -125,8 +126,8 @@ export async function authFetch(
   const method = options.method || "GET";
   const basicAuth = Buffer.from(`${username}:${password}`).toString("base64");
 
-  // First attempt with Basic auth
-  const firstResponse = await fetch(url, {
+  // Build fetch options, including optional HTTPS dispatcher
+  const fetchOpts: any = {
     method,
     signal: options.signal,
     headers: {
@@ -135,7 +136,13 @@ export async function authFetch(
       ...options.headers,
     },
     body: options.body,
-  });
+  };
+  if (options.dispatcher) {
+    fetchOpts.dispatcher = options.dispatcher;
+  }
+
+  // First attempt with Basic auth
+  const firstResponse = await fetch(url, fetchOpts);
 
   // If Basic auth worked, return the response
   if (firstResponse.status !== 401) {
@@ -165,7 +172,7 @@ export async function authFetch(
   );
 
   // Retry with Digest auth
-  const digestResponse = await fetch(url, {
+  const digestFetchOpts: any = {
     method,
     signal: options.signal,
     headers: {
@@ -174,7 +181,12 @@ export async function authFetch(
       ...options.headers,
     },
     body: options.body,
-  });
+  };
+  if (options.dispatcher) {
+    digestFetchOpts.dispatcher = options.dispatcher;
+  }
+
+  const digestResponse = await fetch(url, digestFetchOpts);
 
   return digestResponse;
 }

@@ -338,6 +338,9 @@ export default function Dashboard() {
       password: "", // Password is never sent back from the API; leave blank to keep current
       location: camera.location === "No location" ? "" : camera.location,
       notes: apiCamera?.notes || "",
+      protocol: (apiCamera as any)?.protocol || "http",
+      port: (apiCamera as any)?.port?.toString() || "",
+      verifySslCert: (apiCamera as any)?.verifySslCert ?? false,
     });
     setEditCameraOpen(true);
   };

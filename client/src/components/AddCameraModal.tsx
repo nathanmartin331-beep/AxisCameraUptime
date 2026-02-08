@@ -29,6 +29,9 @@ export interface CameraFormData {
   password: string;
   location: string;
   notes: string;
+  protocol: string;
+  port: string;
+  verifySslCert: boolean;
 }
 
 const emptyFormData: CameraFormData = {
@@ -38,6 +41,9 @@ const emptyFormData: CameraFormData = {
   password: "",
   location: "",
   notes: "",
+  protocol: "http",
+  port: "",
+  verifySslCert: false,
 };
 
 export default function AddCameraModal({
@@ -115,6 +121,61 @@ export default function AddCameraModal({
                 </p>
               </div>
             </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="protocol">Protocol</Label>
+                <select
+                  id="protocol"
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors"
+                  value={formData.protocol}
+                  onChange={(e) => {
+                    const newProtocol = e.target.value;
+                    setFormData({
+                      ...formData,
+                      protocol: newProtocol,
+                      port: formData.port || "",
+                    });
+                  }}
+                >
+                  <option value="http">HTTP</option>
+                  <option value="https">HTTPS</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="port">Port</Label>
+                <Input
+                  id="port"
+                  type="number"
+                  value={formData.port}
+                  onChange={(e) => setFormData({ ...formData, port: e.target.value })}
+                  placeholder={formData.protocol === "https" ? "443" : "80"}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Leave blank for default
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="verifySslCert">SSL Verification</Label>
+                <div className="flex items-center gap-2 h-9">
+                  <input
+                    type="checkbox"
+                    id="verifySslCert"
+                    checked={formData.verifySslCert}
+                    onChange={(e) => setFormData({ ...formData, verifySslCert: e.target.checked })}
+                    className="h-4 w-4 rounded border-gray-300"
+                    disabled={formData.protocol !== "https"}
+                  />
+                  <Label htmlFor="verifySslCert" className="text-xs font-normal text-muted-foreground">
+                    Verify certificate
+                  </Label>
+                </div>
+                {formData.protocol === "https" && !formData.verifySslCert && (
+                  <p className="text-xs text-yellow-600">
+                    Self-signed certs accepted
+                  </p>
+                )}
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="username">Username *</Label>
@@ -172,6 +233,7 @@ export default function AddCameraModal({
               <Info className="h-4 w-4" />
               <AlertDescription>
                 Camera model and capabilities will be automatically detected on the first successful connection.
+                AXIS OS 13+ cameras default to HTTPS only.
               </AlertDescription>
             </Alert>
           </div>

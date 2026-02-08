@@ -8,6 +8,9 @@ export interface CameraCSVRow {
   password: string;
   location?: string;
   notes?: string;
+  protocol?: string;
+  port?: number;
+  verifySslCert?: boolean;
 }
 
 export function parseCSV(csvContent: string): CameraCSVRow[] {
@@ -35,6 +38,10 @@ export function parseCSV(csvContent: string): CameraCSVRow[] {
     const values = parseCSVLine(line);
     if (values.length < 4) continue; // Skip invalid rows
 
+    const protocolIdx = header.indexOf("protocol");
+    const portIdx = header.indexOf("port");
+    const sslIdx = header.indexOf("verifysslcert");
+
     const camera: CameraCSVRow = {
       name: values[header.indexOf("name")] || "",
       ipAddress: values[header.indexOf("ipaddress")] || "",
@@ -42,6 +49,9 @@ export function parseCSV(csvContent: string): CameraCSVRow[] {
       password: values[header.indexOf("password")] || "",
       location: values[header.indexOf("location")] || "",
       notes: values[header.indexOf("notes")] || "",
+      ...(protocolIdx >= 0 && values[protocolIdx] && { protocol: values[protocolIdx].toLowerCase() }),
+      ...(portIdx >= 0 && values[portIdx] && { port: parseInt(values[portIdx], 10) || undefined }),
+      ...(sslIdx >= 0 && values[sslIdx] && { verifySslCert: values[sslIdx].toLowerCase() === "true" }),
     };
 
     // Validate required fields
@@ -80,7 +90,7 @@ function parseCSVLine(line: string): string[] {
 }
 
 export function generateCameraCSV(cameras: Array<Partial<Camera>>): string {
-  const header = "Name,IPAddress,Location,Status,LastSeen,Notes";
+  const header = "Name,IPAddress,Location,Status,LastSeen,Notes,Protocol,Port,VerifySSLCert";
   const rows = cameras.map((camera) => {
     const name = (camera.name || "").replace(/,/g, ";");
     const ipAddress = camera.ipAddress || "";
@@ -90,8 +100,11 @@ export function generateCameraCSV(cameras: Array<Partial<Camera>>): string {
       ? new Date(camera.lastSeenAt).toLocaleString()
       : "Never";
     const notes = (camera.notes || "").replace(/,/g, ";");
+    const protocol = camera.protocol || "http";
+    const port = camera.port || (protocol === "https" ? 443 : 80);
+    const verifySslCert = camera.verifySslCert ? "true" : "false";
 
-    return `${name},${ipAddress},${location},${status},${lastSeen},${notes}`;
+    return `${name},${ipAddress},${location},${status},${lastSeen},${notes},${protocol},${port},${verifySslCert}`;
   });
 
   return [header, ...rows].join("\n");

@@ -5,6 +5,7 @@
 
 import type { CameraCapabilities } from "@shared/schema";
 import { authFetch } from "./digestAuth";
+import { buildCameraUrl, getCameraDispatcher, type CameraConnectionInfo } from "./cameraUrl";
 
 /**
  * VAPIX API response parser
@@ -117,7 +118,8 @@ export class CameraModelDetector {
   async detect(
     ipAddress: string,
     username: string,
-    password: string
+    password: string,
+    conn?: CameraConnectionInfo
   ): Promise<CameraModelDetection> {
     try {
       // Phase 1: Get brand information
@@ -125,7 +127,8 @@ export class CameraModelDetector {
         ipAddress,
         username,
         password,
-        'Brand'
+        'Brand',
+        conn
       );
 
       // Phase 2: Get properties (capabilities)
@@ -133,7 +136,8 @@ export class CameraModelDetector {
         ipAddress,
         username,
         password,
-        'Properties'
+        'Properties',
+        conn
       );
 
       // Phase 3: Get image source details
@@ -141,7 +145,8 @@ export class CameraModelDetector {
         ipAddress,
         username,
         password,
-        'ImageSource'
+        'ImageSource',
+        conn
       );
 
       // Extract and combine data
@@ -169,7 +174,7 @@ export class CameraModelDetector {
       // If camera uses modern JSON API or rejects Basic auth, fall back to basicdeviceinfo.cgi
       if (error instanceof DetectionError && (error.details?.jsonResponse || error.code === 'AUTH_FAILED')) {
         try {
-          return await this.detectModern(ipAddress, username, password);
+          return await this.detectModern(ipAddress, username, password, conn);
         } catch (modernError) {
           // If modern API also fails (e.g. 404 on older firmware), throw original error
           throw error;
@@ -193,9 +198,11 @@ export class CameraModelDetector {
     ipAddress: string,
     username: string,
     password: string,
-    group: string
+    group: string,
+    conn?: CameraConnectionInfo
   ): Promise<Record<string, string>> {
-    const url = `http://${ipAddress}/axis-cgi/param.cgi?action=list&group=${group}`;
+    const url = buildCameraUrl(ipAddress, `/axis-cgi/param.cgi?action=list&group=${group}`, conn);
+    const dispatcher = getCameraDispatcher(conn);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -203,6 +210,7 @@ export class CameraModelDetector {
     try {
       const response = await authFetch(url, username, password, {
         signal: controller.signal,
+        dispatcher,
       });
 
       clearTimeout(timeoutId);
@@ -265,9 +273,11 @@ export class CameraModelDetector {
   private async detectModern(
     ipAddress: string,
     username: string,
-    password: string
+    password: string,
+    conn?: CameraConnectionInfo
   ): Promise<CameraModelDetection> {
-    const url = `http://${ipAddress}/axis-cgi/basicdeviceinfo.cgi`;
+    const url = buildCameraUrl(ipAddress, '/axis-cgi/basicdeviceinfo.cgi', conn);
+    const dispatcher = getCameraDispatcher(conn);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -283,6 +293,7 @@ export class CameraModelDetector {
           method: 'getAllProperties',
         }),
         signal: controller.signal,
+        dispatcher,
       });
 
       clearTimeout(timeoutId);
@@ -491,8 +502,9 @@ export async function detectCameraModel(
   ipAddress: string,
   username: string,
   password: string,
-  timeout?: number
+  timeout?: number,
+  conn?: CameraConnectionInfo
 ): Promise<CameraModelDetection> {
   const detector = new CameraModelDetector(timeout);
-  return detector.detect(ipAddress, username, password);
+  return detector.detect(ipAddress, username, password, conn);
 }

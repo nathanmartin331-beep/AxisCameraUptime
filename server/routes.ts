@@ -5,6 +5,7 @@ import { requireAuth } from "./auth";
 import { encryptPassword } from "./encryption";
 import { checkAllCameras } from "./cameraMonitor";
 import { insertCameraSchema, type Camera } from "@shared/schema";
+import { buildCameraUrl, getCameraDispatcher, getConnectionInfo } from "./services/cameraUrl";
 import type { SafeUser } from "./storage";
 import { z } from "zod";
 
@@ -63,6 +64,7 @@ const createCameraSchema = insertCameraSchema
 const ALLOWED_CAMERA_UPDATE_FIELDS = new Set([
   "name", "ipAddress", "username", "password", "location", "notes",
   "currentStatus", "videoStatus", "model", "series", "capabilities",
+  "protocol", "port", "verifySslCert",
 ]);
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -925,6 +927,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           name: z.string().optional(),
           username: z.string().min(1),
           password: z.string().min(1),
+          protocol: z.enum(["http", "https"]).optional(),
+          port: z.number().int().min(1).max(65535).optional(),
+          verifySslCert: z.boolean().optional(),
         })).min(1).max(50),
       });
 
@@ -953,6 +958,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             username: cam.username,
             encryptedPassword: encrypted,
             userId,
+            ...(cam.protocol && { protocol: cam.protocol }),
+            ...(cam.port && { port: cam.port }),
+            ...(cam.verifySslCert !== undefined && { verifySslCert: cam.verifySslCert }),
           });
           existingIPs.add(normalizedIP);
           added.push(cam.ipAddress);
@@ -1010,24 +1018,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Import and use the actual pollCamera function
       const { decryptPassword } = await import("./encryption");
       const decryptedPassword = await decryptPassword(camera.encryptedPassword);
-      
+      const conn = getConnectionInfo(camera);
+      const dispatcher = getCameraDispatcher(conn);
+
       // Import pollCamera helper
       const cameraMonitor = await import("./cameraMonitor");
       const pollCamera = (cameraMonitor as any).pollCameraForTest || (async (ip: string, user: string, pass: string) => {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 10000);
-        
+
         try {
-          const url = `http://${ip}/axis-cgi/systemready.cgi`;
+          const url = buildCameraUrl(ip, "/axis-cgi/systemready.cgi", conn);
           const startTime = Date.now();
-          const response = await fetch(url, {
+          const fetchOpts: any = {
             signal: controller.signal,
-            headers: { "User-Agent": "AxisCameraMonitor/1.0" },
-          });
+            headers: { "User-Agent": "AxisCameraMonitor/2.0" },
+          };
+          if (dispatcher) fetchOpts.dispatcher = dispatcher;
+          const response = await fetch(url, fetchOpts);
           clearTimeout(timeoutId);
           const responseTime = Date.now() - startTime;
           const rawText = await response.text();
-          
+
           const lines = rawText.split(/\r?\n/);
           const data: Record<string, string> = {};
           for (const line of lines) {
@@ -1038,9 +1050,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const value = trimmed.substring(idx + 1).trim();
             if (key && value) data[key] = value;
           }
-          
-          return { 
-            responseTime, 
+
+          return {
+            responseTime,
             httpStatus: response.status,
             parsedData: data,
             rawText: rawText.substring(0, 200), // Only first 200 chars for safety
@@ -1156,6 +1168,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             password: camera.password,
             location: camera.location || null,
             notes: camera.notes || null,
+            ...(camera.protocol && { protocol: camera.protocol }),
+            ...(camera.port && { port: camera.port }),
+            ...(camera.verifySslCert !== undefined && { verifySslCert: camera.verifySslCert }),
           });
 
           // Encrypt password and create camera

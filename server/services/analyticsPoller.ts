@@ -16,6 +16,7 @@ import { db } from "../db";
 import { cameras, type CameraCapabilities } from "@shared/schema";
 import { decryptPassword } from "../encryption";
 import { authFetch } from "./digestAuth";
+import { buildCameraUrl, getCameraDispatcher, getConnectionInfo, type CameraConnectionInfo } from "./cameraUrl";
 import { storage } from "../storage";
 
 // Configurable concurrency for analytics HTTP polling (default 25 parallel requests)
@@ -37,17 +38,20 @@ async function queryPeopleCounter(
   ipAddress: string,
   username: string,
   password: string,
-  timeout: number = 5000
+  timeout: number = 5000,
+  conn?: CameraConnectionInfo
 ): Promise<PeopleCountData> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const dispatcher = getCameraDispatcher(conn);
 
   try {
     // Try the standard People Counter ACAP endpoint
-    const url = `http://${ipAddress}/local/peoplecounter/query.cgi`;
+    const url = buildCameraUrl(ipAddress, "/local/peoplecounter/query.cgi", conn);
 
     const response = await authFetch(url, username, password, {
       signal: controller.signal,
+      dispatcher,
     });
 
     clearTimeout(timeoutId);
@@ -104,16 +108,19 @@ async function queryOccupancy(
   ipAddress: string,
   username: string,
   password: string,
-  timeout: number = 5000
+  timeout: number = 5000,
+  conn?: CameraConnectionInfo
 ): Promise<number> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const dispatcher = getCameraDispatcher(conn);
 
   try {
-    const url = `http://${ipAddress}/local/occupancy/.api?method=getOccupancy`;
+    const url = buildCameraUrl(ipAddress, "/local/occupancy/.api?method=getOccupancy", conn);
 
     const response = await authFetch(url, username, password, {
       signal: controller.signal,
+      dispatcher,
     });
 
     clearTimeout(timeoutId);
@@ -240,7 +247,8 @@ async function queryObjectAnalyticsData(
   username: string,
   password: string,
   storedApiPath?: string,
-  timeout: number = 8000
+  timeout: number = 8000,
+  conn?: CameraConnectionInfo
 ): Promise<Array<{ eventType: string; value: number; metadata?: Record<string, any> }>> {
   // Build paths to try: stored path first, then standard paths
   const pathsToTry: string[] = [];
@@ -255,7 +263,7 @@ async function queryObjectAnalyticsData(
   }
 
   for (const path of pathsToTry) {
-    const json = await tryAoaPost(ipAddress, username, password, path, "getAccumulatedCounts", timeout);
+    const json = await tryAoaPost(ipAddress, username, password, path, "getAccumulatedCounts", timeout, conn);
     if (json) {
       return parseAoaAccumulatedCounts(json);
     }
@@ -272,17 +280,19 @@ async function queryInstalledApplications(
   ipAddress: string,
   username: string,
   password: string,
-  timeout: number = 8000
+  timeout: number = 8000,
+  conn?: CameraConnectionInfo
 ): Promise<Array<{ name: string; niceName: string; status: string; id?: string }>> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const dispatcher = getCameraDispatcher(conn);
 
   try {
     const response = await authFetch(
-      `http://${ipAddress}/axis-cgi/applications/list.cgi`,
+      buildCameraUrl(ipAddress, "/axis-cgi/applications/list.cgi", conn),
       username,
       password,
-      { signal: controller.signal }
+      { signal: controller.signal, dispatcher }
     );
     clearTimeout(timeoutId);
 
@@ -441,14 +451,16 @@ async function tryAoaPost(
   password: string,
   path: string,
   method: string,
-  timeout: number = 8000
+  timeout: number = 8000,
+  conn?: CameraConnectionInfo
 ): Promise<any | null> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const dispatcher = getCameraDispatcher(conn);
 
   try {
     const response = await authFetch(
-      `http://${ipAddress}${path}`,
+      buildCameraUrl(ipAddress, path, conn),
       username,
       password,
       {
@@ -456,6 +468,7 @@ async function tryAoaPost(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ apiVersion: "1.0", method, context: "probe" }),
         signal: controller.signal,
+        dispatcher,
       }
     );
     clearTimeout(timeoutId);
@@ -490,7 +503,8 @@ async function queryObjectAnalyticsScenarios(
   username: string,
   password: string,
   acapNames: string[] = [],
-  timeout: number = 8000
+  timeout: number = 8000,
+  conn?: CameraConnectionInfo
 ): Promise<{ scenarios: Array<{ name: string; type: string }>; apiPath?: string }> {
   // Build list of paths to try, using actual ACAP names from the app list
   const pathsToTry: string[] = [];
@@ -519,7 +533,7 @@ async function queryObjectAnalyticsScenarios(
 
   for (const path of pathsToTry) {
     for (const method of methodsToTry) {
-      const json = await tryAoaPost(ipAddress, username, password, path, method, timeout);
+      const json = await tryAoaPost(ipAddress, username, password, path, method, timeout, conn);
       if (!json) continue;
 
       console.log(`[Analytics] AOA ${method} on ${ipAddress} at ${path}: success`);
@@ -527,7 +541,7 @@ async function queryObjectAnalyticsScenarios(
       // getSupportedVersions just confirms the API exists, still need getConfiguration
       if (method === "getSupportedVersions") {
         console.log(`[Analytics] AOA API found at ${path} via getSupportedVersions, fetching configuration...`);
-        const configJson = await tryAoaPost(ipAddress, username, password, path, "getConfiguration", timeout);
+        const configJson = await tryAoaPost(ipAddress, username, password, path, "getConfiguration", timeout, conn);
         if (configJson) {
           const scenarios = extractAoaScenarios(configJson);
           if (scenarios.length > 0) {
@@ -565,18 +579,20 @@ async function probeEndpoint(
   username: string,
   password: string,
   path: string,
-  timeout: number = 5000
+  timeout: number = 5000,
+  conn?: CameraConnectionInfo
 ): Promise<boolean> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const dispatcher = getCameraDispatcher(conn);
 
   try {
     // Use GET instead of HEAD - many Axis ACAP endpoints don't support HEAD
     const response = await authFetch(
-      `http://${ipAddress}${path}`,
+      buildCameraUrl(ipAddress, path, conn),
       username,
       password,
-      { method: "GET", signal: controller.signal }
+      { method: "GET", signal: controller.signal, dispatcher }
     );
     clearTimeout(timeoutId);
     const found = response.ok || response.status === 405;
@@ -617,7 +633,8 @@ export interface AnalyticsProbeResult {
 export async function probeAnalyticsCapabilities(
   ipAddress: string,
   username: string,
-  password: string
+  password: string,
+  conn?: CameraConnectionInfo
 ): Promise<AnalyticsProbeResult> {
   const results: AnalyticsProbeResult = {
     peopleCount: false,
@@ -634,7 +651,7 @@ export async function probeAnalyticsCapabilities(
   console.log(`[Analytics] Starting probe for ${ipAddress}...`);
 
   // Step 1: Query installed applications list
-  const apps = await queryInstalledApplications(ipAddress, username, password);
+  const apps = await queryInstalledApplications(ipAddress, username, password, 8000, conn);
 
   if (apps.length > 0) {
     console.log(`[Analytics] All ACAPs on ${ipAddress}: ${apps.map((a) => `${a.niceName}(${a.status})`).join(", ")}`);
@@ -677,7 +694,7 @@ export async function probeAnalyticsCapabilities(
 
   // Step 2: Always try AOA directly via POST - this is the most common analytics platform
   // and the most reliable way to detect it (app list can fail on some firmware)
-  const aoaResult = await queryObjectAnalyticsScenarios(ipAddress, username, password, aoaAcapNames);
+  const aoaResult = await queryObjectAnalyticsScenarios(ipAddress, username, password, aoaAcapNames, 8000, conn);
   if (aoaResult.apiPath) {
     results.objectAnalytics = true;
     results.objectAnalyticsApiPath = aoaResult.apiPath;
@@ -701,12 +718,12 @@ export async function probeAnalyticsCapabilities(
   // Step 3: Probe remaining ACAP endpoints in parallel for anything not yet detected
   console.log(`[Analytics] Probing ACAP endpoints on ${ipAddress}...`);
   const [pcAvail, occAvail, oaAvail, lgAvail, fgAvail, mgAvail] = await Promise.all([
-    !results.peopleCount ? probeEndpoint(ipAddress, username, password, "/local/peoplecounter/query.cgi") : Promise.resolve(true),
-    !results.occupancyEstimation ? probeEndpoint(ipAddress, username, password, "/local/occupancy/.api?method=getOccupancy") : Promise.resolve(true),
-    !results.objectAnalytics ? probeEndpoint(ipAddress, username, password, "/local/objectanalytics/.api") : Promise.resolve(true),
-    !results.loiteringGuard ? probeEndpoint(ipAddress, username, password, "/local/loiteringguard/.api") : Promise.resolve(true),
-    !results.fenceGuard ? probeEndpoint(ipAddress, username, password, "/local/fenceguard/.api") : Promise.resolve(true),
-    !results.motionGuard ? probeEndpoint(ipAddress, username, password, "/local/motionguard/.api") : Promise.resolve(true),
+    !results.peopleCount ? probeEndpoint(ipAddress, username, password, "/local/peoplecounter/query.cgi", 5000, conn) : Promise.resolve(true),
+    !results.occupancyEstimation ? probeEndpoint(ipAddress, username, password, "/local/occupancy/.api?method=getOccupancy", 5000, conn) : Promise.resolve(true),
+    !results.objectAnalytics ? probeEndpoint(ipAddress, username, password, "/local/objectanalytics/.api", 5000, conn) : Promise.resolve(true),
+    !results.loiteringGuard ? probeEndpoint(ipAddress, username, password, "/local/loiteringguard/.api", 5000, conn) : Promise.resolve(true),
+    !results.fenceGuard ? probeEndpoint(ipAddress, username, password, "/local/fenceguard/.api", 5000, conn) : Promise.resolve(true),
+    !results.motionGuard ? probeEndpoint(ipAddress, username, password, "/local/motionguard/.api", 5000, conn) : Promise.resolve(true),
   ]);
 
   if (pcAvail) results.peopleCount = true;
@@ -718,7 +735,7 @@ export async function probeAnalyticsCapabilities(
 
   // If AOA was found by endpoint probe but we haven't queried scenarios yet, do it now
   if (results.objectAnalytics && results.objectAnalyticsScenarios.length === 0 && !results.objectAnalyticsApiPath) {
-    const lateResult = await queryObjectAnalyticsScenarios(ipAddress, username, password, aoaAcapNames);
+    const lateResult = await queryObjectAnalyticsScenarios(ipAddress, username, password, aoaAcapNames, 8000, conn);
     if (lateResult.apiPath) {
       results.objectAnalyticsApiPath = lateResult.apiPath;
     }
@@ -754,6 +771,7 @@ export async function probeAnalyticsCapabilities(
  */
 async function pollCameraAnalytics(camera: any): Promise<void> {
   const password = await decryptPassword(camera.encryptedPassword);
+  const conn = getConnectionInfo(camera);
   const caps = camera.capabilities as CameraCapabilities | null;
   const enabled = caps?.enabledAnalytics;
   const events: Array<{ eventType: string; value: number; metadata?: Record<string, any> }> = [];
@@ -766,7 +784,7 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
   // Try People Counter ACAP first
   if (pcEnabled) {
     try {
-      const data = await queryPeopleCounter(camera.ipAddress, camera.username, password);
+      const data = await queryPeopleCounter(camera.ipAddress, camera.username, password, 5000, conn);
       events.push(
         { eventType: "people_in", value: data.in },
         { eventType: "people_out", value: data.out },
@@ -776,7 +794,7 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
       // People counter failed, try standalone occupancy
       if (occEnabled) {
         try {
-          const occ = await queryOccupancy(camera.ipAddress, camera.username, password);
+          const occ = await queryOccupancy(camera.ipAddress, camera.username, password, 5000, conn);
           events.push({ eventType: "occupancy", value: occ });
         } catch {
           // Occupancy also failed
@@ -786,7 +804,7 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
   } else if (occEnabled) {
     // Only occupancy estimator available and enabled
     try {
-      const occ = await queryOccupancy(camera.ipAddress, camera.username, password);
+      const occ = await queryOccupancy(camera.ipAddress, camera.username, password, 5000, conn);
       events.push({ eventType: "occupancy", value: occ });
     } catch {
       // Occupancy failed
@@ -799,7 +817,7 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
   if (oaEnabled && events.length === 0) {
     // Only query AOA if we didn't already get data from People Counter/Occupancy
     try {
-      const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password, storedAoaPath);
+      const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password, storedAoaPath, 8000, conn);
       events.push(...aoaEvents);
     } catch {
       // AOA query failed
@@ -808,7 +826,7 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
     // Even if we got people counter data, still try AOA for additional scenario data
     // but don't duplicate people_in/people_out/occupancy
     try {
-      const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password, storedAoaPath);
+      const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password, storedAoaPath, 8000, conn);
       const existingTypes = new Set(events.map((e) => e.eventType));
       for (const evt of aoaEvents) {
         if (!existingTypes.has(evt.eventType)) {

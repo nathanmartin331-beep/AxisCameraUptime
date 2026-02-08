@@ -13,6 +13,7 @@ import { cameras, uptimeEvents } from "@shared/schema";
 import { eq, and, lte } from "drizzle-orm";
 import { storage } from "../storage";
 import { authFetch } from "./digestAuth";
+import { buildCameraUrl, getCameraDispatcher, type CameraConnectionInfo } from "./cameraUrl";
 
 /**
  * Parsed system log entry representing a boot/reboot event
@@ -104,16 +105,19 @@ export async function fetchSystemLog(
   ipAddress: string,
   username: string,
   password: string,
-  timeout: number = 10000
+  timeout: number = 10000,
+  conn?: CameraConnectionInfo
 ): Promise<BootEvent[]> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
-    const url = `http://${ipAddress}/axis-cgi/admin/systemlog.cgi`;
+    const url = buildCameraUrl(ipAddress, "/axis-cgi/admin/systemlog.cgi", conn);
+    const dispatcher = getCameraDispatcher(conn);
 
     const response = await authFetch(url, username, password, {
       signal: controller.signal,
+      dispatcher,
     });
 
     clearTimeout(timeoutId);
@@ -230,10 +234,11 @@ export async function backfillFromSystemLog(
   cameraId: string,
   ipAddress: string,
   username: string,
-  password: string
+  password: string,
+  conn?: CameraConnectionInfo
 ): Promise<number> {
   try {
-    const bootEvents = await fetchSystemLog(ipAddress, username, password);
+    const bootEvents = await fetchSystemLog(ipAddress, username, password, 10000, conn);
 
     if (bootEvents.length === 0) {
       console.log(`[Backfill] No historical boot events found in system log for ${ipAddress}`);

@@ -23,6 +23,9 @@ interface CameraDetails {
   id: string;
   name: string;
   ipAddress: string;
+  protocol?: string;
+  port?: number;
+  verifySslCert?: boolean;
   location: string;
   status: CameraStatus;
   currentUptime: string;
@@ -463,6 +466,18 @@ export default function CameraDetailView({
             <div className="flex justify-between">
               <span className="text-sm text-muted-foreground">IP Address</span>
               <code className="text-sm font-mono">{camera.ipAddress}</code>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-sm text-muted-foreground">Connection</span>
+              <span className="text-sm font-medium">
+                {(camera.protocol || 'http').toUpperCase()}
+                {camera.port && camera.port !== 80 && camera.port !== 443 ? `:${camera.port}` : ''}
+                {camera.protocol === 'https' && (
+                  <Badge variant="outline" className="ml-2 text-xs border-green-500 text-green-700 bg-green-50">
+                    SSL
+                  </Badge>
+                )}
+              </span>
             </div>
             <div className="flex justify-between">
               <span className="text-sm text-muted-foreground">Added Date</span>
