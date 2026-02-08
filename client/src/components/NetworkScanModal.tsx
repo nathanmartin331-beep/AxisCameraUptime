@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import { Wifi, Loader2, Plus } from "lucide-react";
 import {
   Table,
@@ -21,6 +20,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
+import { apiRequest } from "@/lib/queryClient";
 
 interface NetworkScanModalProps {
   open: boolean;
@@ -29,10 +29,13 @@ interface NetworkScanModalProps {
 }
 
 interface DiscoveredDevice {
-  ip: string;
-  mac: string;
-  ports: number[];
-  type: string;
+  ipAddress: string;
+  model?: string;
+  serial?: string;
+  firmware?: string;
+  series?: string;
+  discoveryMethod?: string;
+  alreadyAdded?: boolean;
 }
 
 export default function NetworkScanModal({
@@ -40,39 +43,35 @@ export default function NetworkScanModal({
   onOpenChange,
   onAddCameras
 }: NetworkScanModalProps) {
-  const [subnet, setSubnet] = useState("192.168.1.0/24");
+  const [subnet, setSubnet] = useState("");
   const [scanning, setScanning] = useState(false);
-  const [progress, setProgress] = useState(0);
   const [devices, setDevices] = useState<DiscoveredDevice[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  const handleScan = () => {
+  const handleScan = async () => {
     setScanning(true);
-    setProgress(0);
     setDevices([]);
-    console.log("Scanning subnet:", subnet);
+    setSelected(new Set());
 
-    const interval = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setScanning(false);
-          setDevices([
-            { ip: "192.168.1.101", mac: "00:40:8c:ab:cd:ef", ports: [80, 554], type: "Axis Camera" },
-            { ip: "192.168.1.102", mac: "00:40:8c:ab:cd:f0", ports: [80, 554], type: "Axis Camera" },
-            { ip: "192.168.1.105", mac: "00:40:8c:ab:cd:f3", ports: [80], type: "Possible Camera" },
-          ]);
-          return 100;
-        }
-        return prev + 10;
+    try {
+      const response = await apiRequest("POST", "/api/cameras/discover", {
+        subnet: subnet || undefined,
+        bonjour: true,
+        ssdp: true,
+        httpScan: !!subnet,
       });
-    }, 200);
+      const result: any = await response.json();
+      setDevices(result.cameras || []);
+    } catch (error) {
+      console.error("Discovery failed:", error);
+    } finally {
+      setScanning(false);
+    }
   };
 
   const handleAddSelected = () => {
     const selectedIps = Array.from(selected);
     onAddCameras?.(selectedIps);
-    console.log("Adding cameras:", selectedIps);
     onOpenChange(false);
   };
 
@@ -95,16 +94,16 @@ export default function NetworkScanModal({
             Network Scanner
           </DialogTitle>
           <DialogDescription>
-            Scan your network to automatically discover Axis cameras
+            Discover Axis cameras via Bonjour/mDNS, SSDP/UPnP, and HTTP scanning
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="flex gap-2">
             <div className="flex-1 space-y-2">
-              <Label htmlFor="subnet">Subnet (CIDR notation)</Label>
+              <Label htmlFor="modal-subnet">Subnet (CIDR notation, optional)</Label>
               <Input
-                id="subnet"
+                id="modal-subnet"
                 data-testid="input-subnet"
                 value={subnet}
                 onChange={(e) => setSubnet(e.target.value)}
@@ -119,18 +118,15 @@ export default function NetworkScanModal({
                 data-testid="button-start-scan"
               >
                 {scanning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {scanning ? "Scanning..." : "Start Scan"}
+                {scanning ? "Scanning..." : "Discover"}
               </Button>
             </div>
           </div>
 
           {scanning && (
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Scanning network...</span>
-                <span className="font-medium">{progress}%</span>
-              </div>
-              <Progress value={progress} />
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>Scanning network (Bonjour + SSDP{subnet ? " + HTTP" : ""})...</span>
             </div>
           )}
 
@@ -142,41 +138,43 @@ export default function NetworkScanModal({
                     <TableRow>
                       <TableHead className="w-[50px]"></TableHead>
                       <TableHead>IP Address</TableHead>
-                      <TableHead>MAC Address</TableHead>
-                      <TableHead>Open Ports</TableHead>
-                      <TableHead>Type</TableHead>
+                      <TableHead>Model</TableHead>
+                      <TableHead>Serial</TableHead>
+                      <TableHead>Discovery</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {devices.map((device) => (
-                      <TableRow key={device.ip} data-testid={`device-row-${device.ip}`}>
+                      <TableRow key={device.ipAddress} data-testid={`device-row-${device.ipAddress}`}>
                         <TableCell>
                           <Checkbox
-                            checked={selected.has(device.ip)}
-                            onCheckedChange={() => toggleDevice(device.ip)}
-                            data-testid={`checkbox-${device.ip}`}
+                            checked={selected.has(device.ipAddress)}
+                            onCheckedChange={() => toggleDevice(device.ipAddress)}
+                            disabled={device.alreadyAdded}
+                            data-testid={`checkbox-${device.ipAddress}`}
                           />
                         </TableCell>
                         <TableCell>
-                          <code className="text-sm font-mono">{device.ip}</code>
+                          <code className="text-sm font-mono">{device.ipAddress}</code>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm">
+                            {device.model || "Axis Camera"}
+                          </span>
+                          {device.firmware && (
+                            <span className="text-xs text-muted-foreground ml-1">
+                              v{device.firmware}
+                            </span>
+                          )}
                         </TableCell>
                         <TableCell>
                           <code className="text-sm font-mono text-muted-foreground">
-                            {device.mac}
+                            {device.serial || "—"}
                           </code>
                         </TableCell>
                         <TableCell>
-                          <div className="flex gap-1">
-                            {device.ports.map((port) => (
-                              <Badge key={port} variant="secondary" className="text-xs">
-                                {port}
-                              </Badge>
-                            ))}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={device.type === "Axis Camera" ? "default" : "outline"}>
-                            {device.type}
+                          <Badge variant={device.alreadyAdded ? "secondary" : "outline"} className="text-xs">
+                            {device.alreadyAdded ? "Added" : device.discoveryMethod || "http"}
                           </Badge>
                         </TableCell>
                       </TableRow>

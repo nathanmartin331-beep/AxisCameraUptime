@@ -793,12 +793,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { scanIPRange } = await import("./networkScanner");
       const results = await scanIPRange(startIP, endIP);
 
-      // Map results to frontend expected format
+      // Map results to frontend expected format (with enriched data)
       const cameras = results
         .filter(r => r.isAxis)
         .map(r => ({
           ipAddress: r.ipAddress,
           detected: r.isAxis,
+          model: r.model,
+          serial: r.serial,
+          firmware: r.firmware,
+          series: r.series,
+          discoveryMethod: r.discoveryMethod,
         }));
 
       res.json({ cameras });
@@ -808,6 +813,146 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return sendError(res, 400, error.errors[0].message);
       }
       sendError(res, 500, error.message || "Failed to scan network");
+    }
+  });
+
+  // Get local network interfaces for subnet suggestions
+  app.get("/api/network/interfaces", requireAuth, async (req: any, res) => {
+    try {
+      const { getLocalSubnets } = await import("./networkScanner");
+      const interfaces = getLocalSubnets();
+      res.json({ interfaces });
+    } catch (error: any) {
+      console.error("Error getting network interfaces:", error);
+      sendError(res, 500, error.message || "Failed to get network interfaces");
+    }
+  });
+
+  // Unified camera discovery (Bonjour + SSDP + HTTP scan)
+  app.post("/api/cameras/discover", requireAuth, async (req: any, res) => {
+    try {
+      const discoverSchema = z.object({
+        subnet: z.string().optional(),
+        bonjour: z.boolean().optional().default(true),
+        ssdp: z.boolean().optional().default(true),
+        httpScan: z.boolean().optional().default(true),
+      });
+
+      const { subnet, bonjour, ssdp, httpScan } = discoverSchema.parse(req.body || {});
+
+      // Validate CIDR if provided
+      if (subnet) {
+        const [networkAddress, prefixLengthStr] = subnet.split('/');
+        if (!networkAddress || !prefixLengthStr) {
+          return sendError(res, 400, "Invalid CIDR notation. Expected format: 192.168.1.0/24");
+        }
+        const prefixLength = parseInt(prefixLengthStr);
+        if (isNaN(prefixLength) || prefixLength < 8 || prefixLength > 30) {
+          return sendError(res, 400, "Prefix length must be between 8 and 30");
+        }
+        const octets = networkAddress.split('.').map(Number);
+        if (octets.length !== 4 || octets.some(o => isNaN(o) || o < 0 || o > 255)) {
+          return sendError(res, 400, "Invalid IP address format");
+        }
+        // Check scan size
+        const hostBits = 32 - prefixLength;
+        const totalHosts = (1 << hostBits) - 2;
+        if (totalHosts > 10000) {
+          return sendError(res, 400, `Scan too large: ${totalHosts} hosts. Use /20 or smaller.`);
+        }
+      }
+
+      console.log(`[API] Starting unified discovery${subnet ? ` on ${subnet}` : ' (multicast only)'}`);
+
+      const { discoverCameras } = await import("./networkScanner");
+      const results = await discoverCameras(subnet, { bonjour, ssdp, httpScan });
+
+      // Get existing cameras for this user to flag already-added ones
+      const userId = getUserId(req);
+      const existingCameras = await storage.getCamerasByUserId(userId);
+      const existingIPs = new Set(existingCameras.map((c: Camera) => c.ipAddress.trim().toLowerCase()));
+
+      const cameras = results.map(r => ({
+        ipAddress: r.ipAddress,
+        model: r.model || 'Axis Camera',
+        serial: r.serial,
+        firmware: r.firmware,
+        series: r.series,
+        discoveryMethod: r.discoveryMethod,
+        alreadyAdded: existingIPs.has(r.ipAddress.trim().toLowerCase()),
+      }));
+
+      res.json({
+        total: cameras.length,
+        cameras,
+      });
+    } catch (error: any) {
+      console.error("Error discovering cameras:", error);
+      if (error instanceof z.ZodError) {
+        return sendError(res, 400, error.errors[0].message);
+      }
+      sendError(res, 500, error.message || "Failed to discover cameras");
+    }
+  });
+
+  // Bulk add cameras from discovery results
+  app.post("/api/cameras/bulk-add", requireAuth, async (req: any, res) => {
+    try {
+      const bulkAddSchema = z.object({
+        cameras: z.array(z.object({
+          ipAddress: z.string().min(1),
+          name: z.string().optional(),
+          username: z.string().min(1),
+          password: z.string().min(1),
+        })).min(1).max(50),
+      });
+
+      const { cameras } = bulkAddSchema.parse(req.body);
+      const userId = getUserId(req);
+
+      // Get existing cameras for deduplication
+      const existingCameras = await storage.getCamerasByUserId(userId);
+      const existingIPs = new Set(existingCameras.map((c: Camera) => c.ipAddress.trim().toLowerCase()));
+
+      const added: string[] = [];
+      const skipped: string[] = [];
+
+      for (const cam of cameras) {
+        const normalizedIP = cam.ipAddress.trim().toLowerCase();
+        if (existingIPs.has(normalizedIP)) {
+          skipped.push(cam.ipAddress);
+          continue;
+        }
+
+        try {
+          const encrypted = await encryptPassword(cam.password);
+          await storage.createCamera({
+            name: cam.name || `Camera ${cam.ipAddress}`,
+            ipAddress: cam.ipAddress,
+            username: cam.username,
+            encryptedPassword: encrypted,
+            userId,
+          });
+          existingIPs.add(normalizedIP);
+          added.push(cam.ipAddress);
+        } catch (err: any) {
+          console.error(`[BulkAdd] Failed to add ${cam.ipAddress}:`, err.message);
+          skipped.push(cam.ipAddress);
+        }
+      }
+
+      res.json({
+        added: added.length,
+        skipped: skipped.length,
+        addedIPs: added,
+        skippedIPs: skipped,
+      });
+    } catch (error: any) {
+      console.error("Error bulk-adding cameras:", error);
+      if (error instanceof z.ZodError) {
+        return sendError(res, 400, error.errors[0].message);
+      }
+      sendError(res, 500, error.message || "Failed to add cameras");
     }
   });
 
