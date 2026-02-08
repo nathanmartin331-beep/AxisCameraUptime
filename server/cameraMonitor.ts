@@ -428,6 +428,7 @@ async function checkAllCameras() {
                         motionGuard: analyticsProbe.motionGuard,
                         acapInstalled: analyticsProbe.acapInstalled,
                         objectAnalyticsScenarios: analyticsProbe.objectAnalyticsScenarios,
+                        objectAnalyticsApiPath: analyticsProbe.objectAnalyticsApiPath,
                       },
                     }, true);
                   }

@@ -138,100 +138,104 @@ async function queryOccupancy(
 }
 
 /**
- * Query AXIS Object Analytics (AOA) for live counting/occupancy data.
- * Uses the getAccumulatedCounts or getData method.
+ * Parse AOA accumulated counts response into analytics events.
  */
-async function queryObjectAnalyticsData(
-  ipAddress: string,
-  username: string,
-  password: string,
-  timeout: number = 8000
-): Promise<Array<{ eventType: string; value: number; metadata?: Record<string, any> }>> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
+function parseAoaAccumulatedCounts(
+  json: any
+): Array<{ eventType: string; value: number; metadata?: Record<string, any> }> {
   const events: Array<{ eventType: string; value: number; metadata?: Record<string, any> }> = [];
 
-  try {
-    // Query AOA for accumulated counts from all scenarios
-    const response = await authFetch(
-      `http://${ipAddress}/local/objectanalytics/.api`,
-      username,
-      password,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          apiVersion: "1.0",
-          method: "getAccumulatedCounts",
-        }),
-        signal: controller.signal,
-      }
-    );
-    clearTimeout(timeoutId);
+  // Process accumulated counts from scenarios
+  const scenarios = json?.data?.scenarios || json?.data?.devices?.[0]?.channels?.[0]?.scenarios || [];
 
-    if (!response.ok) return events;
+  for (const scenario of scenarios) {
+    const name = scenario.name || "Unnamed";
+    const type = (scenario.type || "").toLowerCase();
 
-    const json = await response.json();
-
-    // Process accumulated counts from scenarios
-    const scenarios = json?.data?.scenarios || json?.data?.devices?.[0]?.channels?.[0]?.scenarios || [];
-
-    for (const scenario of scenarios) {
-      const name = scenario.name || "Unnamed";
-      const type = (scenario.type || "").toLowerCase();
-
-      // Crossline counting scenarios
-      if (type.includes("crossline") || type.includes("line_crossing") || type.includes("crossing")) {
-        const passings = scenario.passings || scenario.counts || [];
-        for (const passing of passings) {
-          if (passing.in !== undefined || passing.enters !== undefined) {
-            events.push({
-              eventType: "people_in",
-              value: parseInt(passing.in || passing.enters || "0") || 0,
-              metadata: { scenario: name, source: "objectanalytics" },
-            });
-          }
-          if (passing.out !== undefined || passing.exits !== undefined) {
-            events.push({
-              eventType: "people_out",
-              value: parseInt(passing.out || passing.exits || "0") || 0,
-              metadata: { scenario: name, source: "objectanalytics" },
-            });
-          }
-        }
-
-        // Also check for direct in/out counts on the scenario itself
-        if (scenario.in !== undefined) {
+    // Crossline counting scenarios
+    if (type.includes("crossline") || type.includes("line_crossing") || type.includes("crossing")) {
+      const passings = scenario.passings || scenario.counts || [];
+      for (const passing of passings) {
+        if (passing.in !== undefined || passing.enters !== undefined) {
           events.push({
             eventType: "people_in",
-            value: parseInt(scenario.in) || 0,
+            value: parseInt(passing.in || passing.enters || "0") || 0,
             metadata: { scenario: name, source: "objectanalytics" },
           });
         }
-        if (scenario.out !== undefined) {
+        if (passing.out !== undefined || passing.exits !== undefined) {
           events.push({
             eventType: "people_out",
-            value: parseInt(scenario.out) || 0,
+            value: parseInt(passing.out || passing.exits || "0") || 0,
             metadata: { scenario: name, source: "objectanalytics" },
           });
         }
       }
 
-      // Occupancy in area scenarios
-      if (type.includes("occupancy") || type.includes("object_in_area")) {
-        const count = scenario.currentOccupancy || scenario.count || scenario.objects || 0;
+      // Also check for direct in/out counts on the scenario itself
+      if (scenario.in !== undefined) {
         events.push({
-          eventType: "occupancy",
-          value: parseInt(String(count)) || 0,
+          eventType: "people_in",
+          value: parseInt(scenario.in) || 0,
+          metadata: { scenario: name, source: "objectanalytics" },
+        });
+      }
+      if (scenario.out !== undefined) {
+        events.push({
+          eventType: "people_out",
+          value: parseInt(scenario.out) || 0,
           metadata: { scenario: name, source: "objectanalytics" },
         });
       }
     }
 
-    return events;
-  } catch {
-    return events;
+    // Occupancy in area scenarios
+    if (type.includes("occupancy") || type.includes("object_in_area")) {
+      const count = scenario.currentOccupancy || scenario.count || scenario.objects || 0;
+      events.push({
+        eventType: "occupancy",
+        value: parseInt(String(count)) || 0,
+        metadata: { scenario: name, source: "objectanalytics" },
+      });
+    }
   }
+
+  return events;
+}
+
+/**
+ * Query AXIS Object Analytics (AOA) for live counting/occupancy data.
+ * Tries the stored API path first, then falls back to standard paths.
+ *
+ * @param storedApiPath - Previously discovered working API path from capabilities
+ */
+async function queryObjectAnalyticsData(
+  ipAddress: string,
+  username: string,
+  password: string,
+  storedApiPath?: string,
+  timeout: number = 8000
+): Promise<Array<{ eventType: string; value: number; metadata?: Record<string, any> }>> {
+  // Build paths to try: stored path first, then standard paths
+  const pathsToTry: string[] = [];
+  if (storedApiPath) {
+    pathsToTry.push(storedApiPath);
+  }
+  if (!pathsToTry.includes("/local/objectanalytics/.api")) {
+    pathsToTry.push("/local/objectanalytics/.api");
+  }
+  if (!pathsToTry.includes("/local/objectanalytics/.apioperator")) {
+    pathsToTry.push("/local/objectanalytics/.apioperator");
+  }
+
+  for (const path of pathsToTry) {
+    const json = await tryAoaPost(ipAddress, username, password, path, "getAccumulatedCounts", timeout);
+    if (json) {
+      return parseAoaAccumulatedCounts(json);
+    }
+  }
+
+  return [];
 }
 
 /**
@@ -354,107 +358,176 @@ async function queryInstalledApplications(
 }
 
 /**
- * Probe AXIS Object Analytics (AOA) for configured scenarios.
- * AOA is the primary analytics framework on modern Axis cameras.
+ * Extract AOA scenarios from a JSON response (multiple response structures supported).
  */
-async function queryObjectAnalyticsScenarios(
+function extractAoaScenarios(json: any): Array<{ name: string; type: string }> {
+  const scenarios: Array<{ name: string; type: string }> = [];
+
+  // Structure 1: data.devices[].channels[].scenarios[]
+  const devices = json?.data?.devices || json?.data?.configuration?.devices || [];
+  for (const device of devices) {
+    const channels = device.channels || [];
+    for (const channel of channels) {
+      const channelScenarios = channel.scenarios || [];
+      for (const scenario of channelScenarios) {
+        scenarios.push({
+          name: scenario.name || scenario.niceName || "Unnamed",
+          type: scenario.type || scenario.objectType || "unknown",
+        });
+      }
+    }
+  }
+
+  // Structure 2: data.scenarios[] (simpler)
+  if (scenarios.length === 0) {
+    const simpleScenarios = json?.data?.scenarios || json?.data?.configuration?.scenarios || [];
+    for (const scenario of simpleScenarios) {
+      scenarios.push({
+        name: scenario.name || scenario.niceName || "Unnamed",
+        type: scenario.type || "unknown",
+      });
+    }
+  }
+
+  // Structure 3: data.cameras[].scenarios[] (some firmware)
+  if (scenarios.length === 0) {
+    const cams = json?.data?.cameras || [];
+    for (const cam of cams) {
+      for (const scenario of (cam.scenarios || [])) {
+        scenarios.push({
+          name: scenario.name || "Unnamed",
+          type: scenario.type || "unknown",
+        });
+      }
+    }
+  }
+
+  return scenarios;
+}
+
+/**
+ * Try a POST JSON-RPC call to an AOA API path.
+ * Returns the parsed JSON response if successful, null otherwise.
+ */
+async function tryAoaPost(
   ipAddress: string,
   username: string,
   password: string,
+  path: string,
+  method: string,
   timeout: number = 8000
-): Promise<Array<{ name: string; type: string }>> {
+): Promise<any | null> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
-    // AOA uses JSON API
     const response = await authFetch(
-      `http://${ipAddress}/local/objectanalytics/.api`,
+      `http://${ipAddress}${path}`,
       username,
       password,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiVersion: "1.0", method: "getConfiguration", context: "probe" }),
+        body: JSON.stringify({ apiVersion: "1.0", method, context: "probe" }),
         signal: controller.signal,
       }
     );
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      console.log(`[Analytics] AOA getConfiguration on ${ipAddress}: HTTP ${response.status}`);
-      return [];
+      return null;
     }
 
     const text = await response.text();
-    console.log(`[Analytics] AOA getConfiguration on ${ipAddress}: raw response (first 500 chars): ${text.substring(0, 500)}`);
-
-    let json: any;
     try {
-      json = JSON.parse(text);
+      const json = JSON.parse(text);
+      if (json.error) return null;
+      return json;
     } catch {
-      console.log(`[Analytics] AOA getConfiguration on ${ipAddress}: non-JSON response`);
-      return [];
+      return null;
     }
-
-    // Check for API errors
-    if (json.error) {
-      console.log(`[Analytics] AOA getConfiguration on ${ipAddress}: API error: ${JSON.stringify(json.error)}`);
-      return [];
-    }
-
-    // Extract scenarios from the configuration
-    const scenarios: Array<{ name: string; type: string }> = [];
-
-    // Try multiple known AOA response structures:
-    // Structure 1: data.devices[].channels[].scenarios[]
-    const devices = json?.data?.devices || json?.data?.configuration?.devices || [];
-    for (const device of devices) {
-      const channels = device.channels || [];
-      for (const channel of channels) {
-        const channelScenarios = channel.scenarios || [];
-        for (const scenario of channelScenarios) {
-          scenarios.push({
-            name: scenario.name || scenario.niceName || "Unnamed",
-            type: scenario.type || scenario.objectType || "unknown",
-          });
-        }
-      }
-    }
-
-    // Structure 2: data.scenarios[] (simpler)
-    if (scenarios.length === 0) {
-      const simpleScenarios = json?.data?.scenarios || json?.data?.configuration?.scenarios || [];
-      for (const scenario of simpleScenarios) {
-        scenarios.push({
-          name: scenario.name || scenario.niceName || "Unnamed",
-          type: scenario.type || "unknown",
-        });
-      }
-    }
-
-    // Structure 3: data.cameras[].scenarios[] (some firmware)
-    if (scenarios.length === 0) {
-      const cams = json?.data?.cameras || [];
-      for (const cam of cams) {
-        for (const scenario of (cam.scenarios || [])) {
-          scenarios.push({
-            name: scenario.name || "Unnamed",
-            type: scenario.type || "unknown",
-          });
-        }
-      }
-    }
-
-    if (scenarios.length === 0) {
-      console.log(`[Analytics] AOA getConfiguration on ${ipAddress}: no scenarios in response. Top-level keys: ${JSON.stringify(Object.keys(json || {}))}. Data keys: ${JSON.stringify(Object.keys(json?.data || {}))}`);
-    }
-
-    return scenarios;
-  } catch (err: any) {
-    console.log(`[Analytics] AOA getConfiguration error on ${ipAddress}: ${err.message}`);
-    return [];
+  } catch {
+    return null;
   }
+}
+
+/**
+ * Probe AXIS Object Analytics (AOA) for configured scenarios.
+ * Tries multiple API paths and methods for compatibility across firmware versions.
+ * The ACAP package name from applications/list.cgi determines the URL path.
+ *
+ * @param acapNames - ACAP package names to try (from applications list)
+ * @returns scenarios and the working API path
+ */
+async function queryObjectAnalyticsScenarios(
+  ipAddress: string,
+  username: string,
+  password: string,
+  acapNames: string[] = [],
+  timeout: number = 8000
+): Promise<{ scenarios: Array<{ name: string; type: string }>; apiPath?: string }> {
+  // Build list of paths to try, using actual ACAP names from the app list
+  const pathsToTry: string[] = [];
+
+  // First: try paths based on actual ACAP names discovered from applications/list.cgi
+  for (const name of acapNames) {
+    const lowerName = name.toLowerCase();
+    pathsToTry.push(`/local/${lowerName}/.api`);
+    // Some ACAPs register under their nice-name-derived path
+    if (lowerName !== "objectanalytics") {
+      pathsToTry.push(`/local/${lowerName}/.apioperator`);
+    }
+  }
+
+  // Then: standard paths as fallback
+  if (!pathsToTry.includes("/local/objectanalytics/.api")) {
+    pathsToTry.push("/local/objectanalytics/.api");
+  }
+  // Operator-level API (some firmware versions)
+  pathsToTry.push("/local/objectanalytics/.apioperator");
+
+  // Methods to try for each path
+  const methodsToTry = ["getConfiguration", "getScenarios", "getSupportedVersions"];
+
+  console.log(`[Analytics] Probing AOA on ${ipAddress}, trying ${pathsToTry.length} paths: ${pathsToTry.join(", ")}`);
+
+  for (const path of pathsToTry) {
+    for (const method of methodsToTry) {
+      const json = await tryAoaPost(ipAddress, username, password, path, method, timeout);
+      if (!json) continue;
+
+      console.log(`[Analytics] AOA ${method} on ${ipAddress} at ${path}: success`);
+
+      // getSupportedVersions just confirms the API exists, still need getConfiguration
+      if (method === "getSupportedVersions") {
+        console.log(`[Analytics] AOA API found at ${path} via getSupportedVersions, fetching configuration...`);
+        const configJson = await tryAoaPost(ipAddress, username, password, path, "getConfiguration", timeout);
+        if (configJson) {
+          const scenarios = extractAoaScenarios(configJson);
+          if (scenarios.length > 0) {
+            return { scenarios, apiPath: path };
+          }
+          console.log(`[Analytics] AOA getConfiguration at ${path}: no scenarios. Keys: ${JSON.stringify(Object.keys(configJson?.data || {}))}`);
+        }
+        // API exists but getConfiguration didn't return scenarios - still return the path
+        return { scenarios: [], apiPath: path };
+      }
+
+      // getConfiguration or getScenarios - extract scenarios directly
+      const scenarios = extractAoaScenarios(json);
+      if (scenarios.length > 0) {
+        return { scenarios, apiPath: path };
+      }
+
+      // API responded but no scenarios in response
+      console.log(`[Analytics] AOA ${method} at ${path}: responded but no scenarios. Top-level keys: ${JSON.stringify(Object.keys(json || {}))}. Data keys: ${JSON.stringify(Object.keys(json?.data || {}))}`);
+      // Return the path even without scenarios - the API works, scenarios might come from data polling
+      return { scenarios: [], apiPath: path };
+    }
+  }
+
+  console.log(`[Analytics] AOA on ${ipAddress}: no working API path found across ${pathsToTry.length} paths`);
+  return { scenarios: [] };
 }
 
 /**
@@ -512,6 +585,7 @@ export interface AnalyticsProbeResult {
   motionGuard: boolean;
   acapInstalled: string[];
   objectAnalyticsScenarios: Array<{ name: string; type: string }>;
+  objectAnalyticsApiPath?: string; // Working API path discovered during probe
 }
 
 export async function probeAnalyticsCapabilities(
@@ -563,17 +637,32 @@ export async function probeAnalyticsCapabilities(
 
   console.log(`[Analytics] Installed ACAPs on ${ipAddress}: ${results.acapInstalled.join(", ") || "none found (app list empty or unavailable)"}`);
 
+  // Extract actual ACAP package names for Object Analytics (used to build correct API URLs)
+  const aoaAcapNames: string[] = [];
+  for (const app of apps) {
+    const nameLower = app.name.toLowerCase();
+    const niceNameLower = app.niceName.toLowerCase();
+    if (nameLower.includes("objectanalytics") || nameLower.includes("object_analytics") ||
+        nameLower.includes("aoa") || niceNameLower.includes("object analytics")) {
+      aoaAcapNames.push(app.name);
+      console.log(`[Analytics] AOA ACAP on ${ipAddress}: Name="${app.name}", NiceName="${app.niceName}", Status="${app.status}", ID="${app.id || "n/a"}"`);
+    }
+  }
+
   // Step 2: Always try AOA directly via POST - this is the most common analytics platform
   // and the most reliable way to detect it (app list can fail on some firmware)
-  console.log(`[Analytics] Probing AOA on ${ipAddress}...`);
-  const scenarios = await queryObjectAnalyticsScenarios(ipAddress, username, password);
-  if (scenarios.length > 0) {
+  const aoaResult = await queryObjectAnalyticsScenarios(ipAddress, username, password, aoaAcapNames);
+  if (aoaResult.apiPath) {
     results.objectAnalytics = true;
-    results.objectAnalyticsScenarios = scenarios;
-    console.log(`[Analytics] AOA scenarios on ${ipAddress}: ${scenarios.map((s) => `${s.name}(${s.type})`).join(", ")}`);
+    results.objectAnalyticsApiPath = aoaResult.apiPath;
+  }
+  if (aoaResult.scenarios.length > 0) {
+    results.objectAnalytics = true;
+    results.objectAnalyticsScenarios = aoaResult.scenarios;
+    console.log(`[Analytics] AOA scenarios on ${ipAddress}: ${aoaResult.scenarios.map((s) => `${s.name}(${s.type})`).join(", ")}`);
 
     // Infer capabilities from scenario types
-    for (const scenario of scenarios) {
+    for (const scenario of aoaResult.scenarios) {
       const type = scenario.type.toLowerCase();
       if (type.includes("crossline") || type.includes("line_crossing") || type.includes("crossing")) results.lineCrossing = true;
       if (type.includes("occupancy") || type.includes("object_in_area")) results.occupancyEstimation = true;
@@ -602,12 +691,15 @@ export async function probeAnalyticsCapabilities(
   if (mgAvail) results.motionGuard = true;
 
   // If AOA was found by endpoint probe but we haven't queried scenarios yet, do it now
-  if (results.objectAnalytics && results.objectAnalyticsScenarios.length === 0) {
-    const lateScenarios = await queryObjectAnalyticsScenarios(ipAddress, username, password);
-    if (lateScenarios.length > 0) {
-      results.objectAnalyticsScenarios = lateScenarios;
-      console.log(`[Analytics] AOA scenarios (late probe) on ${ipAddress}: ${lateScenarios.map((s) => `${s.name}(${s.type})`).join(", ")}`);
-      for (const scenario of lateScenarios) {
+  if (results.objectAnalytics && results.objectAnalyticsScenarios.length === 0 && !results.objectAnalyticsApiPath) {
+    const lateResult = await queryObjectAnalyticsScenarios(ipAddress, username, password, aoaAcapNames);
+    if (lateResult.apiPath) {
+      results.objectAnalyticsApiPath = lateResult.apiPath;
+    }
+    if (lateResult.scenarios.length > 0) {
+      results.objectAnalyticsScenarios = lateResult.scenarios;
+      console.log(`[Analytics] AOA scenarios (late probe) on ${ipAddress}: ${lateResult.scenarios.map((s) => `${s.name}(${s.type})`).join(", ")}`);
+      for (const scenario of lateResult.scenarios) {
         const type = scenario.type.toLowerCase();
         if (type.includes("crossline") || type.includes("line_crossing") || type.includes("crossing")) results.lineCrossing = true;
         if (type.includes("occupancy") || type.includes("object_in_area")) results.occupancyEstimation = true;
@@ -677,10 +769,11 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
 
   // Try Object Analytics (AOA) if enabled - this can provide crossline counting,
   // occupancy-in-area, and other scenario-based data
+  const storedAoaPath = caps?.analytics?.objectAnalyticsApiPath;
   if (oaEnabled && events.length === 0) {
     // Only query AOA if we didn't already get data from People Counter/Occupancy
     try {
-      const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password);
+      const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password, storedAoaPath);
       events.push(...aoaEvents);
     } catch {
       // AOA query failed
@@ -689,7 +782,7 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
     // Even if we got people counter data, still try AOA for additional scenario data
     // but don't duplicate people_in/people_out/occupancy
     try {
-      const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password);
+      const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password, storedAoaPath);
       const existingTypes = new Set(events.map((e) => e.eventType));
       for (const evt of aoaEvents) {
         if (!existingTypes.has(evt.eventType)) {

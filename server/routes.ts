@@ -511,6 +511,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           motionGuard: probeResult.motionGuard,
           acapInstalled: probeResult.acapInstalled,
           objectAnalyticsScenarios: probeResult.objectAnalyticsScenarios,
+          objectAnalyticsApiPath: probeResult.objectAnalyticsApiPath,
         },
       }, true);
 

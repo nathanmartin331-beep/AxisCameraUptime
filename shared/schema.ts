@@ -96,6 +96,7 @@ export interface CameraCapabilities {
     fenceGuard?: boolean;           // AXIS Fence Guard ACAP
     motionGuard?: boolean;          // AXIS Motion Guard ACAP
     objectAnalytics?: boolean;      // AXIS Object Analytics (AOA) master flag
+    objectAnalyticsApiPath?: string; // Discovered working API path for AOA (e.g., "/local/objectanalytics/.api")
     acapInstalled?: string[];       // Full list of installed ACAP names
     objectAnalyticsScenarios?: Array<{
       name: string;
