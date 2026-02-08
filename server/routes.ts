@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { requireAuth } from "./auth";
 import { encryptPassword } from "./encryption";
+import { checkAllCameras } from "./cameraMonitor";
 import { insertCameraSchema, type Camera } from "@shared/schema";
 import type { SafeUser } from "./storage";
 import { z } from "zod";
@@ -149,6 +150,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { encryptedPassword: _, ...safeCamera } = camera;
       res.status(201).json(safeCamera);
+
+      // Trigger immediate poll so the new camera's status updates quickly
+      setTimeout(() => checkAllCameras(), 2000);
     } catch (error: any) {
       console.error("Error creating camera:", error);
       if (error instanceof z.ZodError) {
@@ -947,6 +951,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         addedIPs: added,
         skippedIPs: skipped,
       });
+
+      // Trigger immediate poll so new cameras' status updates quickly
+      if (added.length > 0) {
+        setTimeout(() => checkAllCameras(), 2000);
+      }
     } catch (error: any) {
       console.error("Error bulk-adding cameras:", error);
       if (error instanceof z.ZodError) {
@@ -1175,6 +1184,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           errorRows: errors.length > 0 ? errors : undefined,
         },
       });
+
+      // Trigger immediate poll so new cameras' status updates quickly
+      if (imported.length > 0) {
+        setTimeout(() => checkAllCameras(), 2000);
+      }
     } catch (error: any) {
       console.error("Error importing cameras:", error);
       sendError(res, 400, error.message || "Failed to import cameras");
