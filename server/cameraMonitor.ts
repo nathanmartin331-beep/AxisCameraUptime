@@ -54,61 +54,105 @@ function getVideoEndpoint(camera: any): string {
   return defaultEndpoint;
 }
 
+/**
+ * Get the thumbnail resolution for a camera.
+ * Panoramic/fisheye cameras (e.g. M3007) output square images and can't produce 16:9.
+ */
+function getThumbnailResolution(camera: any): string {
+  if (!camera.model) return "160x90";
+  const model = camera.model.toUpperCase();
+  // M3007, M3057, M3058 are fisheye/panoramic — need square resolution
+  if (model.includes("M3007") || model.includes("M3057") || model.includes("M3058")) {
+    return "160x160";
+  }
+  // Multi-sensor M-series with panoramic stitching
+  if (camera.series === 'M' && camera.numberOfViews && camera.numberOfViews > 1) {
+    return "320x90"; // Wide panoramic aspect
+  }
+  return "160x90";
+}
+
 export async function checkVideoStream(
   ipAddress: string,
   username: string,
   password: string,
   endpoint: string = "/axis-cgi/jpg/image.cgi",
-  timeout: number = 5000
+  timeout: number = 5000,
+  thumbnailResolution: string = "160x90"
 ): Promise<VideoCheckResponse> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  // Try with thumbnail resolution first, then fall back to no resolution param
+  const separator = endpoint.includes('?') ? '&' : '?';
+  const thumbnailUrl = `http://${ipAddress}${endpoint}${separator}resolution=${thumbnailResolution}`;
+  const fallbackUrl = `http://${ipAddress}${endpoint}`;
 
-  try {
-    // Append resolution=160x90 to request a thumbnail (~2-5KB) instead of full frame (~100KB)
-    // This still validates the full video pipeline (sensor → encoder → web server → auth)
-    const separator = endpoint.includes('?') ? '&' : '?';
-    const url = `http://${ipAddress}${endpoint}${separator}resolution=160x90`;
-    const startTime = Date.now();
+  for (const url of [thumbnailUrl, fallbackUrl]) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-    const response = await authFetch(url, username, password, {
-      signal: controller.signal,
-    });
+    try {
+      const startTime = Date.now();
 
-    clearTimeout(timeoutId);
-    const responseTime = Date.now() - startTime;
+      const response = await authFetch(url, username, password, {
+        signal: controller.signal,
+      });
 
-    if (!response.ok) {
-      if (response.status === 401) {
-        throw new Error(`Authentication failed - invalid credentials`);
-      } else if (response.status === 404) {
-        throw new Error(`Video endpoint not found - camera may not support JPEG API`);
+      clearTimeout(timeoutId);
+      const responseTime = Date.now() - startTime;
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error(`Authentication failed - invalid credentials`);
+        } else if (response.status === 404) {
+          throw new Error(`Video endpoint not found - camera may not support JPEG API`);
+        }
+        // If thumbnail resolution caused an error (e.g. 500), try fallback
+        if (url === thumbnailUrl) {
+          continue;
+        }
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
 
-    const contentType = response.headers.get('content-type');
-    if (!contentType || !contentType.includes('image')) {
-      throw new Error(`Unexpected content type: ${contentType} (expected image/*)`);
-    }
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('image')) {
+        // Non-image response with thumbnail param — try without
+        if (url === thumbnailUrl) {
+          continue;
+        }
+        throw new Error(`Unexpected content type: ${contentType} (expected image/*)`);
+      }
 
-    const buffer = await response.arrayBuffer();
-    if (buffer.byteLength === 0) {
-      throw new Error(`Empty response - no image data received`);
-    }
+      const buffer = await response.arrayBuffer();
+      if (buffer.byteLength === 0) {
+        if (url === thumbnailUrl) {
+          continue;
+        }
+        throw new Error(`Empty response - no image data received`);
+      }
 
-    return {
-      videoAvailable: true,
-      responseTime,
-    };
-  } catch (error: any) {
-    clearTimeout(timeoutId);
-    
-    if (error.name === "AbortError") {
-      throw new Error(`Video check timeout after ${timeout}ms`);
+      return {
+        videoAvailable: true,
+        responseTime,
+      };
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+
+      if (error.name === "AbortError") {
+        throw new Error(`Video check timeout after ${timeout}ms`);
+      }
+      // Auth/404 errors are terminal — don't retry with fallback
+      if (error.message?.includes("Authentication failed") || error.message?.includes("endpoint not found")) {
+        throw error;
+      }
+      // For other errors on thumbnail URL, try fallback
+      if (url === thumbnailUrl) {
+        continue;
+      }
+      throw error;
     }
-    throw error;
   }
+
+  // Should not reach here, but just in case
+  throw new Error("Video check failed on all attempts");
 }
 
 async function pollCamera(
@@ -477,7 +521,8 @@ async function checkAllCameras() {
               camera.username,
               decryptedPassword,
               getVideoEndpoint(camera),
-              3000
+              3000,
+              getThumbnailResolution(camera)
             );
 
             videoStatus = "video_ok";
@@ -644,7 +689,7 @@ async function checkCameraCohort(cohortIndex: number) {
           const rebooted = camera.currentBootId && camera.currentBootId !== result.bootId;
           let videoStatus = "unknown";
           try {
-            await checkVideoStream(camera.ipAddress, camera.username, decryptedPassword, getVideoEndpoint(camera), 3000);
+            await checkVideoStream(camera.ipAddress, camera.username, decryptedPassword, getVideoEndpoint(camera), 3000, getThumbnailResolution(camera));
             videoStatus = "video_ok";
             console.log(`[Monitor] ✓ ${camera.name} (${camera.ipAddress}) - Online, Video OK ${rebooted ? "(REBOOTED)" : ""}`);
           } catch (videoError: any) {
