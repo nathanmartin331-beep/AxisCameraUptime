@@ -65,7 +65,7 @@ export interface CameraModelDetection {
   brand: string;
   model: string;
   fullName: string;
-  series: 'P' | 'Q' | 'M' | 'F' | 'Unknown';
+  series: 'P' | 'Q' | 'M' | 'F' | 'A' | 'I' | 'T' | 'D' | 'W' | 'Unknown';
 
   // Firmware
   firmwareVersion?: string;
@@ -376,15 +376,25 @@ export class CameraModelDetector {
   }
 
   /**
-   * Detect camera series from model string
+   * Detect camera series from model string.
+   * Handles ExCam explosion-proof housings (e.g. "ExCam XF P1378" → P-series).
+   * See docs/axis-vapix-edge-cases.md for full model reference.
    */
-  private detectSeries(model: string): 'P' | 'Q' | 'M' | 'F' | 'Unknown' {
-    const upper = model.toUpperCase();
+  private detectSeries(model: string): 'P' | 'Q' | 'M' | 'F' | 'A' | 'I' | 'T' | 'D' | 'W' | 'Unknown' {
+    let upper = model.toUpperCase();
+
+    // Strip ExCam prefix: "EXCAM XF P1378" → "P1378", "EXCAM XPT Q6135" → "Q6135"
+    upper = upper.replace(/^EXCAM\s+X[A-Z]*\s+/, '');
 
     if (upper.startsWith('P')) return 'P';
     if (upper.startsWith('Q')) return 'Q';
     if (upper.startsWith('M')) return 'M';
     if (upper.startsWith('F')) return 'F';
+    if (upper.startsWith('A')) return 'A';
+    if (upper.startsWith('I')) return 'I';
+    if (upper.startsWith('T')) return 'T';
+    if (upper.startsWith('D')) return 'D';
+    if (upper.startsWith('W')) return 'W';
 
     return 'Unknown';
   }

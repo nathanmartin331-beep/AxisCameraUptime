@@ -20,6 +20,14 @@ const limit = pLimit(POLL_CONCURRENCY);
 // "json" = modern JSON POST API, "legacy" = key=value GET, "param" = param.cgi fallback
 const protocolCache = new Map<string, "json" | "legacy" | "param">();
 
+/**
+ * Strip ExCam explosion-proof housing prefix from model string.
+ * "ExCam XF P1378" → "P1378", "ExCam XPT Q6135" → "Q6135"
+ */
+function stripExCamPrefix(model: string): string {
+  return model.replace(/^EXCAM\s+X[A-Z]*\s+/i, '');
+}
+
 interface SystemReadyResponse {
   systemReady: boolean;
   uptime: number;
@@ -45,9 +53,24 @@ function getVideoEndpoint(camera: any): string {
   // Model-specific endpoint selection
   const series = camera.series;
 
+  const model = camera.model ? camera.model.toUpperCase() : '';
+  const baseModel = stripExCamPrefix(model);
+
+  // Multi-directional P-series (P3719, P3717, P3727, P3737, P3747, P3748)
+  // Each sensor is an independent channel; use camera=1 for monitoring
+  if (/P37[12347][789]/.test(baseModel)) {
+    return "/axis-cgi/jpg/image.cgi?camera=1";
+  }
+
+  // Bispectral cameras (Q8742, Q8752) — camera=1=thermal, camera=2=visual
+  // Use camera=1 (thermal) for uptime check since it validates full pipeline
+  if (/Q87[45]2/.test(baseModel)) {
+    return "/axis-cgi/jpg/image.cgi?camera=1";
+  }
+
   // M-series multi-sensor cameras may need camera parameter
   if (series === 'M' && camera.numberOfViews && camera.numberOfViews > 1) {
-    return "/axis-cgi/jpg/image.cgi?camera=1"; // Default to first sensor
+    return "/axis-cgi/jpg/image.cgi?camera=1";
   }
 
   // All other models use standard endpoint
@@ -57,17 +80,30 @@ function getVideoEndpoint(camera: any): string {
 /**
  * Get the thumbnail resolution for a camera.
  * Panoramic/fisheye cameras (e.g. M3007) output square images and can't produce 16:9.
+ * Multi-imager panoramic cameras (M43xx) output ultra-wide images.
+ * See docs/axis-vapix-edge-cases.md for full model reference.
  */
 function getThumbnailResolution(camera: any): string {
   if (!camera.model) return "160x90";
   const model = camera.model.toUpperCase();
-  // M3007, M3057, M3058 are fisheye/panoramic — need square resolution
-  if (model.includes("M3007") || model.includes("M3057") || model.includes("M3058")) {
+
+  // Strip ExCam prefix to get base model for resolution logic
+  const baseModel = stripExCamPrefix(model);
+
+  // Fisheye/panoramic cameras — circular sensor, need square resolution
+  // M3007, M3057, M3058, M3067, M3068, M3077
+  if (/M30[0-9]7/.test(baseModel) || /M30[0-9]8/.test(baseModel)) {
     return "160x160";
   }
-  // Multi-sensor M-series with panoramic stitching
+
+  // Multi-imager panoramic cameras (M43xx) — 4 sensors stitched, ultra-wide
+  if (/M43\d{2}/.test(baseModel)) {
+    return "320x90";
+  }
+
+  // Multi-sensor M-series with panoramic stitching (fallback for unlisted models)
   if (camera.series === 'M' && camera.numberOfViews && camera.numberOfViews > 1) {
-    return "320x90"; // Wide panoramic aspect
+    return "320x90";
   }
   return "160x90";
 }
@@ -139,8 +175,32 @@ export async function checkVideoStream(
       if (error.name === "AbortError") {
         throw new Error(`Video check timeout after ${timeout}ms`);
       }
-      // Auth/404 errors are terminal — don't retry with fallback
-      if (error.message?.includes("Authentication failed") || error.message?.includes("endpoint not found")) {
+      // Auth errors are terminal — don't retry with fallback
+      if (error.message?.includes("Authentication failed")) {
+        throw error;
+      }
+      // 404 on thumbnail URL → try fallback URL; 404 on fallback → try /jpg/image.jpg (very old firmware)
+      if (error.message?.includes("endpoint not found") && url === fallbackUrl) {
+        // Last resort: very old VAPIX 1/2 cameras use /jpg/image.jpg
+        try {
+          const legacyUrl = `http://${ipAddress}/jpg/image.jpg`;
+          const legacyController = new AbortController();
+          const legacyTimeoutId = setTimeout(() => legacyController.abort(), timeout);
+          const legacyStart = Date.now();
+          const legacyResponse = await authFetch(legacyUrl, username, password, { signal: legacyController.signal });
+          clearTimeout(legacyTimeoutId);
+          if (legacyResponse.ok) {
+            const ct = legacyResponse.headers.get('content-type');
+            if (ct && ct.includes('image')) {
+              const buf = await legacyResponse.arrayBuffer();
+              if (buf.byteLength > 0) {
+                return { videoAvailable: true, responseTime: Date.now() - legacyStart };
+              }
+            }
+          }
+        } catch {
+          // Legacy endpoint also failed — fall through to throw
+        }
         throw error;
       }
       // For other errors on thumbnail URL, try fallback
@@ -189,9 +249,9 @@ async function pollCamera(
     const responseTime = Date.now() - startTime;
 
     // Check HTTP status
-    if (response.status === 404) {
-      // Older firmware without systemready.cgi — fall back to param.cgi health check
-      console.log(`[VAPIX] No systemready.cgi on ${ipAddress}, caching param.cgi fallback`);
+    if (response.status === 404 || response.status === 500) {
+      // Older firmware without systemready.cgi, or server error — fall back to param.cgi
+      console.log(`[VAPIX] systemready.cgi returned ${response.status} on ${ipAddress}, caching param.cgi fallback`);
       protocolCache.set(ipAddress, "param");
       return await pollCameraLegacyFallback(ipAddress, username, password, timeout);
     }
@@ -201,9 +261,16 @@ async function pollCamera(
     }
 
     const text = await response.text();
+    const trimmed = text.trim();
+
+    // Guard against HTML responses (misconfigured device or web UI redirect)
+    if (trimmed.startsWith('<') || (response.headers.get('content-type') || '').includes('text/html')) {
+      console.log(`[VAPIX] HTML response from systemready.cgi on ${ipAddress}, falling back to param.cgi`);
+      protocolCache.set(ipAddress, "param");
+      return await pollCameraLegacyFallback(ipAddress, username, password, timeout);
+    }
 
     // Detect JSON response (modern VAPIX API v1.2+/v1.4+)
-    const trimmed = text.trim();
     if (trimmed.startsWith('{')) {
       console.log(`[VAPIX] Detected JSON API on ${ipAddress}, caching for future polls`);
       protocolCache.set(ipAddress, "json");

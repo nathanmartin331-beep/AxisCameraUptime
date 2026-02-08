@@ -113,7 +113,7 @@ export class DetectionCache {
       key: string;
       expiresIn: number;
       model: string;
-      series: 'P' | 'Q' | 'M' | 'F' | 'Unknown';
+      series: 'P' | 'Q' | 'M' | 'F' | 'A' | 'I' | 'T' | 'D' | 'W' | 'Unknown';
     }> = [];
 
     this.cache.forEach((value, key) => {
