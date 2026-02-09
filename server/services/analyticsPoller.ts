@@ -1419,7 +1419,7 @@ export function startAnalyticsPolling() {
   analyticsPollingStarted = true;
 
   const intervalMinutes = parseInt(process.env.ANALYTICS_POLL_INTERVAL || "1", 10);
-  console.log(`[Analytics] Initializing analytics polling service (every ${intervalMinutes} min)...`);
+  console.log(`[Analytics] Initializing analytics polling service (every ${intervalMinutes} min) [v2-control-cgi]...`);
 
   // Clean stale paths before first poll to prevent 404 spam
   cleanupStaleAnalyticsPaths().then(() => {
