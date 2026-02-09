@@ -15,7 +15,7 @@ export interface Camera {
 
   // Model Detection Fields
   model?: string;
-  series?: 'P' | 'Q' | 'M' | 'F';
+  series?: 'P' | 'Q' | 'M' | 'F' | 'C';
   fullName?: string;
   firmwareVersion?: string;
 
@@ -39,11 +39,12 @@ export const SERIES_COLORS = {
   Q: "border-green-500 text-green-700 bg-green-50",
   M: "border-purple-500 text-purple-700 bg-purple-50",
   F: "border-orange-500 text-orange-700 bg-orange-50",
+  C: "border-teal-500 text-teal-700 bg-teal-50",
 } as const;
 
 /**
  * Get series color class based on series letter
  */
-export function getSeriesColor(series?: 'P' | 'Q' | 'M' | 'F'): string {
+export function getSeriesColor(series?: 'P' | 'Q' | 'M' | 'F' | 'C'): string {
   return series ? SERIES_COLORS[series] : "";
 }

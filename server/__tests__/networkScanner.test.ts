@@ -4,7 +4,7 @@
  * Tests for network scanner with model detection integration
  */
 
-import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 describe('Network Scanner with Model Detection', () => {
 

@@ -20,6 +20,15 @@ const limit = pLimit(POLL_CONCURRENCY);
 // Cache the VAPIX protocol variant per camera IP to avoid redundant GET→POST retries.
 // "json" = modern JSON POST API, "legacy" = key=value GET, "param" = param.cgi fallback
 const protocolCache = new Map<string, "json" | "legacy" | "param">();
+const PROTOCOL_CACHE_MAX_SIZE = 5000;
+
+function protocolCacheSet(key: string, value: "json" | "legacy" | "param") {
+  if (protocolCache.size >= PROTOCOL_CACHE_MAX_SIZE) {
+    console.warn(`[Monitor] protocolCache exceeded ${PROTOCOL_CACHE_MAX_SIZE} entries, clearing`);
+    protocolCache.clear();
+  }
+  protocolCache.set(key, value);
+}
 
 /**
  * Strip ExCam explosion-proof housing prefix from model string.
@@ -263,7 +272,7 @@ async function pollCamera(
     if (response.status === 404 || response.status === 500) {
       // Older firmware without systemready.cgi, or server error — fall back to param.cgi
       console.log(`[VAPIX] systemready.cgi returned ${response.status} on ${ipAddress}, caching param.cgi fallback`);
-      protocolCache.set(ipAddress, "param");
+      protocolCacheSet(ipAddress, "param");
       return await pollCameraLegacyFallback(ipAddress, username, password, timeout, conn);
     }
 
@@ -277,19 +286,19 @@ async function pollCamera(
     // Guard against HTML responses (misconfigured device or web UI redirect)
     if (trimmed.startsWith('<') || (response.headers.get('content-type') || '').includes('text/html')) {
       console.log(`[VAPIX] HTML response from systemready.cgi on ${ipAddress}, falling back to param.cgi`);
-      protocolCache.set(ipAddress, "param");
+      protocolCacheSet(ipAddress, "param");
       return await pollCameraLegacyFallback(ipAddress, username, password, timeout, conn);
     }
 
     // Detect JSON response (modern VAPIX API v1.2+/v1.4+)
     if (trimmed.startsWith('{')) {
       console.log(`[VAPIX] Detected JSON API on ${ipAddress}, caching for future polls`);
-      protocolCache.set(ipAddress, "json");
+      protocolCacheSet(ipAddress, "json");
       return await pollCameraJsonApi(ipAddress, username, password, timeout, conn);
     }
 
     // This is a legacy key=value camera — cache it
-    protocolCache.set(ipAddress, "legacy");
+    protocolCacheSet(ipAddress, "legacy");
 
     // Validate response contains expected legacy VAPIX format
     if (!text.includes("systemready=") && !text.includes("=")) {
@@ -490,6 +499,197 @@ async function pollCameraLegacyFallback(
   }
 }
 
+/** Result of polling a single camera, ready for batch DB writes. */
+interface PollResult {
+  pendingEvent: InsertUptimeEvent;
+  statusUpdate: {
+    id: string;
+    status: string;
+    bootId?: string;
+    lastSeenAt?: Date;
+    videoStatus: string;
+  };
+}
+
+/**
+ * Poll a single camera: decrypt password, check system status, detect model,
+ * probe analytics, check video stream, and trigger history backfill.
+ *
+ * Returns the pending uptime event and status update for batch writing.
+ * Throws if the camera is unreachable (caller handles offline recording).
+ *
+ * Background tasks (model detection, analytics probe, history backfill) are
+ * fire-and-forget but log warnings on failure rather than swallowing errors.
+ */
+async function pollSingleCamera(camera: any, conn: CameraConnectionInfo): Promise<PollResult> {
+  const startTime = Date.now();
+
+  const decryptedPassword = await decryptPassword(camera.encryptedPassword);
+
+  const result = await pollCamera(
+    camera.ipAddress,
+    camera.username,
+    decryptedPassword,
+    5000,
+    conn
+  );
+
+  // Lazy model detection (non-blocking, fire-and-forget)
+  if (!camera.model) {
+    const cached = detectionCache.get(camera.ipAddress, camera.username);
+
+    if (cached) {
+      try {
+        await db.update(cameras)
+          .set({
+            model: cached.model,
+            series: cached.series,
+            numberOfViews: cached.numberOfViews,
+            capabilities: cached.capabilities,
+            updatedAt: new Date(),
+          })
+          .where(eq(cameras.id, camera.id));
+
+        console.log(`[Monitor] Using cached model for ${camera.name}: ${cached.model} (${cached.series}-series)`);
+      } catch (err: any) {
+        console.warn(`[Monitor] Failed to update cached model for ${camera.name}: ${err.message}`);
+      }
+    } else {
+      detectCameraModel(camera.ipAddress, camera.username, decryptedPassword, undefined, conn)
+        .then(async (detection) => {
+          detectionCache.set(camera.ipAddress, camera.username, detection);
+
+          await db.update(cameras)
+            .set({
+              model: detection.model,
+              series: detection.series,
+              numberOfViews: detection.numberOfViews,
+              capabilities: detection.capabilities,
+              updatedAt: new Date(),
+            })
+            .where(eq(cameras.id, camera.id));
+
+          console.log(`[Monitor] Detected model for ${camera.name}: ${detection.model} (${detection.series}-series)`);
+
+          try {
+            const analyticsProbe = await probeAnalyticsCapabilities(
+              camera.ipAddress,
+              camera.username,
+              decryptedPassword,
+              conn
+            );
+            const hasAny = analyticsProbe.peopleCount || analyticsProbe.occupancyEstimation ||
+              analyticsProbe.lineCrossing || analyticsProbe.objectAnalytics ||
+              analyticsProbe.loiteringGuard || analyticsProbe.fenceGuard || analyticsProbe.motionGuard;
+            if (hasAny) {
+              await storage.updateCameraCapabilities(camera.id, {
+                analytics: {
+                  ...detection.capabilities?.analytics,
+                  peopleCount: analyticsProbe.peopleCount,
+                  occupancyEstimation: analyticsProbe.occupancyEstimation,
+                  lineCrossing: analyticsProbe.lineCrossing,
+                  objectAnalytics: analyticsProbe.objectAnalytics,
+                  loiteringGuard: analyticsProbe.loiteringGuard,
+                  fenceGuard: analyticsProbe.fenceGuard,
+                  motionGuard: analyticsProbe.motionGuard,
+                  acapInstalled: analyticsProbe.acapInstalled,
+                  objectAnalyticsScenarios: analyticsProbe.objectAnalyticsScenarios,
+                  objectAnalyticsApiPath: analyticsProbe.objectAnalyticsApiPath,
+                },
+              }, true);
+            }
+          } catch (probeErr: any) {
+            console.warn(`[Monitor] Analytics probe failed for ${camera.name}: ${probeErr.message}`);
+          }
+        })
+        .catch((err) => {
+          console.warn(`[Monitor] Model detection failed for ${camera.name}: ${err.message}`);
+        });
+    }
+  }
+
+  // Detect reboot by comparing boot IDs
+  const rebooted =
+    camera.currentBootId && camera.currentBootId !== result.bootId;
+
+  // Check video stream (skip for non-video devices like C-series speakers)
+  let videoStatus = "unknown";
+  const isNonVideoDevice = camera.series === 'C'; // C-series = network speakers
+  if (isNonVideoDevice) {
+    videoStatus = "not_applicable";
+    console.log(
+      `[Monitor] ${camera.name} (${camera.ipAddress}) - Online, Non-video device (${camera.series}-series) ${rebooted ? "(REBOOTED)" : ""}`
+    );
+  } else {
+    try {
+      await checkVideoStream(
+        camera.ipAddress,
+        camera.username,
+        decryptedPassword,
+        getVideoEndpoint(camera),
+        3000,
+        getThumbnailResolution(camera),
+        conn
+      );
+
+      videoStatus = "video_ok";
+
+      console.log(
+        `[Monitor] ${camera.name} (${camera.ipAddress}) - Online, Video OK ${rebooted ? "(REBOOTED)" : ""}`
+      );
+    } catch (videoError: any) {
+      videoStatus = "video_failed";
+
+      console.log(
+        `[Monitor] ${camera.name} (${camera.ipAddress}) - Online but Video FAILED: ${videoError.message}`
+      );
+    }
+  }
+
+  // Historical uptime backfill (runs once per camera lifecycle, fire-and-forget)
+  if (!camera.historyBackfilled && result.uptime > 0) {
+    backfillFromUptimeSeconds(
+      camera.id,
+      new Date(),
+      result.uptime,
+      result.bootId
+    ).then((backfilled) => {
+      if (backfilled) {
+        backfillFromSystemLog(
+          camera.id,
+          camera.ipAddress,
+          camera.username,
+          decryptedPassword,
+          conn
+        ).catch((err) => {
+          console.warn(`[Monitor] System log backfill failed for ${camera.name}: ${err.message}`);
+        });
+      }
+    }).catch((err) => {
+      console.warn(`[Monitor] Uptime backfill failed for ${camera.name}: ${err.message}`);
+    });
+  }
+
+  return {
+    pendingEvent: {
+      cameraId: camera.id,
+      timestamp: new Date(),
+      status: "online",
+      uptimeSeconds: result.uptime,
+      bootId: result.bootId,
+      videoStatus,
+      responseTimeMs: Date.now() - startTime,
+    },
+    statusUpdate: {
+      id: camera.id,
+      status: "online",
+      bootId: result.bootId,
+      lastSeenAt: new Date(),
+      videoStatus,
+    },
+  };
+}
+
 async function checkAllCameras() {
   console.log("[Monitor] Starting camera polling cycle...");
 
@@ -500,174 +700,18 @@ async function checkAllCameras() {
 
     // Collect results for batched DB writes
     const pendingEvents: InsertUptimeEvent[] = [];
-    const pendingStatusUpdates: Array<{
-      id: string;
-      status: string;
-      bootId?: string;
-      lastSeenAt?: Date;
-      videoStatus: string;
-    }> = [];
+    const pendingStatusUpdates: PollResult["statusUpdate"][] = [];
 
     // Use p-limit to cap concurrent HTTP requests
     const promises = allCameras.map((camera) =>
       limit(async () => {
         const startTime = Date.now();
-
         try {
-          const decryptedPassword = await decryptPassword(camera.encryptedPassword);
-
           const conn = getConnectionInfo(camera);
+          const result = await pollSingleCamera(camera, conn);
 
-          const result = await pollCamera(
-            camera.ipAddress,
-            camera.username,
-            decryptedPassword,
-            5000,
-            conn
-          );
-
-          // Lazy model detection (non-blocking)
-          if (!camera.model) {
-            const cached = detectionCache.get(camera.ipAddress, camera.username);
-
-            if (cached) {
-              try {
-                await db.update(cameras)
-                  .set({
-                    model: cached.model,
-                    series: cached.series,
-                    numberOfViews: cached.numberOfViews,
-                    capabilities: cached.capabilities,
-                    updatedAt: new Date(),
-                  })
-                  .where(eq(cameras.id, camera.id));
-
-                console.log(`[Monitor] ✓ Using cached model for ${camera.name}: ${cached.model} (${cached.series}-series)`);
-              } catch (err: any) {
-                console.warn(`[Monitor] ⚠ Failed to update cached model for ${camera.name}: ${err.message}`);
-              }
-            } else {
-              detectCameraModel(camera.ipAddress, camera.username, decryptedPassword, undefined, conn)
-                .then(async (detection) => {
-                  detectionCache.set(camera.ipAddress, camera.username, detection);
-
-                  await db.update(cameras)
-                    .set({
-                      model: detection.model,
-                      series: detection.series,
-                      numberOfViews: detection.numberOfViews,
-                      capabilities: detection.capabilities,
-                      updatedAt: new Date(),
-                    })
-                    .where(eq(cameras.id, camera.id));
-
-                  console.log(`[Monitor] ✓ Detected model for ${camera.name}: ${detection.model} (${detection.series}-series)`);
-
-                  try {
-                    const analyticsProbe = await probeAnalyticsCapabilities(
-                      camera.ipAddress,
-                      camera.username,
-                      decryptedPassword,
-                      conn
-                    );
-                    const hasAny = analyticsProbe.peopleCount || analyticsProbe.occupancyEstimation ||
-                      analyticsProbe.lineCrossing || analyticsProbe.objectAnalytics ||
-                      analyticsProbe.loiteringGuard || analyticsProbe.fenceGuard || analyticsProbe.motionGuard;
-                    if (hasAny) {
-                      await storage.updateCameraCapabilities(camera.id, {
-                        analytics: {
-                          ...detection.capabilities?.analytics,
-                          peopleCount: analyticsProbe.peopleCount,
-                          occupancyEstimation: analyticsProbe.occupancyEstimation,
-                          lineCrossing: analyticsProbe.lineCrossing,
-                          objectAnalytics: analyticsProbe.objectAnalytics,
-                          loiteringGuard: analyticsProbe.loiteringGuard,
-                          fenceGuard: analyticsProbe.fenceGuard,
-                          motionGuard: analyticsProbe.motionGuard,
-                          acapInstalled: analyticsProbe.acapInstalled,
-                          objectAnalyticsScenarios: analyticsProbe.objectAnalyticsScenarios,
-                          objectAnalyticsApiPath: analyticsProbe.objectAnalyticsApiPath,
-                        },
-                      }, true);
-                    }
-                  } catch (probeErr: any) {
-                    console.warn(`[Monitor] ⚠ Analytics probe failed for ${camera.name}: ${probeErr.message}`);
-                  }
-                })
-                .catch((err) => {
-                  console.warn(`[Monitor] ⚠ Model detection failed for ${camera.name}: ${err.message}`);
-                });
-            }
-          }
-
-          // Detect reboot by comparing boot IDs
-          const rebooted =
-            camera.currentBootId && camera.currentBootId !== result.bootId;
-
-          // Check video stream
-          let videoStatus = "unknown";
-          try {
-            await checkVideoStream(
-              camera.ipAddress,
-              camera.username,
-              decryptedPassword,
-              getVideoEndpoint(camera),
-              3000,
-              getThumbnailResolution(camera),
-              conn
-            );
-
-            videoStatus = "video_ok";
-
-            console.log(
-              `[Monitor] ✓ ${camera.name} (${camera.ipAddress}) - Online, Video OK ${rebooted ? "(REBOOTED)" : ""}`
-            );
-          } catch (videoError: any) {
-            videoStatus = "video_failed";
-
-            console.log(
-              `[Monitor] ⚠ ${camera.name} (${camera.ipAddress}) - Online but Video FAILED: ${videoError.message}`
-            );
-          }
-
-          // Collect for batch write (instead of individual DB calls)
-          pendingStatusUpdates.push({
-            id: camera.id,
-            status: "online",
-            bootId: result.bootId,
-            lastSeenAt: new Date(),
-            videoStatus,
-          });
-
-          pendingEvents.push({
-            cameraId: camera.id,
-            timestamp: new Date(),
-            status: "online",
-            uptimeSeconds: result.uptime,
-            bootId: result.bootId,
-            videoStatus,
-            responseTimeMs: Date.now() - startTime,
-          });
-
-          // Historical uptime backfill (runs once per camera lifecycle)
-          if (!camera.historyBackfilled && result.uptime > 0) {
-            backfillFromUptimeSeconds(
-              camera.id,
-              new Date(),
-              result.uptime,
-              result.bootId
-            ).then((backfilled) => {
-              if (backfilled) {
-                backfillFromSystemLog(
-                  camera.id,
-                  camera.ipAddress,
-                  camera.username,
-                  decryptedPassword,
-                  conn
-                ).catch(() => {});
-              }
-            }).catch(() => {});
-          }
+          pendingStatusUpdates.push(result.statusUpdate);
+          pendingEvents.push(result.pendingEvent);
         } catch (error: any) {
           // Camera is offline or unreachable
           pendingStatusUpdates.push({
@@ -686,7 +730,7 @@ async function checkAllCameras() {
           });
 
           console.log(
-            `[Monitor] ✗ ${camera.name} (${camera.ipAddress}) - Offline: ${error.message}`
+            `[Monitor] ${camera.name} (${camera.ipAddress}) - Offline: ${error.message}`
           );
         }
       })
@@ -733,76 +777,21 @@ async function checkCameraCohort(cohortIndex: number) {
     console.log(`[Monitor] Cohort ${cohortIndex}/${NUM_COHORTS - 1}: checking ${cohortCameras.length} cameras (concurrency: ${POLL_CONCURRENCY})`);
 
     const pendingEvents: InsertUptimeEvent[] = [];
-    const pendingStatusUpdates: Array<{
-      id: string;
-      status: string;
-      bootId?: string;
-      lastSeenAt?: Date;
-      videoStatus: string;
-    }> = [];
+    const pendingStatusUpdates: PollResult["statusUpdate"][] = [];
 
     const promises = cohortCameras.map((camera) =>
       limit(async () => {
         const startTime = Date.now();
-
         try {
-          const decryptedPassword = await decryptPassword(camera.encryptedPassword);
           const conn = getConnectionInfo(camera);
-          const result = await pollCamera(camera.ipAddress, camera.username, decryptedPassword, 5000, conn);
+          const result = await pollSingleCamera(camera, conn);
 
-          // Lazy model detection (non-blocking)
-          if (!camera.model) {
-            const cached = detectionCache.get(camera.ipAddress, camera.username);
-            if (cached) {
-              try {
-                await db.update(cameras)
-                  .set({ model: cached.model, series: cached.series, numberOfViews: cached.numberOfViews, capabilities: cached.capabilities, updatedAt: new Date() })
-                  .where(eq(cameras.id, camera.id));
-              } catch (err: any) {
-                console.warn(`[Monitor] ⚠ Failed to update cached model for ${camera.name}: ${err.message}`);
-              }
-            } else {
-              detectCameraModel(camera.ipAddress, camera.username, decryptedPassword, undefined, conn)
-                .then(async (detection) => {
-                  detectionCache.set(camera.ipAddress, camera.username, detection);
-                  await db.update(cameras)
-                    .set({ model: detection.model, series: detection.series, numberOfViews: detection.numberOfViews, capabilities: detection.capabilities, updatedAt: new Date() })
-                    .where(eq(cameras.id, camera.id));
-                  try {
-                    const analyticsProbe = await probeAnalyticsCapabilities(camera.ipAddress, camera.username, decryptedPassword, conn);
-                    const hasAny = analyticsProbe.peopleCount || analyticsProbe.occupancyEstimation || analyticsProbe.lineCrossing || analyticsProbe.objectAnalytics || analyticsProbe.loiteringGuard || analyticsProbe.fenceGuard || analyticsProbe.motionGuard;
-                    if (hasAny) {
-                      await storage.updateCameraCapabilities(camera.id, { analytics: { ...detection.capabilities?.analytics, ...analyticsProbe } }, true);
-                    }
-                  } catch {}
-                })
-                .catch(() => {});
-            }
-          }
-
-          const rebooted = camera.currentBootId && camera.currentBootId !== result.bootId;
-          let videoStatus = "unknown";
-          try {
-            await checkVideoStream(camera.ipAddress, camera.username, decryptedPassword, getVideoEndpoint(camera), 3000, getThumbnailResolution(camera), conn);
-            videoStatus = "video_ok";
-            console.log(`[Monitor] ✓ ${camera.name} (${camera.ipAddress}) - Online, Video OK ${rebooted ? "(REBOOTED)" : ""}`);
-          } catch (videoError: any) {
-            videoStatus = "video_failed";
-            console.log(`[Monitor] ⚠ ${camera.name} (${camera.ipAddress}) - Online but Video FAILED: ${videoError.message}`);
-          }
-
-          pendingStatusUpdates.push({ id: camera.id, status: "online", bootId: result.bootId, lastSeenAt: new Date(), videoStatus });
-          pendingEvents.push({ cameraId: camera.id, timestamp: new Date(), status: "online", uptimeSeconds: result.uptime, bootId: result.bootId, videoStatus, responseTimeMs: Date.now() - startTime });
-
-          if (!camera.historyBackfilled && result.uptime > 0) {
-            backfillFromUptimeSeconds(camera.id, new Date(), result.uptime, result.bootId)
-              .then((backfilled) => { if (backfilled) backfillFromSystemLog(camera.id, camera.ipAddress, camera.username, decryptedPassword, conn).catch(() => {}); })
-              .catch(() => {});
-          }
+          pendingStatusUpdates.push(result.statusUpdate);
+          pendingEvents.push(result.pendingEvent);
         } catch (error: any) {
           pendingStatusUpdates.push({ id: camera.id, status: "offline", videoStatus: "unknown" });
           pendingEvents.push({ cameraId: camera.id, timestamp: new Date(), status: "offline", videoStatus: "unknown", errorMessage: error.message, responseTimeMs: Date.now() - startTime });
-          console.log(`[Monitor] ✗ ${camera.name} (${camera.ipAddress}) - Offline: ${error.message}`);
+          console.log(`[Monitor] ${camera.name} (${camera.ipAddress}) - Offline: ${error.message}`);
         }
       })
     );

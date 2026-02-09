@@ -64,7 +64,10 @@ export interface ModelUpdateData {
 function deepMerge(target: any, source: any): any {
   const output = { ...target };
 
-  for (const key in source) {
+  for (const key of Object.keys(source)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      continue;
+    }
     if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
       output[key] = deepMerge(target[key] || {}, source[key]);
     } else {

@@ -35,20 +35,20 @@ export default function CameraDetail() {
   const { data: camera, isLoading: cameraLoading, error: cameraError } = useQuery<Camera>({
     queryKey: ["/api/cameras", cameraId],
     enabled: !!cameraId,
-    refetchInterval: 10000,
+    refetchInterval: 30000,
   });
 
   const { data: events, isLoading: eventsLoading } = useQuery<EventsResponse, Error, UptimeEvent[]>({
     queryKey: ["/api/cameras", cameraId, "events?limit=100"],
     enabled: !!cameraId,
     select: (data) => data.events ?? [],
-    refetchInterval: 10000,
+    refetchInterval: 30000,
   });
 
   const { data: uptimeData, isLoading: uptimeLoading } = useQuery<UptimeResponse>({
     queryKey: ["/api/cameras", cameraId, "uptime?days=30"],
     enabled: !!cameraId,
-    refetchInterval: 10000,
+    refetchInterval: 30000,
   });
 
   // Fetch analytics data if camera has any enabled analytics
@@ -333,6 +333,7 @@ export default function CameraDetail() {
     try {
       const response = await fetch(`/api/cameras/${cameraId}/detect-model`, {
         method: 'POST',
+        credentials: 'include',
       });
 
       if (!response.ok) {

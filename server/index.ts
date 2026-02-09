@@ -118,10 +118,10 @@ app.use((req, res, next) => {
     host: "0.0.0.0",
   }, async () => {
     log(`serving on port ${port}`);
-    
+
     // Ensure default user exists for auto-login
     await ensureDefaultUser();
-    
+
     // Start camera monitoring service
     startCameraMonitoring();
 
@@ -134,4 +134,16 @@ app.use((req, res, next) => {
     // Start data aggregation service (hourly/daily rollups for scale)
     startDataAggregationService();
   });
+
+  // Graceful shutdown handlers
+  const shutdown = (signal: string) => {
+    console.log(`${signal} received. Shutting down gracefully...`);
+    server.close(() => {
+      console.log("HTTP server closed.");
+      process.exit(0);
+    });
+  };
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 })();

@@ -127,56 +127,62 @@ export interface CameraCapabilities {
 }
 
 // Cameras table - stores camera configuration and encrypted credentials
-export const cameras = sqliteTable("cameras", {
-  id: text("id").primaryKey().$defaultFn(generateId),
-  userId: text("user_id")
-    .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
-  name: text("name").notNull(),
-  ipAddress: text("ip_address").notNull(),
-  username: text("username").notNull(),
-  encryptedPassword: text("encrypted_password").notNull(),
-  location: text("location"),
-  notes: text("notes"),
-  currentBootId: text("current_boot_id"),
-  lastSeenAt: integer("last_seen_at", { mode: "timestamp" }),
-  currentStatus: text("current_status").default("unknown"),
-  videoStatus: text("video_status").default("unknown"),
-  lastVideoCheck: integer("last_video_check", { mode: "timestamp" }),
-  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
-  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+export const cameras = sqliteTable(
+  "cameras",
+  {
+    id: text("id").primaryKey().$defaultFn(generateId),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    ipAddress: text("ip_address").notNull(),
+    username: text("username").notNull(),
+    encryptedPassword: text("encrypted_password").notNull(),
+    location: text("location"),
+    notes: text("notes"),
+    currentBootId: text("current_boot_id"),
+    lastSeenAt: integer("last_seen_at", { mode: "timestamp" }),
+    currentStatus: text("current_status").default("unknown"),
+    videoStatus: text("video_status").default("unknown"),
+    lastVideoCheck: integer("last_video_check", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 
-  // SSL/TLS connection settings
-  protocol: text("protocol").default("http"),        // "http" or "https"
-  port: integer("port").default(80),                 // 80 for HTTP, 443 for HTTPS, or custom
-  verifySslCert: integer("verify_ssl_cert", { mode: "boolean" }).default(false), // Accept self-signed by default
+    // SSL/TLS connection settings
+    protocol: text("protocol").default("http"),        // "http" or "https"
+    port: integer("port").default(80),                 // 80 for HTTP, 443 for HTTPS, or custom
+    verifySslCert: integer("verify_ssl_cert", { mode: "boolean" }).default(false), // Accept self-signed by default
 
-  // NEW FIELDS: Camera model information (all optional for backward compatibility)
-  model: text("model"),                    // e.g., "P3255-LVE"
-  series: text("series"),                  // e.g., "P", "Q", "M", "F"
-  fullName: text("full_name"),             // e.g., "AXIS P3255-LVE Network Camera"
+    // NEW FIELDS: Camera model information (all optional for backward compatibility)
+    model: text("model"),                    // e.g., "P3255-LVE"
+    series: text("series"),                  // e.g., "P", "Q", "M", "F"
+    fullName: text("full_name"),             // e.g., "AXIS P3255-LVE Network Camera"
 
-  // Firmware & Hardware
-  firmwareVersion: text("firmware_version"), // e.g., "9.80.1"
-  vapixVersion: text("vapix_version"),       // e.g., "3"
+    // Firmware & Hardware
+    firmwareVersion: text("firmware_version"), // e.g., "9.80.1"
+    vapixVersion: text("vapix_version"),       // e.g., "3"
 
-  // Capability Flags (boolean fields for fast queries)
-  hasPTZ: integer("has_ptz", { mode: "boolean" }).default(false),
-  hasAudio: integer("has_audio", { mode: "boolean" }).default(false),
-  audioChannels: integer("audio_channels").default(0),
-  numberOfViews: integer("number_of_views").default(1), // Multi-sensor count
+    // Capability Flags (boolean fields for fast queries)
+    hasPTZ: integer("has_ptz", { mode: "boolean" }).default(false),
+    hasAudio: integer("has_audio", { mode: "boolean" }).default(false),
+    audioChannels: integer("audio_channels").default(0),
+    numberOfViews: integer("number_of_views").default(1), // Multi-sensor count
 
-  // Detailed Capabilities (JSON for extensibility)
-  capabilities: text("capabilities", { mode: "json" }).$type<CameraCapabilities>(),
+    // Detailed Capabilities (JSON for extensibility)
+    capabilities: text("capabilities", { mode: "json" }).$type<CameraCapabilities>(),
 
-  // Detection Metadata
-  detectedAt: integer("detected_at", { mode: "timestamp" }),
-  detectionMethod: text("detection_method"), // "auto" | "manual" | "import"
+    // Detection Metadata
+    detectedAt: integer("detected_at", { mode: "timestamp" }),
+    detectionMethod: text("detection_method"), // "auto" | "manual" | "import"
 
-  // Historical uptime backfill tracking
-  lastBootAt: integer("last_boot_at", { mode: "timestamp" }),
-  historyBackfilled: integer("history_backfilled", { mode: "boolean" }).default(false),
-});
+    // Historical uptime backfill tracking
+    lastBootAt: integer("last_boot_at", { mode: "timestamp" }),
+    historyBackfilled: integer("history_backfilled", { mode: "boolean" }).default(false),
+  },
+  (table) => ({
+    userIdIdx: index("idx_cameras_user_id").on(table.userId),
+  })
+);
 
 export const insertCameraSchema = createInsertSchema(cameras).omit({
   id: true,
@@ -256,17 +262,23 @@ export type InsertDashboardLayout = z.infer<typeof insertDashboardLayoutSchema>;
 export type DashboardLayout = typeof dashboardLayouts.$inferSelect;
 
 // Camera groups - allows grouping cameras by area/zone for aggregated analytics
-export const cameraGroups = sqliteTable("camera_groups", {
-  id: text("id").primaryKey().$defaultFn(generateId),
-  userId: text("user_id")
-    .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
-  name: text("name").notNull(),
-  description: text("description"),
-  color: text("color"), // hex color for UI badges, e.g., "#3B82F6"
-  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
-  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
-});
+export const cameraGroups = sqliteTable(
+  "camera_groups",
+  {
+    id: text("id").primaryKey().$defaultFn(generateId),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    color: text("color"), // hex color for UI badges, e.g., "#3B82F6"
+    createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  },
+  (table) => ({
+    userIdIdx: index("idx_camera_groups_user_id").on(table.userId),
+  })
+);
 
 export const insertCameraGroupSchema = createInsertSchema(cameraGroups).omit({
   id: true,
@@ -292,6 +304,7 @@ export const cameraGroupMembers = sqliteTable(
   },
   (table) => ({
     uniqueMembership: uniqueIndex("idx_group_camera_unique").on(table.groupId, table.cameraId),
+    cameraIdIdx: index("idx_camera_group_members_camera_id").on(table.cameraId),
   })
 );
 

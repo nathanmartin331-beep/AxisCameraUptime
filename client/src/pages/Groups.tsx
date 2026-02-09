@@ -72,6 +72,30 @@ export default function Groups() {
     },
   });
 
+  const editMutation = useMutation({
+    mutationFn: async ({ groupId, data }: { groupId: string; data: GroupFormData }) => {
+      return await apiRequest("PATCH", `/api/groups/${groupId}`, {
+        name: data.name,
+        description: data.description || undefined,
+        color: data.color || undefined,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/groups"] });
+      setShowEditDialog(false);
+      setSelectedGroup(null);
+      setFormData(emptyForm);
+      toast({ title: "Success", description: "Group updated successfully" });
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to update group",
+        variant: "destructive",
+      });
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: async (groupId: string) => {
       return await apiRequest("DELETE", `/api/groups/${groupId}`);
@@ -310,13 +334,13 @@ export default function Groups() {
             </Button>
             <Button
               onClick={() => {
-                // Edit is wired to the dialog but no PATCH endpoint was specified,
-                // so this is left as a placeholder for when the endpoint exists.
-                setShowEditDialog(false);
+                if (selectedGroup) {
+                  editMutation.mutate({ groupId: selectedGroup.id, data: formData });
+                }
               }}
-              disabled={!formData.name.trim()}
+              disabled={!formData.name.trim() || editMutation.isPending}
             >
-              Save
+              {editMutation.isPending ? "Saving..." : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>

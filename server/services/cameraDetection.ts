@@ -66,7 +66,7 @@ export interface CameraModelDetection {
   brand: string;
   model: string;
   fullName: string;
-  series: 'P' | 'Q' | 'M' | 'F' | 'A' | 'I' | 'T' | 'D' | 'W' | 'Unknown';
+  series: 'P' | 'Q' | 'M' | 'F' | 'A' | 'I' | 'T' | 'D' | 'W' | 'C' | 'Unknown';
 
   // Firmware
   firmwareVersion?: string;
@@ -391,7 +391,7 @@ export class CameraModelDetector {
    * Handles ExCam explosion-proof housings (e.g. "ExCam XF P1378" → P-series).
    * See docs/axis-vapix-edge-cases.md for full model reference.
    */
-  private detectSeries(model: string): 'P' | 'Q' | 'M' | 'F' | 'A' | 'I' | 'T' | 'D' | 'W' | 'Unknown' {
+  private detectSeries(model: string): 'P' | 'Q' | 'M' | 'F' | 'A' | 'I' | 'T' | 'D' | 'W' | 'C' | 'Unknown' {
     let upper = model.toUpperCase();
 
     // Strip ExCam prefix: "EXCAM XF P1378" → "P1378", "EXCAM XPT Q6135" → "Q6135"
@@ -406,6 +406,7 @@ export class CameraModelDetector {
     if (upper.startsWith('T')) return 'T';
     if (upper.startsWith('D')) return 'D';
     if (upper.startsWith('W')) return 'W';
+    if (upper.startsWith('C')) return 'C'; // Network speakers (C1310, C1410, C8210, etc.)
 
     return 'Unknown';
   }

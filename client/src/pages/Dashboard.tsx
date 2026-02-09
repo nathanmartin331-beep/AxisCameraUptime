@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Camera, Wifi, TrendingUp, Plus, Upload, Search as SearchIcon, AlertTriangle, Download, Filter, Users, ArrowUpDown } from "lucide-react";
+import { Camera, Wifi, TrendingUp, Plus, Upload, Search as SearchIcon, AlertTriangle, Download, Filter, Users, ArrowUpDown, Volume2, Eye, EyeOff, Settings2 } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
@@ -21,6 +21,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 
 interface DashboardSummary {
   totalCameras: number;
@@ -35,6 +38,10 @@ interface DashboardSummary {
   totalPeopleOut: number;
   currentOccupancy: number;
   analyticsEnabled: number;
+  speakerTotal: number;
+  speakerOnline: number;
+  speakerOffline: number;
+  speakerAvgUptime: number;
 }
 
 interface ApiCamera {
@@ -109,6 +116,24 @@ function transformCamera(apiCamera: ApiCamera, uptimeMap: Map<string, number>): 
   };
 }
 
+interface DashboardSections {
+  overview: boolean;
+  speakers: boolean;
+  analytics: boolean;
+  uptimeChart: boolean;
+  cameraTable: boolean;
+}
+
+const SECTIONS_STORAGE_KEY = "dashboard-visible-sections";
+
+function loadSectionVisibility(): DashboardSections {
+  try {
+    const stored = localStorage.getItem(SECTIONS_STORAGE_KEY);
+    if (stored) return { overview: true, speakers: true, analytics: true, uptimeChart: true, cameraTable: true, ...JSON.parse(stored) };
+  } catch {}
+  return { overview: true, speakers: true, analytics: true, uptimeChart: true, cameraTable: true };
+}
+
 export default function Dashboard() {
   const [addCameraOpen, setAddCameraOpen] = useState(false);
   const [editCameraOpen, setEditCameraOpen] = useState(false);
@@ -117,6 +142,15 @@ export default function Dashboard() {
   const [scanOpen, setScanOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [visibleSections, setVisibleSections] = useState<DashboardSections>(loadSectionVisibility);
+
+  const toggleSection = (key: keyof DashboardSections) => {
+    setVisibleSections(prev => {
+      const next = { ...prev, [key]: !prev[key] };
+      localStorage.setItem(SECTIONS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
   const [locationFilter, setLocationFilter] = useState<string>("all");
   const [videoFilter, setVideoFilter] = useState<string>("all");
   const { toast } = useToast();
@@ -247,6 +281,7 @@ export default function Dashboard() {
       const matchesVideo = videoFilter === "all" ||
         (videoFilter === "issues" && camera.videoStatus === "video_failed") ||
         (videoFilter === "ok" && camera.videoStatus === "video_ok") ||
+        (videoFilter === "speakers" && camera.videoStatus === "not_applicable") ||
         (videoFilter === "unknown" && (!camera.videoStatus || camera.videoStatus === "unknown"));
       
       return matchesSearch && matchesLocation && matchesVideo;
@@ -259,12 +294,13 @@ export default function Dashboard() {
     const online = filteredCameras.filter(c => c.status === "online").length;
     const videoOk = filteredCameras.filter(c => c.videoStatus === "video_ok").length;
     const videoFailed = filteredCameras.filter(c => c.videoStatus === "video_failed").length;
+    const speakerCount = filteredCameras.filter(c => c.videoStatus === "not_applicable").length;
     
     // Calculate average uptime for filtered cameras
     const uptimeValues = filteredCameras.map(c => parseFloat(c.uptime) || 0);
     const avgUptime = total > 0 ? uptimeValues.reduce((a, b) => a + b, 0) / total : 0;
     
-    return { total, online, videoOk, videoFailed, avgUptime };
+    return { total, online, videoOk, videoFailed, speakerCount, avgUptime };
   }, [filteredCameras]);
 
   const handleViewDetails = (camera: CameraType) => {
@@ -460,55 +496,122 @@ Cameras matching filters: ${filteredCameras.length}
 
   return (
     <div className="space-y-6" data-testid="page-dashboard">
-      <div>
-        <h1 className="text-3xl font-semibold">Dashboard</h1>
-        <p className="text-muted-foreground mt-1">
-          Monitor your Axis camera network uptime and availability
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-3xl font-semibold">Dashboard</h1>
+          <p className="text-muted-foreground mt-1">
+            Monitor your Axis camera network uptime and availability
+          </p>
+        </div>
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="sm" className="gap-2">
+              <Settings2 className="h-4 w-4" />
+              Sections
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-64">
+            <div className="space-y-1 mb-3">
+              <p className="font-medium text-sm">Visible Sections</p>
+              <p className="text-xs text-muted-foreground">Toggle dashboard cards on or off</p>
+            </div>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="toggle-overview" className="text-sm">Overview Cards</Label>
+                <Switch id="toggle-overview" checked={visibleSections.overview} onCheckedChange={() => toggleSection("overview")} />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="toggle-speakers" className="text-sm">Speaker Uptime</Label>
+                <Switch id="toggle-speakers" checked={visibleSections.speakers} onCheckedChange={() => toggleSection("speakers")} />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="toggle-analytics" className="text-sm">Analytics</Label>
+                <Switch id="toggle-analytics" checked={visibleSections.analytics} onCheckedChange={() => toggleSection("analytics")} />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="toggle-chart" className="text-sm">Uptime Chart</Label>
+                <Switch id="toggle-chart" checked={visibleSections.uptimeChart} onCheckedChange={() => toggleSection("uptimeChart")} />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="toggle-table" className="text-sm">Camera Table</Label>
+                <Switch id="toggle-table" checked={visibleSections.cameraTable} onCheckedChange={() => toggleSection("cameraTable")} />
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
       </div>
 
-      {summaryLoading || camerasLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <Skeleton className="h-32" />
-          <Skeleton className="h-32" />
-          <Skeleton className="h-32" />
-          <Skeleton className="h-32" />
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      {visibleSections.overview && (
+        summaryLoading || camerasLoading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <Skeleton className="h-32" />
+            <Skeleton className="h-32" />
+            <Skeleton className="h-32" />
+            <Skeleton className="h-32" />
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <MetricCard
+              title="Total Cameras"
+              value={filteredMetrics.total}
+              subtitle={locationFilter !== "all" ? locationFilter : "Across all locations"}
+              icon={Camera}
+              accentColor="blue"
+            />
+            <MetricCard
+              title="Online Cameras"
+              value={filteredMetrics.online}
+              subtitle={`${filteredMetrics.avgUptime.toFixed(1)}% avg uptime`}
+              icon={Wifi}
+              accentColor="green"
+            />
+            <MetricCard
+              title="Video Issues"
+              value={filteredMetrics.videoFailed}
+              subtitle={`${filteredMetrics.videoOk} streaming${filteredMetrics.speakerCount > 0 ? `, ${filteredMetrics.speakerCount} speaker${filteredMetrics.speakerCount !== 1 ? 's' : ''}` : ''}`}
+              icon={AlertTriangle}
+              accentColor={filteredMetrics.videoFailed > 0 ? "amber" : "green"}
+            />
+            <MetricCard
+              title="System Uptime"
+              value={`${filteredMetrics.avgUptime.toFixed(1)}%`}
+              subtitle="Filtered cameras"
+              icon={TrendingUp}
+              accentColor="green"
+            />
+          </div>
+        )
+      )}
+
+      {/* Speaker uptime row - shown when speakers are detected and section is visible */}
+      {visibleSections.speakers && summary && summary.speakerTotal > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <MetricCard
-            title="Total Cameras"
-            value={filteredMetrics.total}
-            subtitle={locationFilter !== "all" ? locationFilter : "Across all locations"}
-            icon={Camera}
+            title="Network Speakers"
+            value={summary.speakerTotal}
+            subtitle={`${summary.speakerOnline} online, ${summary.speakerOffline} offline`}
+            icon={Volume2}
             accentColor="blue"
           />
           <MetricCard
-            title="Online Cameras"
-            value={filteredMetrics.online}
-            subtitle={`${filteredMetrics.avgUptime.toFixed(1)}% avg uptime`}
-            icon={Wifi}
-            accentColor="green"
-          />
-          <MetricCard
-            title="Video Issues"
-            value={filteredMetrics.videoFailed}
-            subtitle={`${filteredMetrics.videoOk} cameras streaming`}
-            icon={AlertTriangle}
-            accentColor={filteredMetrics.videoFailed > 0 ? "amber" : "green"}
-          />
-          <MetricCard
-            title="System Uptime"
-            value={`${filteredMetrics.avgUptime.toFixed(1)}%`}
-            subtitle="Filtered cameras"
+            title="Speaker Uptime"
+            value={`${summary.speakerAvgUptime.toFixed(1)}%`}
+            subtitle="30-day average"
             icon={TrendingUp}
-            accentColor="green"
+            accentColor={summary.speakerAvgUptime >= 99 ? "green" : summary.speakerAvgUptime >= 95 ? "amber" : "red"}
+          />
+          <MetricCard
+            title="Speakers Online"
+            value={summary.speakerOnline}
+            subtitle={summary.speakerTotal > 0 ? `${((summary.speakerOnline / summary.speakerTotal) * 100).toFixed(0)}% available now` : "No speakers"}
+            icon={Wifi}
+            accentColor={summary.speakerOnline === summary.speakerTotal ? "green" : "amber"}
           />
         </div>
       )}
 
-      {/* Analytics metrics row - shown when any cameras have analytics enabled */}
-      {summary && summary.analyticsEnabled > 0 && (
+      {/* Analytics metrics row - shown when any cameras have analytics enabled and section is visible */}
+      {visibleSections.analytics && summary && summary.analyticsEnabled > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <MetricCard
             title="Current Occupancy"
@@ -534,9 +637,9 @@ Cameras matching filters: ${filteredCameras.length}
         </div>
       )}
 
-      <UptimeChart cameraId="all" days={30} />
+      {visibleSections.uptimeChart && <UptimeChart cameraId="all" days={30} />}
 
-      <div className="space-y-4">
+      {visibleSections.cameraTable && <div className="space-y-4">
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex gap-2 flex-wrap">
@@ -575,6 +678,7 @@ Cameras matching filters: ${filteredCameras.length}
                   <SelectItem value="all">All Cameras</SelectItem>
                   <SelectItem value="ok">Video OK</SelectItem>
                   <SelectItem value="issues">Video Issues</SelectItem>
+                  <SelectItem value="speakers">Speakers Only</SelectItem>
                   <SelectItem value="unknown">Unknown Status</SelectItem>
                 </SelectContent>
               </Select>
@@ -649,7 +753,7 @@ Cameras matching filters: ${filteredCameras.length}
             onDelete={handleDelete}
           />
         )}
-      </div>
+      </div>}
 
       <AddCameraModal
         open={addCameraOpen}

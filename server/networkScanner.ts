@@ -2,8 +2,6 @@
 // Supports HTTP probing, Bonjour/mDNS, and SSDP discovery
 import os from 'os';
 import { Agent } from 'undici';
-import { detectCameraModel, type CameraModelInfo } from './cameraModelDetection';
-
 export interface ScanResult {
   ipAddress: string;
   isAxis: boolean;
@@ -126,20 +124,6 @@ async function probeBasicDeviceInfo(
   }
 }
 
-/**
- * Safely detect camera model without failing the scan
- * Uses shorter timeout (2s) to keep scanning fast
- */
-async function detectCameraModelSafe(ipAddress: string): Promise<CameraModelInfo> {
-  try {
-    const modelInfo = await detectCameraModel(ipAddress, 2000);
-    return modelInfo;
-  } catch {
-    console.log(`[Scanner] Model detection failed for ${ipAddress}, using fallback`);
-    return { fullName: "Axis Camera" };
-  }
-}
-
 async function checkAxisCamera(ipAddress: string, timeout: number = 3000): Promise<ScanResult> {
   // Try HTTP first, then HTTPS fallback (AXIS OS 13+ may have HTTP disabled)
   for (const protocol of ['http', 'https'] as const) {
@@ -163,17 +147,14 @@ async function checkAxisCamera(ipAddress: string, timeout: number = 3000): Promi
           // Confirmed Axis camera - get device info without auth
           const deviceInfo = await probeBasicDeviceInfo(ipAddress, 3000, protocol);
 
-          // Fall back to model detection if basicdeviceinfo didn't work
           let model = deviceInfo?.model;
           let series: string | undefined;
 
           if (!model) {
-            const modelInfo = await detectCameraModelSafe(ipAddress);
-            model = modelInfo.model || modelInfo.fullName || "Axis Camera";
-            series = modelInfo.series;
+            model = "Axis Camera";
           } else {
             // Parse series from model string
-            const seriesMatch = model.match(/AXIS\s+([PQMFAITDW])\d/i);
+            const seriesMatch = model.match(/AXIS\s+([PQMFAITDWC])\d/i);
             series = seriesMatch ? seriesMatch[1].toUpperCase() : undefined;
           }
 
@@ -468,7 +449,7 @@ export async function discoverCameras(
         result.serial = deviceInfo.serial || result.serial;
         result.firmware = deviceInfo.firmware || result.firmware;
         if (result.model) {
-          const seriesMatch = result.model.match(/AXIS\s+([PQMF])\d/i);
+          const seriesMatch = result.model.match(/AXIS\s+([PQMFAITDWC])\d/i);
           result.series = seriesMatch ? seriesMatch[1].toUpperCase() : result.series;
         }
       }

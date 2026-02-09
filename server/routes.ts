@@ -51,6 +51,26 @@ function sendError(res: Response, status: number, message: string) {
 // Dashboard response cache — serves stale data for up to 30s to avoid 7500+ queries per request
 const dashboardCache = new Map<string, { data: any; expiresAt: number }>();
 const DASHBOARD_CACHE_TTL_MS = 30_000; // 30 seconds
+const DASHBOARD_CACHE_MAX_SIZE = 1000;
+
+/** Evict expired entries from dashboardCache; if still over max, clear entirely. */
+function dashboardCacheSet(key: string, value: { data: any; expiresAt: number }) {
+  if (dashboardCache.size >= DASHBOARD_CACHE_MAX_SIZE) {
+    const now = Date.now();
+    const keysToDelete: string[] = [];
+    dashboardCache.forEach((v, k) => {
+      if (v.expiresAt <= now) {
+        keysToDelete.push(k);
+      }
+    });
+    keysToDelete.forEach((k) => dashboardCache.delete(k));
+    // If still over limit after evicting expired entries, clear entirely
+    if (dashboardCache.size >= DASHBOARD_CACHE_MAX_SIZE) {
+      dashboardCache.clear();
+    }
+  }
+  dashboardCache.set(key, value);
+}
 
 // Schema for accepting plain password from frontend (used for both manual add and CSV import)
 // Frontend doesn't send userId or encryptedPassword - userId comes from session, password is encrypted server-side
@@ -157,6 +177,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { encryptedPassword: _, ...safeCamera } = camera;
       res.status(201).json(safeCamera);
 
+      // Invalidate dashboard cache for this user
+      dashboardCache.delete(`dashboard:${userId}`);
+
       // Trigger immediate poll so the new camera's status updates quickly
       setTimeout(() => checkAllCameras(), 2000);
     } catch (error: any) {
@@ -213,6 +236,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return sendError(res, 500, "Failed to update camera");
       }
       const { encryptedPassword: _, ...safeCamera } = updated;
+
+      // Invalidate dashboard cache for this user
+      dashboardCache.delete(`dashboard:${getUserId(req)}`);
+
       res.json(safeCamera);
     } catch (error: any) {
       console.error("Error updating camera:", error);
@@ -236,6 +263,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       await storage.deleteCamera(cameraId);
+
+      // Invalidate dashboard cache for this user
+      dashboardCache.delete(`dashboard:${getUserId(req)}`);
+
       res.status(204).send();
     } catch (error) {
       console.error("Error deleting camera:", error);
@@ -387,15 +418,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const cameras = await storage.getCamerasByUserId(userId);
 
+      // Separate cameras from non-video devices (C-series speakers)
+      const videoCameras = cameras.filter(c => c.series !== 'C');
+      const speakers = cameras.filter(c => c.series === 'C');
+
       const totalCameras = cameras.length;
       const onlineCameras = cameras.filter(c => c.currentStatus === "online").length;
       const offlineCameras = cameras.filter(c => c.currentStatus === "offline").length;
       const unknownCameras = cameras.filter(c => c.currentStatus === "unknown").length;
-      
-      // Video health metrics
-      const videoOk = cameras.filter(c => c.videoStatus === "video_ok").length;
-      const videoFailed = cameras.filter(c => c.videoStatus === "video_failed").length;
-      const videoUnknown = cameras.filter(c => !c.videoStatus || c.videoStatus === "unknown").length;
+
+      // Video health metrics (only for video-capable devices)
+      const videoOk = videoCameras.filter(c => c.videoStatus === "video_ok").length;
+      const videoFailed = videoCameras.filter(c => c.videoStatus === "video_failed").length;
+      const videoUnknown = videoCameras.filter(c => !c.videoStatus || c.videoStatus === "unknown").length;
+
+      // Speaker metrics
+      const speakerTotal = speakers.length;
+      const speakerOnline = speakers.filter(c => c.currentStatus === "online").length;
+      const speakerOffline = speakers.filter(c => c.currentStatus === "offline").length;
 
       // Calculate average uptime across all cameras (30 days)
       let avgUptime = 0;
@@ -405,6 +445,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
         const uptimes = await Promise.all(uptimePromises);
         avgUptime = uptimes.reduce((a, b) => a + b, 0) / totalCameras;
+      }
+
+      // Calculate speaker-specific average uptime
+      let speakerAvgUptime = 0;
+      if (speakerTotal > 0) {
+        const speakerUptimePromises = speakers.map(c =>
+          storage.calculateUptimePercentage(c.id, 30)
+        );
+        const speakerUptimes = await Promise.all(speakerUptimePromises);
+        speakerAvgUptime = speakerUptimes.reduce((a, b) => a + b, 0) / speakerTotal;
       }
 
       // Aggregate analytics metrics across all cameras with enabled analytics
@@ -454,10 +504,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         totalPeopleOut,
         currentOccupancy,
         analyticsEnabled,
+        // Speaker metrics
+        speakerTotal,
+        speakerOnline,
+        speakerOffline,
+        speakerAvgUptime: Math.round(speakerAvgUptime * 100) / 100,
       };
 
       // Store in response cache
-      dashboardCache.set(cacheKey, { data: responseData, expiresAt: Date.now() + DASHBOARD_CACHE_TTL_MS });
+      dashboardCacheSet(cacheKey, { data: responseData, expiresAt: Date.now() + DASHBOARD_CACHE_TTL_MS });
 
       res.json(responseData);
     } catch (error) {

@@ -95,17 +95,25 @@ export default function CameraTable({
                         <Tooltip>
                           <TooltipTrigger>
                             {camera.videoStatus === "video_ok" ? (
-                              <Badge 
-                                variant="outline" 
+                              <Badge
+                                variant="outline"
                                 className="gap-1 border-status-online text-status-online"
                                 data-testid={`video-status-ok-${camera.id}`}
                               >
                                 <CheckCircle2 className="w-3 h-3" />
                                 Video OK
                               </Badge>
+                            ) : camera.videoStatus === "not_applicable" ? (
+                              <Badge
+                                variant="outline"
+                                className="gap-1 border-teal-400 text-teal-600"
+                                data-testid={`video-status-na-${camera.id}`}
+                              >
+                                Speaker
+                              </Badge>
                             ) : camera.videoStatus === "video_failed" ? (
-                              <Badge 
-                                variant="outline" 
+                              <Badge
+                                variant="outline"
                                 className="gap-1 border-status-away text-status-away"
                                 data-testid={`video-status-failed-${camera.id}`}
                               >
@@ -113,8 +121,8 @@ export default function CameraTable({
                                 Video Failed
                               </Badge>
                             ) : (
-                              <Badge 
-                                variant="outline" 
+                              <Badge
+                                variant="outline"
                                 className="gap-1"
                                 data-testid={`video-status-unknown-${camera.id}`}
                               >
@@ -124,8 +132,10 @@ export default function CameraTable({
                           </TooltipTrigger>
                           <TooltipContent>
                             <p className="text-sm">
-                              {camera.videoStatus === "video_ok" 
+                              {camera.videoStatus === "video_ok"
                                 ? "Video stream is healthy and delivering images"
+                                : camera.videoStatus === "not_applicable"
+                                ? "Network speaker — no video sensor. System uptime is monitored."
                                 : camera.videoStatus === "video_failed"
                                 ? "Camera reachable but video stream unavailable. Confirm live view configuration, credentials, and that the JPEG snapshot API is enabled."
                                 : "Video status not yet checked"
