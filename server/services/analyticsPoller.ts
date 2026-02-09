@@ -157,19 +157,34 @@ async function queryOccupancy(
  * Parse AOA accumulated counts response into analytics events.
  */
 function parseAoaAccumulatedCounts(
-  json: any
+  json: any,
+  scenarioHint?: { name: string; type: string }
 ): Array<{ eventType: string; value: number; metadata?: Record<string, any> }> {
   const events: Array<{ eventType: string; value: number; metadata?: Record<string, any> }> = [];
 
   // Process accumulated counts from scenarios
-  const scenarios = json?.data?.scenarios || json?.data?.devices?.[0]?.channels?.[0]?.scenarios || [];
+  let scenarios = json?.data?.scenarios || json?.data?.devices?.[0]?.channels?.[0]?.scenarios || [];
+
+  // Single-scenario response: data contains the scenario directly (when queried by scenarioID)
+  if (scenarios.length === 0 && json?.data) {
+    const d = json.data;
+    if (d.passings || d.in !== undefined || d.out !== undefined ||
+        d.currentOccupancy !== undefined || d.count !== undefined ||
+        d.name || d.scenarioID !== undefined) {
+      // Use hint type if the response doesn't include type
+      if (!d.type && scenarioHint?.type) d.type = scenarioHint.type;
+      if (!d.name && scenarioHint?.name) d.name = scenarioHint.name;
+      scenarios = [d];
+    }
+  }
 
   for (const scenario of scenarios) {
     const name = scenario.name || "Unnamed";
     const type = (scenario.type || "").toLowerCase();
 
-    // Crossline counting scenarios
-    if (type.includes("crossline") || type.includes("line_crossing") || type.includes("crossing")) {
+    // Crossline counting scenarios (includes "fence" which is AOA's line-crossing type)
+    if (type.includes("crossline") || type.includes("line_crossing") || type.includes("crossing") ||
+        type.includes("fence") || type.includes("tripwire")) {
       let scenarioIn = 0;
       let scenarioOut = 0;
 
@@ -227,7 +242,7 @@ function parseAoaAccumulatedCounts(
     }
 
     // Occupancy in area scenarios
-    if (type.includes("occupancy") || type.includes("object_in_area")) {
+    if (type.includes("occupancy") || type.includes("object_in_area") || type.includes("occupancyinarea")) {
       const count = scenario.currentOccupancy || scenario.count || scenario.objects || 0;
       events.push({
         eventType: "occupancy",
@@ -252,7 +267,8 @@ async function queryObjectAnalyticsData(
   password: string,
   storedApiPath?: string,
   timeout: number = 8000,
-  conn?: CameraConnectionInfo
+  conn?: CameraConnectionInfo,
+  scenarios?: Array<{ name: string; type: string; id?: number; objectClassifications?: string[] }>
 ): Promise<Array<{ eventType: string; value: number; metadata?: Record<string, any> }>> {
   if (!storedApiPath) return [];
 
@@ -269,20 +285,44 @@ async function queryObjectAnalyticsData(
   // analytics-metadata-config.cgi path - try getAccumulatedCounts via the ACAP API
   // But also fall back to Event2 since metadata-config is for configuration, not data
   if (storedApiPath === "/axis-cgi/analytics-metadata-config.cgi") {
-    // The metadata config API is for configuration, not live data.
-    // Try Event2 first, then SOAP
     const event2Result = (await queryEvent2Analytics(ipAddress, username, password, timeout, conn)).events;
     if (event2Result.length > 0) return event2Result;
     return (await querySoapEventInstances(ipAddress, username, password, timeout, conn)).events;
   }
 
   // ACAP local path (control.cgi or legacy .api) - use getAccumulatedCounts
-  const json = await tryAoaPost(ipAddress, username, password, storedApiPath, "getAccumulatedCounts", timeout, conn);
-  if (json) {
-    return parseAoaAccumulatedCounts(json);
+  // The API requires a scenarioID parameter - query each scenario individually
+  const allEvents: Array<{ eventType: string; value: number; metadata?: Record<string, any> }> = [];
+
+  if (scenarios && scenarios.length > 0) {
+    for (const scenario of scenarios) {
+      if (scenario.id === undefined) continue;
+      const json = await tryAoaPost(
+        ipAddress, username, password, storedApiPath,
+        "getAccumulatedCounts", timeout, conn,
+        { scenarioID: scenario.id }
+      );
+      if (json) {
+        const parsed = parseAoaAccumulatedCounts(json, scenario);
+        for (const evt of parsed) {
+          if (!evt.metadata?.scenario) {
+            evt.metadata = { ...evt.metadata, scenario: scenario.name, source: "objectanalytics" };
+          }
+          allEvents.push(evt);
+        }
+      }
+    }
   }
 
-  return [];
+  // Fallback: try without scenarioID (some firmware supports it)
+  if (allEvents.length === 0) {
+    const json = await tryAoaPost(ipAddress, username, password, storedApiPath, "getAccumulatedCounts", timeout, conn);
+    if (json) {
+      return parseAoaAccumulatedCounts(json);
+    }
+  }
+
+  return allEvents;
 }
 
 /**
@@ -504,7 +544,8 @@ async function tryAoaPost(
   path: string,
   method: string,
   timeout: number = 8000,
-  conn?: CameraConnectionInfo
+  conn?: CameraConnectionInfo,
+  extraParams: Record<string, any> = {}
 ): Promise<any | null> {
   const apiVersions = ["1.0", "1.2", "1.3"];
   let lastStatus = 0;
@@ -523,7 +564,7 @@ async function tryAoaPost(
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ apiVersion, method, params: {} }),
+          body: JSON.stringify({ apiVersion, method, params: extraParams }),
           signal: controller.signal,
           dispatcher,
         }
@@ -984,11 +1025,16 @@ async function queryObjectAnalyticsScenarios(
   if (apis.aoaLocalPath) {
     console.log(`[Analytics] Trying discovered AOA path ${apis.aoaLocalPath} on ${ipAddress}...`);
     const configJson = await tryAoaPost(ipAddress, username, password, apis.aoaLocalPath, "getConfiguration", timeout, conn);
-    const dataCheck = await tryAoaPost(ipAddress, username, password, apis.aoaLocalPath, "getAccumulatedCounts", timeout, conn);
-    if (configJson || dataCheck) {
-      const scenarios = configJson ? extractAoaScenarios(configJson) : [];
+    if (configJson) {
+      const scenarios = extractAoaScenarios(configJson);
       console.log(`[Analytics] AOA found at discovered path ${apis.aoaLocalPath} on ${ipAddress}`);
       return { scenarios, apiPath: apis.aoaLocalPath };
+    }
+    // getConfiguration failed, try getAccumulatedCounts as existence check
+    const dataCheck = await tryAoaPost(ipAddress, username, password, apis.aoaLocalPath, "getAccumulatedCounts", timeout, conn);
+    if (dataCheck) {
+      console.log(`[Analytics] AOA found at discovered path ${apis.aoaLocalPath} on ${ipAddress} (data only, no config)`);
+      return { scenarios: [], apiPath: apis.aoaLocalPath };
     }
     console.log(`[Analytics] AOA discovered path ${apis.aoaLocalPath} on ${ipAddress}: no config/data response`);
   }
@@ -1012,12 +1058,11 @@ async function queryObjectAnalyticsScenarios(
 
   for (const path of legacyPaths) {
     console.log(`[Analytics] Trying ACAP path ${path} on ${ipAddress}...`);
-    // Try getConfiguration and getAccumulatedCounts directly - don't gate on getSupportedVersions
+    // Try getConfiguration directly - don't gate on getSupportedVersions
     // because control.cgi may not implement getSupportedVersions
     const configJson = await tryAoaPost(ipAddress, username, password, path, "getConfiguration", timeout, conn);
-    const dataCheck = await tryAoaPost(ipAddress, username, password, path, "getAccumulatedCounts", timeout, conn);
-    if (configJson || dataCheck) {
-      const scenarios = configJson ? extractAoaScenarios(configJson) : [];
+    if (configJson) {
+      const scenarios = extractAoaScenarios(configJson);
       console.log(`[Analytics] AOA found at ACAP path ${path} on ${ipAddress}`);
       return { scenarios, apiPath: path };
     }
@@ -1283,11 +1328,12 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
   // Without a stored path, the probe found no working endpoint (all 404), so skip to avoid
   // spamming 404 requests every polling cycle.
   const storedAoaPath = caps?.analytics?.objectAnalyticsApiPath;
+  const storedScenarios = caps?.analytics?.objectAnalyticsScenarios;
   if (oaEnabled && storedAoaPath) {
     if (events.length === 0) {
       // Only query AOA if we didn't already get data from People Counter/Occupancy
       try {
-        const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password, storedAoaPath, 8000, conn);
+        const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password, storedAoaPath, 8000, conn, storedScenarios);
         events.push(...aoaEvents);
       } catch {
         // AOA query failed
@@ -1296,7 +1342,7 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
       // Even if we got people counter data, still try AOA for additional scenario data
       // but don't duplicate people_in/people_out/occupancy
       try {
-        const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password, storedAoaPath, 8000, conn);
+        const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password, storedAoaPath, 8000, conn, storedScenarios);
         const existingTypes = new Set(events.map((e) => e.eventType));
         for (const evt of aoaEvents) {
           if (!existingTypes.has(evt.eventType)) {
