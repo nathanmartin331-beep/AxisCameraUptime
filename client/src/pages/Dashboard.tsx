@@ -288,18 +288,19 @@ export default function Dashboard() {
     });
   }, [transformedCameras, searchTerm, locationFilter, videoFilter]);
 
-  // Calculate filtered metrics
+  // Calculate filtered metrics (speakers separated from video cameras)
   const filteredMetrics = useMemo(() => {
     const total = filteredCameras.length;
-    const online = filteredCameras.filter(c => c.status === "online").length;
-    const videoOk = filteredCameras.filter(c => c.videoStatus === "video_ok").length;
-    const videoFailed = filteredCameras.filter(c => c.videoStatus === "video_failed").length;
+    const videoCams = filteredCameras.filter(c => c.videoStatus !== "not_applicable");
+    const online = videoCams.filter(c => c.status === "online").length;
+    const videoOk = videoCams.filter(c => c.videoStatus === "video_ok").length;
+    const videoFailed = videoCams.filter(c => c.videoStatus === "video_failed").length;
     const speakerCount = filteredCameras.filter(c => c.videoStatus === "not_applicable").length;
-    
-    // Calculate average uptime for filtered cameras
-    const uptimeValues = filteredCameras.map(c => parseFloat(c.uptime) || 0);
-    const avgUptime = total > 0 ? uptimeValues.reduce((a, b) => a + b, 0) / total : 0;
-    
+
+    // Average uptime for video cameras only (speakers have their own section)
+    const videoUptimeValues = videoCams.map(c => parseFloat(c.uptime) || 0);
+    const avgUptime = videoCams.length > 0 ? videoUptimeValues.reduce((a, b) => a + b, 0) / videoCams.length : 0;
+
     return { total, online, videoOk, videoFailed, speakerCount, avgUptime };
   }, [filteredCameras]);
 

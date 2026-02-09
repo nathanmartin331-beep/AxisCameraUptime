@@ -534,7 +534,9 @@ async function pollSingleCamera(camera: any, conn: CameraConnectionInfo): Promis
     conn
   );
 
-  // Lazy model detection (non-blocking, fire-and-forget)
+  // Model detection — awaited so series is known before the video check.
+  // Without this, C-series speakers would fail the video check on their first poll
+  // because series is null and the non-video-device guard wouldn't trigger.
   if (!camera.model) {
     const cached = detectionCache.get(camera.ipAddress, camera.username);
 
@@ -550,61 +552,70 @@ async function pollSingleCamera(camera: any, conn: CameraConnectionInfo): Promis
           })
           .where(eq(cameras.id, camera.id));
 
+        // Update the local camera object so the video check uses the correct series
+        camera.model = cached.model;
+        camera.series = cached.series;
+        camera.numberOfViews = cached.numberOfViews;
+
         console.log(`[Monitor] Using cached model for ${camera.name}: ${cached.model} (${cached.series}-series)`);
       } catch (err: any) {
         console.warn(`[Monitor] Failed to update cached model for ${camera.name}: ${err.message}`);
       }
     } else {
-      detectCameraModel(camera.ipAddress, camera.username, decryptedPassword, undefined, conn)
-        .then(async (detection) => {
-          detectionCache.set(camera.ipAddress, camera.username, detection);
+      try {
+        const detection = await detectCameraModel(camera.ipAddress, camera.username, decryptedPassword, undefined, conn);
+        detectionCache.set(camera.ipAddress, camera.username, detection);
 
-          await db.update(cameras)
-            .set({
-              model: detection.model,
-              series: detection.series,
-              numberOfViews: detection.numberOfViews,
-              capabilities: detection.capabilities,
-              updatedAt: new Date(),
-            })
-            .where(eq(cameras.id, camera.id));
+        await db.update(cameras)
+          .set({
+            model: detection.model,
+            series: detection.series,
+            numberOfViews: detection.numberOfViews,
+            capabilities: detection.capabilities,
+            updatedAt: new Date(),
+          })
+          .where(eq(cameras.id, camera.id));
 
-          console.log(`[Monitor] Detected model for ${camera.name}: ${detection.model} (${detection.series}-series)`);
+        // Update local camera object
+        camera.model = detection.model;
+        camera.series = detection.series;
+        camera.numberOfViews = detection.numberOfViews;
 
-          try {
-            const analyticsProbe = await probeAnalyticsCapabilities(
-              camera.ipAddress,
-              camera.username,
-              decryptedPassword,
-              conn
-            );
-            const hasAny = analyticsProbe.peopleCount || analyticsProbe.occupancyEstimation ||
-              analyticsProbe.lineCrossing || analyticsProbe.objectAnalytics ||
-              analyticsProbe.loiteringGuard || analyticsProbe.fenceGuard || analyticsProbe.motionGuard;
-            if (hasAny) {
-              await storage.updateCameraCapabilities(camera.id, {
-                analytics: {
-                  ...detection.capabilities?.analytics,
-                  peopleCount: analyticsProbe.peopleCount,
-                  occupancyEstimation: analyticsProbe.occupancyEstimation,
-                  lineCrossing: analyticsProbe.lineCrossing,
-                  objectAnalytics: analyticsProbe.objectAnalytics,
-                  loiteringGuard: analyticsProbe.loiteringGuard,
-                  fenceGuard: analyticsProbe.fenceGuard,
-                  motionGuard: analyticsProbe.motionGuard,
-                  acapInstalled: analyticsProbe.acapInstalled,
-                  objectAnalyticsScenarios: analyticsProbe.objectAnalyticsScenarios,
-                  objectAnalyticsApiPath: analyticsProbe.objectAnalyticsApiPath,
-                },
-              }, true);
-            }
-          } catch (probeErr: any) {
-            console.warn(`[Monitor] Analytics probe failed for ${camera.name}: ${probeErr.message}`);
+        console.log(`[Monitor] Detected model for ${camera.name}: ${detection.model} (${detection.series}-series)`);
+
+        // Analytics probe (fire-and-forget — not needed before video check)
+        probeAnalyticsCapabilities(
+          camera.ipAddress,
+          camera.username,
+          decryptedPassword,
+          conn
+        ).then(async (analyticsProbe) => {
+          const hasAny = analyticsProbe.peopleCount || analyticsProbe.occupancyEstimation ||
+            analyticsProbe.lineCrossing || analyticsProbe.objectAnalytics ||
+            analyticsProbe.loiteringGuard || analyticsProbe.fenceGuard || analyticsProbe.motionGuard;
+          if (hasAny) {
+            await storage.updateCameraCapabilities(camera.id, {
+              analytics: {
+                ...detection.capabilities?.analytics,
+                peopleCount: analyticsProbe.peopleCount,
+                occupancyEstimation: analyticsProbe.occupancyEstimation,
+                lineCrossing: analyticsProbe.lineCrossing,
+                objectAnalytics: analyticsProbe.objectAnalytics,
+                loiteringGuard: analyticsProbe.loiteringGuard,
+                fenceGuard: analyticsProbe.fenceGuard,
+                motionGuard: analyticsProbe.motionGuard,
+                acapInstalled: analyticsProbe.acapInstalled,
+                objectAnalyticsScenarios: analyticsProbe.objectAnalyticsScenarios,
+                objectAnalyticsApiPath: analyticsProbe.objectAnalyticsApiPath,
+              },
+            }, true);
           }
-        })
-        .catch((err) => {
-          console.warn(`[Monitor] Model detection failed for ${camera.name}: ${err.message}`);
+        }).catch((probeErr: any) => {
+          console.warn(`[Monitor] Analytics probe failed for ${camera.name}: ${probeErr.message}`);
         });
+      } catch (err: any) {
+        console.warn(`[Monitor] Model detection failed for ${camera.name}: ${err.message}`);
+      }
     }
   }
 

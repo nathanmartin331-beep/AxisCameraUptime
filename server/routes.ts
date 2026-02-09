@@ -422,10 +422,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const videoCameras = cameras.filter(c => c.series !== 'C');
       const speakers = cameras.filter(c => c.series === 'C');
 
+      // Total counts include all devices
       const totalCameras = cameras.length;
-      const onlineCameras = cameras.filter(c => c.currentStatus === "online").length;
-      const offlineCameras = cameras.filter(c => c.currentStatus === "offline").length;
-      const unknownCameras = cameras.filter(c => c.currentStatus === "unknown").length;
+
+      // Overview counts exclude speakers (shown in their own section)
+      const onlineCameras = videoCameras.filter(c => c.currentStatus === "online").length;
+      const offlineCameras = videoCameras.filter(c => c.currentStatus === "offline").length;
+      const unknownCameras = videoCameras.filter(c => c.currentStatus === "unknown").length;
 
       // Video health metrics (only for video-capable devices)
       const videoOk = videoCameras.filter(c => c.videoStatus === "video_ok").length;
@@ -437,14 +440,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const speakerOnline = speakers.filter(c => c.currentStatus === "online").length;
       const speakerOffline = speakers.filter(c => c.currentStatus === "offline").length;
 
-      // Calculate average uptime across all cameras (30 days)
+      // Average uptime for video cameras only (30 days) — speakers have their own metric
       let avgUptime = 0;
-      if (totalCameras > 0) {
-        const uptimePromises = cameras.map(c =>
+      if (videoCameras.length > 0) {
+        const uptimePromises = videoCameras.map(c =>
           storage.calculateUptimePercentage(c.id, 30)
         );
         const uptimes = await Promise.all(uptimePromises);
-        avgUptime = uptimes.reduce((a, b) => a + b, 0) / totalCameras;
+        avgUptime = uptimes.reduce((a, b) => a + b, 0) / videoCameras.length;
       }
 
       // Calculate speaker-specific average uptime
