@@ -326,10 +326,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const uptimeData = await Promise.all(
         cameras.map(async (camera) => {
-          const uptime = await storage.calculateUptimePercentage(camera.id, days);
+          const { percentage, monitoredDays } = await storage.calculateUptimePercentage(camera.id, days);
           return {
             cameraId: camera.id,
-            uptime,
+            uptime: percentage,
+            monitoredDays,
             monitoredSince: camera.createdAt,
           };
         })
@@ -396,8 +397,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return sendError(res, 403, "Forbidden");
       }
 
-      const percentage = await storage.calculateUptimePercentage(cameraId, days);
-      res.json({ percentage, days });
+      const result = await storage.calculateUptimePercentage(cameraId, days);
+      res.json({ percentage: result.percentage, days, monitoredDays: result.monitoredDays });
     } catch (error) {
       console.error("Error calculating uptime:", error);
       sendError(res, 500, "Failed to calculate uptime");
@@ -446,8 +447,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const uptimePromises = videoCameras.map(c =>
           storage.calculateUptimePercentage(c.id, 30)
         );
-        const uptimes = await Promise.all(uptimePromises);
-        avgUptime = uptimes.reduce((a, b) => a + b, 0) / videoCameras.length;
+        const uptimeResults = await Promise.all(uptimePromises);
+        avgUptime = uptimeResults.reduce((a, b) => a + b.percentage, 0) / videoCameras.length;
       }
 
       // Calculate speaker-specific average uptime
@@ -456,8 +457,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const speakerUptimePromises = speakers.map(c =>
           storage.calculateUptimePercentage(c.id, 30)
         );
-        const speakerUptimes = await Promise.all(speakerUptimePromises);
-        speakerAvgUptime = speakerUptimes.reduce((a, b) => a + b, 0) / speakerTotal;
+        const speakerUptimeResults = await Promise.all(speakerUptimePromises);
+        speakerAvgUptime = speakerUptimeResults.reduce((a, b) => a + b.percentage, 0) / speakerTotal;
       }
 
       // Aggregate analytics metrics across all cameras with enabled analytics
@@ -1311,11 +1312,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Calculate uptime for each camera
       const cameraData = await Promise.all(
         cameras.map(async (camera) => {
-          const uptime = await storage.calculateUptimePercentage(camera.id, 30);
+          const { percentage } = await storage.calculateUptimePercentage(camera.id, 30);
           return {
             name: camera.name,
             ipAddress: camera.ipAddress,
-            uptime,
+            uptime: percentage,
           };
         })
       );

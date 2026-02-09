@@ -73,6 +73,7 @@ interface ApiCamera {
 interface CameraUptime {
   cameraId: string;
   uptime: number;
+  monitoredDays: number;
 }
 
 function formatLastSeen(lastSeenAt: string | null): string {
@@ -93,8 +94,11 @@ function formatLastSeen(lastSeenAt: string | null): string {
   return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
 }
 
-function transformCamera(apiCamera: ApiCamera, uptimeMap: Map<string, number>): CameraType {
-  const uptime = uptimeMap.get(apiCamera.id) ?? 0;
+function transformCamera(apiCamera: ApiCamera, uptimeMap: Map<string, { uptime: number; monitoredDays: number }>): CameraType {
+  const data = uptimeMap.get(apiCamera.id);
+  const uptime = data?.uptime ?? 0;
+  const monitoredDays = data?.monitoredDays ?? 0;
+  const daysLabel = monitoredDays < 30 ? ` (${monitoredDays}d)` : "";
   return {
     id: apiCamera.id,
     name: apiCamera.name,
@@ -102,7 +106,7 @@ function transformCamera(apiCamera: ApiCamera, uptimeMap: Map<string, number>): 
     location: apiCamera.location || "No location",
     status: apiCamera.currentStatus as CameraType["status"],
     videoStatus: apiCamera.videoStatus,
-    uptime: `${uptime.toFixed(1)}%`,
+    uptime: `${uptime.toFixed(1)}%${daysLabel}`,
     lastSeen: formatLastSeen(apiCamera.lastSeenAt),
     model: apiCamera.model || undefined,
     series: apiCamera.series as CameraType["series"],
@@ -248,9 +252,9 @@ export default function Dashboard() {
     }, 500);
   }
 
-  const uptimeMap = new Map<string, number>();
+  const uptimeMap = new Map<string, { uptime: number; monitoredDays: number }>();
   cameraUptimes?.forEach((item) => {
-    uptimeMap.set(item.cameraId, item.uptime);
+    uptimeMap.set(item.cameraId, { uptime: item.uptime, monitoredDays: item.monitoredDays });
   });
 
   const transformedCameras = cameras ? cameras.map(c => transformCamera(c, uptimeMap)) : [];

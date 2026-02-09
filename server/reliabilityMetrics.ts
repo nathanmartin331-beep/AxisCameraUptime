@@ -223,7 +223,7 @@ export async function calculateCameraMetrics(
   startDate.setDate(startDate.getDate() - days);
   
   // Get uptime percentage
-  const uptimePercentage = await storage.calculateUptimePercentage(cameraId, days);
+  const { percentage: uptimePercentage } = await storage.calculateUptimePercentage(cameraId, days);
   
   // Extract incidents
   const incidents = await extractIncidents(cameraId, startDate, endDate);

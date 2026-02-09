@@ -201,7 +201,7 @@ export interface IStorage {
   calculateUptimePercentage(
     cameraId: string,
     days: number
-  ): Promise<number>;
+  ): Promise<{ percentage: number; monitoredDays: number }>;
 
   // Camera group operations
   createGroup(group: InsertCameraGroup): Promise<CameraGroup>;
@@ -238,7 +238,7 @@ export interface IStorage {
 
 // In-memory TTL cache for uptime percentage calculations
 // Avoids re-querying DB for the same camera+days within 60 seconds
-const uptimeCache = new Map<string, { value: number; expiresAt: number }>();
+const uptimeCache = new Map<string, { value: { percentage: number; monitoredDays: number }; expiresAt: number }>();
 const UPTIME_CACHE_TTL_MS = 60_000; // 60 seconds
 
 export class DatabaseStorage implements IStorage {
@@ -660,7 +660,7 @@ export class DatabaseStorage implements IStorage {
   async calculateUptimePercentage(
     cameraId: string,
     days: number
-  ): Promise<number> {
+  ): Promise<{ percentage: number; monitoredDays: number }> {
     // Check TTL cache first
     const cacheKey = `${cameraId}:${days}`;
     const cached = uptimeCache.get(cacheKey);
@@ -691,6 +691,9 @@ export class DatabaseStorage implements IStorage {
 
     const startDate = monitoringStart > windowStart ? monitoringStart : windowStart;
 
+    // Actual number of days being calculated
+    const monitoredDays = Math.max(1, Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)));
+
     const events = await this.getUptimeEventsInRange(
       cameraId,
       startDate,
@@ -707,12 +710,14 @@ export class DatabaseStorage implements IStorage {
       status: e.status
     }));
 
-    const result = calculateUptimeFromEvents(
+    const percentage = calculateUptimeFromEvents(
       eventList,
       startDate,
       endDate,
       priorEvent?.status
     );
+
+    const result = { percentage, monitoredDays };
 
     // Store in TTL cache
     uptimeCache.set(cacheKey, { value: result, expiresAt: Date.now() + UPTIME_CACHE_TTL_MS });
