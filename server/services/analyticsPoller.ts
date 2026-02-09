@@ -394,10 +394,55 @@ async function queryInstalledApplications(
 }
 
 /**
- * Extract AOA scenarios from a JSON response (multiple response structures supported).
+ * Extract object classification metadata from an AOA scenario.
+ * Handles both "objectClassifications" (newer) and "filters" (older) keys.
  */
-function extractAoaScenarios(json: any): Array<{ name: string; type: string }> {
-  const scenarios: Array<{ name: string; type: string }> = [];
+function extractObjectClasses(scenario: any): string[] {
+  const classes: string[] = [];
+
+  // Newer firmware: objectClassifications array
+  const classifications = scenario.objectClassifications || scenario.objectclassifications || [];
+  for (const c of classifications) {
+    const t = c.type || c.name || c;
+    if (typeof t === "string" && t) classes.push(t);
+  }
+
+  // Older firmware: filters array with objectClassification
+  if (classes.length === 0) {
+    const filters = scenario.filters || scenario.filter || [];
+    const filterArr = Array.isArray(filters) ? filters : [filters];
+    for (const f of filterArr) {
+      const oc = f.objectClassification || f.type || f.objectType;
+      if (typeof oc === "string" && oc) classes.push(oc);
+      // Nested array inside filter
+      const inner = f.objectClassifications || [];
+      for (const c of inner) {
+        const t = c.type || c.name || c;
+        if (typeof t === "string" && t) classes.push(t);
+      }
+    }
+  }
+
+  return Array.from(new Set(classes)); // deduplicate
+}
+
+/**
+ * Extract AOA scenarios from a JSON response (multiple response structures supported).
+ * Captures scenario id, name, type, and object classification metadata.
+ */
+function extractAoaScenarios(json: any): Array<{ name: string; type: string; id?: number; objectClassifications?: string[] }> {
+  const scenarios: Array<{ name: string; type: string; id?: number; objectClassifications?: string[] }> = [];
+
+  const pushScenario = (scenario: any) => {
+    const entry: { name: string; type: string; id?: number; objectClassifications?: string[] } = {
+      name: scenario.name || scenario.niceName || "Unnamed",
+      type: scenario.type || scenario.objectType || "unknown",
+    };
+    if (scenario.id !== undefined) entry.id = Number(scenario.id);
+    const classes = extractObjectClasses(scenario);
+    if (classes.length > 0) entry.objectClassifications = classes;
+    scenarios.push(entry);
+  };
 
   // Structure 1: data.devices[].channels[].scenarios[]
   const devices = json?.data?.devices || json?.data?.configuration?.devices || [];
@@ -406,10 +451,7 @@ function extractAoaScenarios(json: any): Array<{ name: string; type: string }> {
     for (const channel of channels) {
       const channelScenarios = channel.scenarios || [];
       for (const scenario of channelScenarios) {
-        scenarios.push({
-          name: scenario.name || scenario.niceName || "Unnamed",
-          type: scenario.type || scenario.objectType || "unknown",
-        });
+        pushScenario(scenario);
       }
     }
   }
@@ -418,10 +460,7 @@ function extractAoaScenarios(json: any): Array<{ name: string; type: string }> {
   if (scenarios.length === 0) {
     const simpleScenarios = json?.data?.scenarios || json?.data?.configuration?.scenarios || [];
     for (const scenario of simpleScenarios) {
-      scenarios.push({
-        name: scenario.name || scenario.niceName || "Unnamed",
-        type: scenario.type || "unknown",
-      });
+      pushScenario(scenario);
     }
   }
 
@@ -430,10 +469,7 @@ function extractAoaScenarios(json: any): Array<{ name: string; type: string }> {
     const cams = json?.data?.cameras || [];
     for (const cam of cams) {
       for (const scenario of (cam.scenarios || [])) {
-        scenarios.push({
-          name: scenario.name || "Unnamed",
-          type: scenario.type || "unknown",
-        });
+        pushScenario(scenario);
       }
     }
   }
@@ -444,6 +480,9 @@ function extractAoaScenarios(json: any): Array<{ name: string; type: string }> {
 /**
  * Try a POST JSON-RPC call to an AOA API path.
  * Returns the parsed JSON response if successful, null otherwise.
+ *
+ * Tries multiple apiVersion values since different firmware versions
+ * support different API versions (1.0, 1.1, 1.3, etc.).
  */
 async function tryAoaPost(
   ipAddress: string,
@@ -454,40 +493,65 @@ async function tryAoaPost(
   timeout: number = 8000,
   conn?: CameraConnectionInfo
 ): Promise<any | null> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
-  const dispatcher = getCameraDispatcher(conn);
+  // Try multiple API versions - newer AOA firmware may require specific versions
+  const apiVersions = ["1.0", "1.3"];
 
-  try {
-    const response = await authFetch(
-      buildCameraUrl(ipAddress, path, conn),
-      username,
-      password,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiVersion: "1.0", method, context: "probe" }),
-        signal: controller.signal,
-        dispatcher,
-      }
-    );
-    clearTimeout(timeoutId);
+  for (const apiVersion of apiVersions) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    const dispatcher = getCameraDispatcher(conn);
 
-    if (!response.ok) {
-      return null;
-    }
-
-    const text = await response.text();
     try {
-      const json = JSON.parse(text);
-      if (json.error) return null;
-      return json;
-    } catch {
-      return null;
+      const url = buildCameraUrl(ipAddress, path, conn);
+      const body = JSON.stringify({ apiVersion, method });
+
+      const response = await authFetch(
+        url,
+        username,
+        password,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+          signal: controller.signal,
+          dispatcher,
+        }
+      );
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        console.log(`[Analytics] AOA POST ${path} ${method} (v${apiVersion}) on ${ipAddress}: HTTP ${response.status}`);
+        continue;
+      }
+
+      const text = await response.text();
+      if (!text.trim()) {
+        console.log(`[Analytics] AOA POST ${path} ${method} (v${apiVersion}) on ${ipAddress}: empty response body`);
+        continue;
+      }
+
+      try {
+        const json = JSON.parse(text);
+        if (json.error) {
+          console.log(`[Analytics] AOA POST ${path} ${method} (v${apiVersion}) on ${ipAddress}: API error: ${JSON.stringify(json.error)}`);
+          continue;
+        }
+        return json;
+      } catch {
+        console.log(`[Analytics] AOA POST ${path} ${method} (v${apiVersion}) on ${ipAddress}: invalid JSON (first 200 chars): ${text.substring(0, 200)}`);
+        continue;
+      }
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      if (err.name === "AbortError") {
+        console.log(`[Analytics] AOA POST ${path} ${method} (v${apiVersion}) on ${ipAddress}: timeout after ${timeout}ms`);
+      } else {
+        console.log(`[Analytics] AOA POST ${path} ${method} (v${apiVersion}) on ${ipAddress}: ${err.message}`);
+      }
     }
-  } catch {
-    return null;
   }
+
+  return null;
 }
 
 /**
@@ -505,7 +569,7 @@ async function queryObjectAnalyticsScenarios(
   acapNames: string[] = [],
   timeout: number = 8000,
   conn?: CameraConnectionInfo
-): Promise<{ scenarios: Array<{ name: string; type: string }>; apiPath?: string }> {
+): Promise<{ scenarios: Array<{ name: string; type: string; id?: number; objectClassifications?: string[] }>; apiPath?: string }> {
   // Build list of paths to try, using actual ACAP names from the app list
   const pathsToTry: string[] = [];
 
@@ -526,8 +590,8 @@ async function queryObjectAnalyticsScenarios(
   // Operator-level API (some firmware versions)
   pathsToTry.push("/local/objectanalytics/.apioperator");
 
-  // Methods to try for each path
-  const methodsToTry = ["getConfiguration", "getScenarios", "getSupportedVersions"];
+  // Methods to try for each path (getSupportedVersions first as lightest probe)
+  const methodsToTry = ["getSupportedVersions", "getConfiguration", "getScenarios"];
 
   console.log(`[Analytics] Probing AOA on ${ipAddress}, trying ${pathsToTry.length} paths: ${pathsToTry.join(", ")}`);
 
@@ -702,7 +766,10 @@ export async function probeAnalyticsCapabilities(
   if (aoaResult.scenarios.length > 0) {
     results.objectAnalytics = true;
     results.objectAnalyticsScenarios = aoaResult.scenarios;
-    console.log(`[Analytics] AOA scenarios on ${ipAddress}: ${aoaResult.scenarios.map((s) => `${s.name}(${s.type})`).join(", ")}`);
+    console.log(`[Analytics] AOA scenarios on ${ipAddress}: ${aoaResult.scenarios.map((s) => {
+      const classes = s.objectClassifications?.length ? ` [${s.objectClassifications.join(",")}]` : "";
+      return `${s.name}(${s.type}${classes})`;
+    }).join(", ")}`);
 
     // Infer capabilities from scenario types
     for (const scenario of aoaResult.scenarios) {
@@ -741,7 +808,10 @@ export async function probeAnalyticsCapabilities(
     }
     if (lateResult.scenarios.length > 0) {
       results.objectAnalyticsScenarios = lateResult.scenarios;
-      console.log(`[Analytics] AOA scenarios (late probe) on ${ipAddress}: ${lateResult.scenarios.map((s) => `${s.name}(${s.type})`).join(", ")}`);
+      console.log(`[Analytics] AOA scenarios (late probe) on ${ipAddress}: ${lateResult.scenarios.map((s) => {
+        const classes = s.objectClassifications?.length ? ` [${s.objectClassifications.join(",")}]` : "";
+        return `${s.name}(${s.type}${classes})`;
+      }).join(", ")}`);
       for (const scenario of lateResult.scenarios) {
         const type = scenario.type.toLowerCase();
         if (type.includes("crossline") || type.includes("line_crossing") || type.includes("crossing")) results.lineCrossing = true;

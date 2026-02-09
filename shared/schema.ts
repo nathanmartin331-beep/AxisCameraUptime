@@ -101,6 +101,8 @@ export interface CameraCapabilities {
     objectAnalyticsScenarios?: Array<{
       name: string;
       type: string;                 // "crosslinecounting", "occupancy_in_area", "object_in_area", etc.
+      id?: number;                  // Scenario ID from AOA configuration
+      objectClassifications?: string[]; // Object classes: "Human", "Vehicle", etc.
     }>;
   };
 
