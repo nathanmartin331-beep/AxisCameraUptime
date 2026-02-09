@@ -619,9 +619,12 @@ async function queryAnalyticsMetadataConfig(
 ): Promise<{ scenarios: Array<{ name: string; type: string; id?: number; objectClassifications?: string[] }>; apiPath: string } | null> {
   const path = "/axis-cgi/analytics-metadata-config.cgi";
 
-  // Try getSupportedVersions first
+  // Try getSupportedVersions first to check if the CGI exists
   const versionJson = await vapixJsonRpc(ipAddress, username, password, path, "getSupportedVersions", "1.0", timeout, conn);
-  if (!versionJson) return null;
+  if (!versionJson) {
+    console.log(`[Analytics] analytics-metadata-config.cgi on ${ipAddress}: not available (getSupportedVersions returned null)`);
+    return null;
+  }
 
   console.log(`[Analytics] analytics-metadata-config.cgi on ${ipAddress}: API exists (versions: ${JSON.stringify(versionJson?.data?.apiVersions || [])})`);
 
@@ -670,20 +673,44 @@ async function queryEvent2Analytics(
     "getEventInstances", "1.0", timeout, conn
   );
 
-  if (!json) return events;
+  if (!json) {
+    console.log(`[Analytics] Event2 getEventInstances on ${ipAddress}: no response`);
+    return events;
+  }
 
   // Parse event instances - look for analytics-related events
   const instances = json?.data?.eventInstances || json?.data?.instances || [];
 
+  // Log all available event topics for debugging (first probe only)
+  if (instances.length > 0) {
+    const allTopics = instances.map((i: any) => i.topic || i.declaration?.topic || "?");
+    const analyticsTopics = allTopics.filter((t: string) =>
+      /crossline|objectanalytics|occupancy|object.?in.?area|counting|peoplecounter/i.test(t)
+    );
+    if (analyticsTopics.length > 0) {
+      console.log(`[Analytics] Event2 on ${ipAddress}: ${instances.length} instances, ${analyticsTopics.length} analytics-related: ${analyticsTopics.slice(0, 5).join(", ")}`);
+    } else {
+      console.log(`[Analytics] Event2 on ${ipAddress}: ${instances.length} instances, 0 analytics matches. Sample topics: ${allTopics.slice(0, 8).join(", ")}`);
+    }
+  } else {
+    console.log(`[Analytics] Event2 on ${ipAddress}: 0 event instances returned`);
+  }
+
   for (const instance of instances) {
     const topic = (instance.topic || instance.declaration?.topic || "").toLowerCase();
-    const data = instance.data || instance.properties || {};
+    // Event data can be nested in various places depending on firmware
+    const data = instance.data || instance.properties || instance.message?.data || {};
 
     // CrossLine counting events
-    if (topic.includes("crossline") || topic.includes("crosslinecounting") || topic.includes("objectanalytics")) {
-      const inCount = parseInt(data.in || data.enters || data.total_in || "0") || 0;
-      const outCount = parseInt(data.out || data.exits || data.total_out || "0") || 0;
-      const total = parseInt(data.total || "0") || 0;
+    // VAPIX topics: tnsaxis:CameraApplicationPlatform/ObjectAnalytics/...
+    // or tns1:RuleEngine/CrossLineDetector/...
+    if (topic.includes("crossline") || topic.includes("crosslinecounting") ||
+        topic.includes("objectanalytics") || topic.includes("object_analytics") ||
+        topic.includes("ruleengine/crossline") || topic.includes("linedetector") ||
+        topic.includes("peoplecounter")) {
+      const inCount = parseInt(data.in || data.enters || data.total_in || data.totalIn || "0") || 0;
+      const outCount = parseInt(data.out || data.exits || data.total_out || data.totalOut || "0") || 0;
+      const total = parseInt(data.total || data.totalCount || "0") || 0;
 
       if (inCount > 0 || outCount > 0 || total > 0) {
         if (inCount > 0) events.push({ eventType: "people_in", value: inCount, metadata: { source: "event2", topic } });
@@ -695,7 +722,8 @@ async function queryEvent2Analytics(
     }
 
     // Occupancy events
-    if (topic.includes("occupancy") || topic.includes("object_in_area") || topic.includes("objectinarea")) {
+    if (topic.includes("occupancy") || topic.includes("object_in_area") || topic.includes("objectinarea") ||
+        topic.includes("areacounting") || topic.includes("area_counting")) {
       const count = parseInt(data.currentOccupancy || data.occupancy || data.count || data.objects || "0") || 0;
       if (count >= 0) {
         events.push({ eventType: "occupancy", value: count, metadata: { source: "event2", topic } });
@@ -732,17 +760,42 @@ async function discoverAnalyticsApis(
   if (!json) return result;
 
   const apiList = json?.data?.apiList || [];
-  console.log(`[Analytics] apidiscovery.cgi on ${ipAddress}: ${apiList.length} APIs`);
+
+  // Log analytics/event-related APIs for debugging the matching
+  const analyticsRelated = apiList.filter((a: any) => {
+    const id = (a.id || "").toLowerCase();
+    const name = (a.name || "").toLowerCase();
+    return id.includes("analytic") || id.includes("event") || name.includes("analytic") || name.includes("event");
+  });
+  if (analyticsRelated.length > 0) {
+    console.log(`[Analytics] apidiscovery on ${ipAddress}: ${apiList.length} APIs, analytics/event-related: ${analyticsRelated.map((a: any) => `${a.id}(v${a.version})`).join(", ")}`);
+  } else {
+    console.log(`[Analytics] apidiscovery on ${ipAddress}: ${apiList.length} APIs, none matched analytics/event. Sample IDs: ${apiList.slice(0, 15).map((a: any) => a.id).join(", ")}`);
+  }
 
   for (const api of apiList) {
     const id = (api.id || "").toLowerCase();
-    if (id === "analytics-metadata-config") result.hasMetadataConfig = true;
-    if (id === "event2") result.hasEvent2 = true;
-    if (id.includes("objectanalytics")) {
+    const name = (api.name || "").toLowerCase();
+
+    // Flexible matching for analytics-metadata-config
+    if (id === "analytics-metadata-config" || id.includes("analytics-metadata") ||
+        id.includes("analyticsmetadata") || name.includes("analytics metadata")) {
+      result.hasMetadataConfig = true;
+    }
+    // Flexible matching for event2
+    if (id === "event2" || id === "event-instances" || id.includes("event2") ||
+        name.includes("event instance") || name.includes("event2")) {
+      result.hasEvent2 = true;
+    }
+    // Match object analytics local path
+    if (id.includes("objectanalytics") || id.includes("object-analytics") ||
+        name.includes("object analytics")) {
       const path = api.path || api.url;
       if (path) result.aoaLocalPath = path;
     }
   }
+
+  console.log(`[Analytics] API discovery on ${ipAddress}: metadataConfig=${result.hasMetadataConfig}, event2=${result.hasEvent2}, aoaLocal=${result.aoaLocalPath || "none"}`);
 
   return result;
 }
@@ -768,26 +821,21 @@ async function queryObjectAnalyticsScenarios(
   conn?: CameraConnectionInfo
 ): Promise<{ scenarios: Array<{ name: string; type: string; id?: number; objectClassifications?: string[] }>; apiPath?: string }> {
 
-  // Step 1: VAPIX API Discovery
+  // Step 1: VAPIX API Discovery (for logging and optional local path discovery)
   const apis = await discoverAnalyticsApis(ipAddress, username, password, timeout, conn);
 
-  // Step 2: Try analytics-metadata-config.cgi first (modern AXIS OS)
-  if (apis.hasMetadataConfig) {
-    const result = await queryAnalyticsMetadataConfig(ipAddress, username, password, timeout, conn);
-    if (result) {
-      return result;
-    }
+  // Step 2: Try analytics-metadata-config.cgi ALWAYS (standard VAPIX CGI, not ACAP local)
+  // Don't gate this on API discovery - the discovery matching may miss it
+  const metadataResult = await queryAnalyticsMetadataConfig(ipAddress, username, password, timeout, conn);
+  if (metadataResult && metadataResult.apiPath) {
+    return metadataResult;
   }
 
-  // Step 3: Try Event2 API to confirm analytics events are available
-  // Even without scenarios, if event2 has analytics data, we can poll it
-  if (apis.hasEvent2) {
-    const eventData = await queryEvent2Analytics(ipAddress, username, password, timeout, conn);
-    if (eventData.length > 0) {
-      console.log(`[Analytics] Event2 on ${ipAddress}: analytics data available via events API`);
-      // Return event2 as the API path - polling will use this
-      return { scenarios: [], apiPath: "event2" };
-    }
+  // Step 3: Try Event2 API ALWAYS (standard VAPIX CGI)
+  const eventData = await queryEvent2Analytics(ipAddress, username, password, timeout, conn);
+  if (eventData.length > 0) {
+    console.log(`[Analytics] Event2 on ${ipAddress}: ${eventData.length} analytics events found - using Event2 for polling`);
+    return { scenarios: [], apiPath: "event2" };
   }
 
   // Step 4: Try discovered AOA local path from API discovery
@@ -829,10 +877,17 @@ async function queryObjectAnalyticsScenarios(
     return { scenarios: [], apiPath: path };
   }
 
-  // If we have event2 available but no data YET, still mark it as the path
+  // Step 6: If analytics-metadata-config.cgi existed (returned non-null but no scenarios),
+  // fall back to event2 for data polling even without current events
+  if (metadataResult) {
+    console.log(`[Analytics] AOA on ${ipAddress}: metadata-config API exists but no scenarios - using Event2 for polling`);
+    return { scenarios: [], apiPath: "event2" };
+  }
+
+  // Step 7: If event2 exists in API discovery, use it as fallback even without current data
   // (analytics events may not have fired yet but will during normal operation)
   if (apis.hasEvent2) {
-    console.log(`[Analytics] AOA on ${ipAddress}: no ACAP API, but Event2 available - will poll via events`);
+    console.log(`[Analytics] AOA on ${ipAddress}: Event2 available in API discovery - will poll via events`);
     return { scenarios: [], apiPath: "event2" };
   }
 
