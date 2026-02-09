@@ -818,7 +818,15 @@ async function checkCameraCohort(cohortIndex: number) {
   }
 }
 
+let cameraMonitoringStarted = false;
+
 export function startCameraMonitoring() {
+  if (cameraMonitoringStarted) {
+    console.log("[Monitor] Monitoring service already running, skipping duplicate start");
+    return;
+  }
+  cameraMonitoringStarted = true;
+
   console.log("[Monitor] Initializing camera monitoring service...");
 
   // Run initial full check 5 seconds after startup

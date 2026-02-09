@@ -615,7 +615,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const password = await decryptPassword(camera.encryptedPassword);
 
       const { probeAnalyticsCapabilities } = await import("./services/analyticsPoller");
-      const probeResult = await probeAnalyticsCapabilities(camera.ipAddress, camera.username, password);
+      const { getConnectionInfo } = await import("./services/cameraUrl");
+      const conn = getConnectionInfo(camera);
+      const probeResult = await probeAnalyticsCapabilities(camera.ipAddress, camera.username, password, conn);
 
       // Merge all probe results into capabilities.analytics
       const existingAnalytics = (camera.capabilities as any)?.analytics || {};

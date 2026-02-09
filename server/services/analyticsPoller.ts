@@ -24,6 +24,9 @@ import { storage } from "../storage";
 const ANALYTICS_CONCURRENCY = parseInt(process.env.POLL_CONCURRENCY || "25", 10);
 const analyticsLimit = pLimit(ANALYTICS_CONCURRENCY);
 
+// Track which cameras have already had their Event2 topics logged (avoid per-poll log spam)
+const event2LoggedCameras = new Set<string>();
+
 interface PeopleCountData {
   in: number;
   out: number;
@@ -255,18 +258,25 @@ async function queryObjectAnalyticsData(
 
   // Modern AXIS OS: use Event2 API to get analytics data from event instances
   if (storedApiPath === "event2") {
-    return queryEvent2Analytics(ipAddress, username, password, timeout, conn);
+    return (await queryEvent2Analytics(ipAddress, username, password, timeout, conn)).events;
+  }
+
+  // SOAP event service fallback (for cameras without Event2)
+  if (storedApiPath === "soap-events") {
+    return (await querySoapEventInstances(ipAddress, username, password, timeout, conn)).events;
   }
 
   // analytics-metadata-config.cgi path - try getAccumulatedCounts via the ACAP API
   // But also fall back to Event2 since metadata-config is for configuration, not data
   if (storedApiPath === "/axis-cgi/analytics-metadata-config.cgi") {
     // The metadata config API is for configuration, not live data.
-    // Live data comes from Event2.
-    return queryEvent2Analytics(ipAddress, username, password, timeout, conn);
+    // Try Event2 first, then SOAP
+    const event2Result = (await queryEvent2Analytics(ipAddress, username, password, timeout, conn)).events;
+    if (event2Result.length > 0) return event2Result;
+    return (await querySoapEventInstances(ipAddress, username, password, timeout, conn)).events;
   }
 
-  // Legacy ACAP /local/ path - use getAccumulatedCounts
+  // ACAP local path (control.cgi or legacy .api) - use getAccumulatedCounts
   const json = await tryAoaPost(ipAddress, username, password, storedApiPath, "getAccumulatedCounts", timeout, conn);
   if (json) {
     return parseAoaAccumulatedCounts(json);
@@ -496,7 +506,7 @@ async function tryAoaPost(
   timeout: number = 8000,
   conn?: CameraConnectionInfo
 ): Promise<any | null> {
-  const apiVersions = ["1.0", "1.3"];
+  const apiVersions = ["1.0", "1.2", "1.3"];
   let lastStatus = 0;
 
   for (const apiVersion of apiVersions) {
@@ -513,7 +523,7 @@ async function tryAoaPost(
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ apiVersion, method }),
+          body: JSON.stringify({ apiVersion, method, params: {} }),
           signal: controller.signal,
           dispatcher,
         }
@@ -583,15 +593,17 @@ async function vapixJsonRpc(
     const response = await authFetch(url, username, password, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ apiVersion, method }),
+      body: JSON.stringify({ apiVersion, method, params: {} }),
       signal: controller.signal,
       dispatcher,
     });
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      // Log non-200 responses for debugging (critical for understanding API availability)
-      console.log(`[Analytics] VAPIX ${path} ${method} on ${ipAddress}: HTTP ${response.status}`);
+      // Log non-200/non-404 responses for debugging (404 = expected for missing APIs)
+      if (response.status !== 404) {
+        console.log(`[Analytics] VAPIX ${path} ${method} on ${ipAddress}: HTTP ${response.status}`);
+      }
       return null;
     }
 
@@ -678,13 +690,15 @@ async function queryEvent2Analytics(
   password: string,
   timeout: number = 8000,
   conn?: CameraConnectionInfo
-): Promise<Array<{ eventType: string; value: number; metadata?: Record<string, any> }>> {
+): Promise<{ events: Array<{ eventType: string; value: number; metadata?: Record<string, any> }>; reachable: boolean }> {
   const events: Array<{ eventType: string; value: number; metadata?: Record<string, any> }> = [];
+  let reachable = false;
 
   // Try multiple event endpoint paths - the API may vary by firmware version
   const eventPaths = [
-    "/axis-cgi/event2/getEventInstances.cgi",
-    "/axis-cgi/eventinstances.cgi",
+    "/axis-cgi/event2/instances.cgi",          // Correct modern VAPIX Event2 path
+    "/axis-cgi/event2/getEventInstances.cgi",  // Legacy variant
+    "/axis-cgi/eventinstances.cgi",            // Very old fallback
   ];
 
   let json: any = null;
@@ -693,18 +707,22 @@ async function queryEvent2Analytics(
       ipAddress, username, password,
       ePath, "getEventInstances", "1.0", timeout, conn
     );
-    if (json) break;
+    if (json) {
+      reachable = true;
+      break;
+    }
   }
 
   if (!json) {
-    return events;
+    return { events, reachable };
   }
 
   // Parse event instances - look for analytics-related events
   const instances = json?.data?.eventInstances || json?.data?.instances || [];
 
-  // Log all available event topics for debugging (first probe only)
-  if (instances.length > 0) {
+  // Log available event topics for debugging (only once per camera, not every poll)
+  if (instances.length > 0 && !event2LoggedCameras.has(ipAddress)) {
+    event2LoggedCameras.add(ipAddress);
     const allTopics = instances.map((i: any) => i.topic || i.declaration?.topic || "?");
     const analyticsTopics = allTopics.filter((t: string) =>
       /crossline|objectanalytics|occupancy|object.?in.?area|counting|peoplecounter/i.test(t)
@@ -714,8 +732,6 @@ async function queryEvent2Analytics(
     } else {
       console.log(`[Analytics] Event2 on ${ipAddress}: ${instances.length} instances, 0 analytics matches. Sample topics: ${allTopics.slice(0, 8).join(", ")}`);
     }
-  } else {
-    console.log(`[Analytics] Event2 on ${ipAddress}: 0 event instances returned`);
   }
 
   for (const instance of instances) {
@@ -757,7 +773,105 @@ async function queryEvent2Analytics(
     console.log(`[Analytics] Event2 on ${ipAddress}: found ${events.length} analytics events from ${instances.length} instances`);
   }
 
-  return events;
+  return { events, reachable };
+}
+
+/**
+ * Query analytics events via the classic VAPIX SOAP Event Service.
+ * This works on cameras without Event2 (older AXIS OS) by calling
+ * GetEventInstances at /vapix/services.
+ * Returns the same event structure as queryEvent2Analytics.
+ */
+async function querySoapEventInstances(
+  ipAddress: string,
+  username: string,
+  password: string,
+  timeout: number = 8000,
+  conn?: CameraConnectionInfo
+): Promise<{ events: Array<{ eventType: string; value: number; metadata?: Record<string, any> }>; reachable: boolean }> {
+  const events: Array<{ eventType: string; value: number; metadata?: Record<string, any> }> = [];
+  let reachable = false;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const dispatcher = getCameraDispatcher(conn);
+
+  const soapBody = `<?xml version="1.0" encoding="UTF-8"?>
+<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://www.w3.org/2003/05/soap-envelope"
+  xmlns:wsa="http://www.w3.org/2005/08/addressing"
+  xmlns:tev="http://www.axis.com/vapix/ws/event1">
+  <SOAP-ENV:Header>
+    <wsa:Action>http://www.axis.com/vapix/ws/event1/GetEventInstances</wsa:Action>
+  </SOAP-ENV:Header>
+  <SOAP-ENV:Body>
+    <tev:GetEventInstances />
+  </SOAP-ENV:Body>
+</SOAP-ENV:Envelope>`;
+
+  try {
+    const url = buildCameraUrl(ipAddress, "/vapix/services", conn);
+    const response = await authFetch(url, username, password, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/soap+xml; action=http://www.axis.com/vapix/ws/event1/GetEventInstances; charset=UTF-8",
+      },
+      body: soapBody,
+      signal: controller.signal,
+      dispatcher,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      return { events, reachable };
+    }
+
+    reachable = true;
+    const text = await response.text();
+
+    // Parse analytics-related event topics from SOAP XML response
+    // Look for ObjectAnalytics topics with counting data
+    const topicRegex = /CameraApplicationPlatform\/ObjectAnalytics\/[^<"]+/gi;
+    const dataRegex = /<tt:Data[^>]*>([\s\S]*?)<\/tt:Data>/gi;
+    const simpleItemRegex = /<tt:SimpleItem\s+Name="([^"]+)"\s+Value="([^"]+)"/gi;
+
+    // Extract all SimpleItem name/value pairs from the response
+    let match;
+    const items = new Map<string, string>();
+    while ((match = simpleItemRegex.exec(text)) !== null) {
+      items.set(match[1].toLowerCase(), match[2]);
+    }
+
+    // Check for counting data
+    const total = parseInt(items.get("total") || "0") || 0;
+    const totalHuman = parseInt(items.get("totalhuman") || "0") || 0;
+    const totalCar = parseInt(items.get("totalcar") || "0") || 0;
+
+    if (total > 0 || totalHuman > 0) {
+      events.push({
+        eventType: "line_crossing",
+        value: total || totalHuman,
+        metadata: { source: "soap-events", totalHuman, totalCar },
+      });
+      if (totalHuman > 0) {
+        events.push({ eventType: "people_in", value: totalHuman, metadata: { source: "soap-events" } });
+      }
+    }
+
+    // Check for occupancy data
+    const occupancy = parseInt(items.get("currentoccupancy") || items.get("occupancy") || "0") || 0;
+    if (occupancy > 0) {
+      events.push({ eventType: "occupancy", value: occupancy, metadata: { source: "soap-events" } });
+    }
+
+    if (events.length > 0) {
+      console.log(`[Analytics] SOAP events on ${ipAddress}: found ${events.length} analytics events`);
+    }
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    // Silent - SOAP might not be supported
+  }
+
+  return { events, reachable };
 }
 
 /**
@@ -854,66 +968,83 @@ async function queryObjectAnalyticsScenarios(
   }
 
   // Step 3: Try Event2 API ALWAYS (standard VAPIX CGI)
-  const eventData = await queryEvent2Analytics(ipAddress, username, password, timeout, conn);
+  const { events: eventData, reachable: event2Reachable } = await queryEvent2Analytics(ipAddress, username, password, timeout, conn);
   if (eventData.length > 0) {
     console.log(`[Analytics] Event2 on ${ipAddress}: ${eventData.length} analytics events found - using Event2 for polling`);
+    return { scenarios: [], apiPath: "event2" };
+  }
+  if (event2Reachable) {
+    // Event2 API responded but no analytics events currently (nobody crossed yet, etc.)
+    // Still use Event2 as the polling path since it's the correct modern approach
+    console.log(`[Analytics] Event2 on ${ipAddress}: API reachable (0 analytics events currently) - using Event2 for polling`);
     return { scenarios: [], apiPath: "event2" };
   }
 
   // Step 4: Try discovered AOA local path from API discovery
   if (apis.aoaLocalPath) {
-    const versionCheck = await tryAoaPost(ipAddress, username, password, apis.aoaLocalPath, "getSupportedVersions", timeout, conn);
-    if (versionCheck) {
+    console.log(`[Analytics] Trying discovered AOA path ${apis.aoaLocalPath} on ${ipAddress}...`);
+    const configJson = await tryAoaPost(ipAddress, username, password, apis.aoaLocalPath, "getConfiguration", timeout, conn);
+    const dataCheck = await tryAoaPost(ipAddress, username, password, apis.aoaLocalPath, "getAccumulatedCounts", timeout, conn);
+    if (configJson || dataCheck) {
+      const scenarios = configJson ? extractAoaScenarios(configJson) : [];
       console.log(`[Analytics] AOA found at discovered path ${apis.aoaLocalPath} on ${ipAddress}`);
-      const configJson = await tryAoaPost(ipAddress, username, password, apis.aoaLocalPath, "getConfiguration", timeout, conn);
-      if (configJson) {
-        const scenarios = extractAoaScenarios(configJson);
-        return { scenarios, apiPath: apis.aoaLocalPath };
-      }
-      return { scenarios: [], apiPath: apis.aoaLocalPath };
+      return { scenarios, apiPath: apis.aoaLocalPath };
     }
+    console.log(`[Analytics] AOA discovered path ${apis.aoaLocalPath} on ${ipAddress}: no config/data response`);
   }
 
-  // Step 5: Legacy /local/ ACAP paths
+  // Step 5: ACAP local paths (control.cgi is the correct endpoint for AOA)
   const legacyPaths: string[] = [];
   for (const name of acapNames) {
     const lowerName = name.toLowerCase();
+    // control.cgi is the correct CGI for AXIS Object Analytics ACAP
+    legacyPaths.push(`/local/${lowerName}/control.cgi`);
+    // Also try the old .api/.apioperator convention as fallback
     legacyPaths.push(`/local/${lowerName}/.api`);
     legacyPaths.push(`/local/${lowerName}/.apioperator`);
   }
-  if (!legacyPaths.includes("/local/objectanalytics/.api")) {
+  // Ensure standard objectanalytics paths are always tried
+  if (!legacyPaths.includes("/local/objectanalytics/control.cgi")) {
+    legacyPaths.push("/local/objectanalytics/control.cgi");
     legacyPaths.push("/local/objectanalytics/.api");
     legacyPaths.push("/local/objectanalytics/.apioperator");
   }
 
   for (const path of legacyPaths) {
-    const versionCheck = await tryAoaPost(ipAddress, username, password, path, "getSupportedVersions", timeout, conn);
-    if (!versionCheck) continue;
-
-    console.log(`[Analytics] AOA found at legacy path ${path} on ${ipAddress}`);
+    console.log(`[Analytics] Trying ACAP path ${path} on ${ipAddress}...`);
+    // Try getConfiguration and getAccumulatedCounts directly - don't gate on getSupportedVersions
+    // because control.cgi may not implement getSupportedVersions
     const configJson = await tryAoaPost(ipAddress, username, password, path, "getConfiguration", timeout, conn);
-    if (configJson) {
-      const scenarios = extractAoaScenarios(configJson);
+    const dataCheck = await tryAoaPost(ipAddress, username, password, path, "getAccumulatedCounts", timeout, conn);
+    if (configJson || dataCheck) {
+      const scenarios = configJson ? extractAoaScenarios(configJson) : [];
+      console.log(`[Analytics] AOA found at ACAP path ${path} on ${ipAddress}`);
       return { scenarios, apiPath: path };
     }
-    return { scenarios: [], apiPath: path };
   }
 
-  // Step 6: If analytics-metadata-config.cgi existed (returned non-null but no scenarios),
+  // Step 6: Try classic SOAP Event Service (/vapix/services) - works on cameras without Event2
+  const { events: soapEvents, reachable: soapReachable } = await querySoapEventInstances(ipAddress, username, password, timeout, conn);
+  if (soapEvents.length > 0 || soapReachable) {
+    console.log(`[Analytics] SOAP events on ${ipAddress}: ${soapReachable ? "API reachable" : ""} ${soapEvents.length} analytics events - using SOAP for polling`);
+    return { scenarios: [], apiPath: "soap-events" };
+  }
+
+  // Step 7: If analytics-metadata-config.cgi existed (returned non-null but no scenarios),
   // fall back to event2 for data polling even without current events
   if (metadataResult) {
     console.log(`[Analytics] AOA on ${ipAddress}: metadata-config API exists but no scenarios - using Event2 for polling`);
     return { scenarios: [], apiPath: "event2" };
   }
 
-  // Step 7: If event2 exists in API discovery, use it as fallback even without current data
+  // Step 8: If event2 exists in API discovery, use it as fallback even without current data
   // (analytics events may not have fired yet but will during normal operation)
   if (apis.hasEvent2) {
     console.log(`[Analytics] AOA on ${ipAddress}: Event2 available in API discovery - will poll via events`);
     return { scenarios: [], apiPath: "event2" };
   }
 
-  console.log(`[Analytics] AOA on ${ipAddress}: no working analytics API found`);
+  console.log(`[Analytics] AOA on ${ipAddress}: no working analytics API found (tried metadata-config, Event2, control.cgi, SOAP events)`);
   return { scenarios: [] };
 }
 
@@ -1252,8 +1383,9 @@ async function cleanupStaleAnalyticsPaths(): Promise<void> {
       if (!caps?.analytics?.objectAnalyticsApiPath) continue;
 
       const storedPath = caps.analytics.objectAnalyticsApiPath;
-      // Clear /local/ paths that are known to 404 on all modern cameras
-      if (storedPath.startsWith("/local/")) {
+      // Clear broken /local/.../.api and .apioperator paths (wrong endpoint format).
+      // Keep /local/.../control.cgi paths (correct AOA ACAP CGI endpoint).
+      if (storedPath.startsWith("/local/") && (storedPath.endsWith("/.api") || storedPath.endsWith("/.apioperator"))) {
         const updatedCaps = JSON.parse(JSON.stringify(caps));
         delete updatedCaps.analytics.objectAnalyticsApiPath;
         updatedCaps.analytics.objectAnalytics = false;
