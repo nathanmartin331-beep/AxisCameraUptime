@@ -555,9 +555,65 @@ async function tryAoaPost(
 }
 
 /**
+ * Try a GET request to an AOA path to discover the API.
+ * Returns the parsed JSON response if the endpoint returns valid JSON, null otherwise.
+ * Useful for discovering the API on cameras where POST to .api returns 404.
+ */
+async function tryAoaGet(
+  ipAddress: string,
+  username: string,
+  password: string,
+  path: string,
+  timeout: number = 8000,
+  conn?: CameraConnectionInfo
+): Promise<any | null> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const dispatcher = getCameraDispatcher(conn);
+
+  try {
+    const url = buildCameraUrl(ipAddress, path, conn);
+    const response = await authFetch(url, username, password, {
+      method: "GET",
+      signal: controller.signal,
+      dispatcher,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) return null;
+
+    const text = await response.text();
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+
+    // If JSON response, parse and return
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        const json = JSON.parse(trimmed);
+        if (json.error) return null;
+        return json;
+      } catch {
+        return null;
+      }
+    }
+
+    // Non-JSON response - return as a marker that the path exists
+    return { _raw: trimmed.substring(0, 500), _pathExists: true };
+  } catch {
+    clearTimeout(timeoutId);
+    return null;
+  }
+}
+
+/**
  * Probe AXIS Object Analytics (AOA) for configured scenarios.
  * Tries multiple API paths and methods for compatibility across firmware versions.
- * The ACAP package name from applications/list.cgi determines the URL path.
+ *
+ * On newer AXIS OS (11.x+), AOA may be a built-in component that doesn't serve
+ * the traditional /local/<name>/.api endpoint. In that case, we try:
+ * - /axis-cgi/objectanalytics.cgi (CGI-based API)
+ * - /axis-cgi/analytics/getConfiguration.cgi
+ * - /local/<name>/.apioperator and /.apiviewer (alternate access levels)
  *
  * @param acapNames - ACAP package names to try (from applications list)
  * @returns scenarios and the working API path
@@ -577,25 +633,28 @@ async function queryObjectAnalyticsScenarios(
   for (const name of acapNames) {
     const lowerName = name.toLowerCase();
     pathsToTry.push(`/local/${lowerName}/.api`);
-    // Some ACAPs register under their nice-name-derived path
-    if (lowerName !== "objectanalytics") {
-      pathsToTry.push(`/local/${lowerName}/.apioperator`);
-    }
+    pathsToTry.push(`/local/${lowerName}/.apioperator`);
+    pathsToTry.push(`/local/${lowerName}/.apiviewer`);
   }
 
   // Then: standard paths as fallback
   if (!pathsToTry.includes("/local/objectanalytics/.api")) {
     pathsToTry.push("/local/objectanalytics/.api");
+    pathsToTry.push("/local/objectanalytics/.apioperator");
+    pathsToTry.push("/local/objectanalytics/.apiviewer");
   }
-  // Operator-level API (some firmware versions)
-  pathsToTry.push("/local/objectanalytics/.apioperator");
+
+  // Newer AXIS OS: CGI-based analytics endpoints (built-in AOA doesn't use /local/)
+  pathsToTry.push("/axis-cgi/objectanalytics.cgi");
+  pathsToTry.push("/axis-cgi/analytics/getConfiguration.cgi");
 
   // Methods to try for each path (getSupportedVersions first as lightest probe)
   const methodsToTry = ["getSupportedVersions", "getConfiguration", "getScenarios"];
 
-  console.log(`[Analytics] Probing AOA on ${ipAddress}, trying ${pathsToTry.length} paths: ${pathsToTry.join(", ")}`);
+  console.log(`[Analytics] Probing AOA on ${ipAddress}, trying ${pathsToTry.length} paths...`);
 
   for (const path of pathsToTry) {
+    // Try POST JSON-RPC first (standard AOA API)
     for (const method of methodsToTry) {
       const json = await tryAoaPost(ipAddress, username, password, path, method, timeout, conn);
       if (!json) continue;
@@ -630,7 +689,43 @@ async function queryObjectAnalyticsScenarios(
     }
   }
 
-  console.log(`[Analytics] AOA on ${ipAddress}: no working API path found across ${pathsToTry.length} paths`);
+  // POST paths all failed (404). Try GET discovery on key paths to find where AOA serves content.
+  console.log(`[Analytics] AOA on ${ipAddress}: all POST paths returned 404, trying GET discovery...`);
+  const getDiscoveryPaths = [
+    "/local/objectanalytics/",
+    "/local/objectanalytics/config",
+    "/local/objectanalytics/control.cgi",
+  ];
+  // Also add ACAP-specific GET paths
+  for (const name of acapNames) {
+    const lowerName = name.toLowerCase();
+    if (lowerName !== "objectanalytics") {
+      getDiscoveryPaths.push(`/local/${lowerName}/`);
+    }
+  }
+
+  for (const path of getDiscoveryPaths) {
+    const result = await tryAoaGet(ipAddress, username, password, path, timeout, conn);
+    if (result) {
+      const isRaw = result._pathExists;
+      if (isRaw) {
+        console.log(`[Analytics] AOA GET discovery on ${ipAddress}: ${path} responded (non-JSON, first 200 chars): ${result._raw?.substring(0, 200)}`);
+      } else {
+        console.log(`[Analytics] AOA GET discovery on ${ipAddress}: ${path} returned JSON. Keys: ${JSON.stringify(Object.keys(result))}`);
+        const scenarios = extractAoaScenarios(result);
+        if (scenarios.length > 0) {
+          return { scenarios, apiPath: path };
+        }
+      }
+      // Found content but can't extract scenarios - the ACAP exists but uses unknown API format
+      // Return the path so polling can try it later
+      if (!isRaw) {
+        return { scenarios: [], apiPath: path };
+      }
+    }
+  }
+
+  console.log(`[Analytics] AOA on ${ipAddress}: no working API path found (ACAP may be built-in with no HTTP API)`);
   return { scenarios: [] };
 }
 
@@ -881,30 +976,33 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
     }
   }
 
-  // Try Object Analytics (AOA) if enabled - this can provide crossline counting,
-  // occupancy-in-area, and other scenario-based data
+  // Try Object Analytics (AOA) if enabled AND a working API path was discovered during probe.
+  // Without a stored path, the probe found no working endpoint (all 404), so skip to avoid
+  // spamming 404 requests every polling cycle.
   const storedAoaPath = caps?.analytics?.objectAnalyticsApiPath;
-  if (oaEnabled && events.length === 0) {
-    // Only query AOA if we didn't already get data from People Counter/Occupancy
-    try {
-      const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password, storedAoaPath, 8000, conn);
-      events.push(...aoaEvents);
-    } catch {
-      // AOA query failed
-    }
-  } else if (oaEnabled) {
-    // Even if we got people counter data, still try AOA for additional scenario data
-    // but don't duplicate people_in/people_out/occupancy
-    try {
-      const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password, storedAoaPath, 8000, conn);
-      const existingTypes = new Set(events.map((e) => e.eventType));
-      for (const evt of aoaEvents) {
-        if (!existingTypes.has(evt.eventType)) {
-          events.push(evt);
-        }
+  if (oaEnabled && storedAoaPath) {
+    if (events.length === 0) {
+      // Only query AOA if we didn't already get data from People Counter/Occupancy
+      try {
+        const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password, storedAoaPath, 8000, conn);
+        events.push(...aoaEvents);
+      } catch {
+        // AOA query failed
       }
-    } catch {
-      // AOA query failed
+    } else {
+      // Even if we got people counter data, still try AOA for additional scenario data
+      // but don't duplicate people_in/people_out/occupancy
+      try {
+        const aoaEvents = await queryObjectAnalyticsData(camera.ipAddress, camera.username, password, storedAoaPath, 8000, conn);
+        const existingTypes = new Set(events.map((e) => e.eventType));
+        for (const evt of aoaEvents) {
+          if (!existingTypes.has(evt.eventType)) {
+            events.push(evt);
+          }
+        }
+      } catch {
+        // AOA query failed
+      }
     }
   }
 
