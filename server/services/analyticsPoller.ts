@@ -481,8 +481,8 @@ function extractAoaScenarios(json: any): Array<{ name: string; type: string; id?
  * Try a POST JSON-RPC call to an AOA API path.
  * Returns the parsed JSON response if successful, null otherwise.
  *
- * Tries multiple apiVersion values since different firmware versions
- * support different API versions (1.0, 1.1, 1.3, etc.).
+ * Tries apiVersion 1.0 first, then 1.3 for newer firmware.
+ * Logs are compact: one line per path summarizing the outcome.
  */
 async function tryAoaPost(
   ipAddress: string,
@@ -493,8 +493,8 @@ async function tryAoaPost(
   timeout: number = 8000,
   conn?: CameraConnectionInfo
 ): Promise<any | null> {
-  // Try multiple API versions - newer AOA firmware may require specific versions
   const apiVersions = ["1.0", "1.3"];
+  let lastStatus = 0;
 
   for (const apiVersion of apiVersions) {
     const controller = new AbortController();
@@ -503,8 +503,6 @@ async function tryAoaPost(
 
     try {
       const url = buildCameraUrl(ipAddress, path, conn);
-      const body = JSON.stringify({ apiVersion, method });
-
       const response = await authFetch(
         url,
         username,
@@ -512,7 +510,7 @@ async function tryAoaPost(
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body,
+          body: JSON.stringify({ apiVersion, method }),
           signal: controller.signal,
           dispatcher,
         }
@@ -520,100 +518,128 @@ async function tryAoaPost(
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        console.log(`[Analytics] AOA POST ${path} ${method} (v${apiVersion}) on ${ipAddress}: HTTP ${response.status}`);
+        lastStatus = response.status;
         continue;
       }
 
       const text = await response.text();
-      if (!text.trim()) {
-        console.log(`[Analytics] AOA POST ${path} ${method} (v${apiVersion}) on ${ipAddress}: empty response body`);
-        continue;
-      }
+      if (!text.trim()) continue;
 
       try {
         const json = JSON.parse(text);
         if (json.error) {
-          console.log(`[Analytics] AOA POST ${path} ${method} (v${apiVersion}) on ${ipAddress}: API error: ${JSON.stringify(json.error)}`);
+          console.log(`[Analytics] AOA ${path} ${method} on ${ipAddress}: API error: ${JSON.stringify(json.error)}`);
           continue;
         }
         return json;
       } catch {
-        console.log(`[Analytics] AOA POST ${path} ${method} (v${apiVersion}) on ${ipAddress}: invalid JSON (first 200 chars): ${text.substring(0, 200)}`);
+        console.log(`[Analytics] AOA ${path} ${method} on ${ipAddress}: invalid JSON response`);
         continue;
       }
     } catch (err: any) {
       clearTimeout(timeoutId);
       if (err.name === "AbortError") {
-        console.log(`[Analytics] AOA POST ${path} ${method} (v${apiVersion}) on ${ipAddress}: timeout after ${timeout}ms`);
+        console.log(`[Analytics] AOA ${path} ${method} on ${ipAddress}: timeout`);
       } else {
-        console.log(`[Analytics] AOA POST ${path} ${method} (v${apiVersion}) on ${ipAddress}: ${err.message}`);
+        console.log(`[Analytics] AOA ${path} on ${ipAddress}: ${err.message}`);
       }
+      return null; // Network error - don't try more versions
     }
+  }
+
+  // Only log 404s once per path (not per version)
+  if (lastStatus === 404) {
+    // Don't log 404s individually - the caller summarizes the result
+  } else if (lastStatus > 0) {
+    console.log(`[Analytics] AOA ${path} ${method} on ${ipAddress}: HTTP ${lastStatus}`);
   }
 
   return null;
 }
 
 /**
- * Try a GET request to an AOA path to discover the API.
- * Returns the parsed JSON response if the endpoint returns valid JSON, null otherwise.
- * Useful for discovering the API on cameras where POST to .api returns 404.
+ * Use VAPIX API Discovery (apidiscovery.cgi) to find where the Object Analytics
+ * API is actually served. Available on AXIS OS 9.10+.
+ *
+ * Returns the discovered API path, or null if not found.
  */
-async function tryAoaGet(
+async function discoverAoaViaApiDiscovery(
   ipAddress: string,
   username: string,
   password: string,
-  path: string,
   timeout: number = 8000,
   conn?: CameraConnectionInfo
-): Promise<any | null> {
+): Promise<string | null> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   const dispatcher = getCameraDispatcher(conn);
 
   try {
-    const url = buildCameraUrl(ipAddress, path, conn);
+    const url = buildCameraUrl(ipAddress, "/axis-cgi/apidiscovery.cgi", conn);
     const response = await authFetch(url, username, password, {
-      method: "GET",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiVersion: "1.0", method: "getApiList" }),
       signal: controller.signal,
       dispatcher,
     });
     clearTimeout(timeoutId);
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.log(`[Analytics] apidiscovery.cgi on ${ipAddress}: HTTP ${response.status}`);
+      return null;
+    }
 
-    const text = await response.text();
-    const trimmed = text.trim();
-    if (!trimmed) return null;
+    const json = await response.json();
+    if (json.error) {
+      console.log(`[Analytics] apidiscovery.cgi on ${ipAddress}: API error: ${JSON.stringify(json.error)}`);
+      return null;
+    }
 
-    // If JSON response, parse and return
-    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-      try {
-        const json = JSON.parse(trimmed);
-        if (json.error) return null;
-        return json;
-      } catch {
-        return null;
+    const apiList = json?.data?.apiList || [];
+    console.log(`[Analytics] apidiscovery.cgi on ${ipAddress}: found ${apiList.length} APIs`);
+
+    // Look for Object Analytics or analytics-related APIs
+    for (const api of apiList) {
+      const id = (api.id || "").toLowerCase();
+      const name = (api.name || "").toLowerCase();
+      if (id.includes("objectanalytics") || id.includes("analyticsscene") ||
+          name.includes("object analytics") || name.includes("analytics scene")) {
+        const path = api.path || api.url;
+        if (path) {
+          console.log(`[Analytics] API Discovery found AOA on ${ipAddress}: id="${api.id}", version="${api.version}", path="${path}"`);
+          return path;
+        }
       }
     }
 
-    // Non-JSON response - return as a marker that the path exists
-    return { _raw: trimmed.substring(0, 500), _pathExists: true };
-  } catch {
+    // Log analytics-related APIs we found (even if not a direct match)
+    const analyticsApis = apiList.filter((a: any) =>
+      ((a.id || "") + (a.name || "")).toLowerCase().match(/analytic|scene|object|counting|occupancy/)
+    );
+    if (analyticsApis.length > 0) {
+      console.log(`[Analytics] Related APIs on ${ipAddress}: ${analyticsApis.map((a: any) => `${a.id}(v${a.version})`).join(", ")}`);
+    }
+
+    return null;
+  } catch (err: any) {
     clearTimeout(timeoutId);
+    console.log(`[Analytics] apidiscovery.cgi on ${ipAddress}: ${err.name === "AbortError" ? "timeout" : err.message}`);
     return null;
   }
 }
 
 /**
  * Probe AXIS Object Analytics (AOA) for configured scenarios.
- * Tries multiple API paths and methods for compatibility across firmware versions.
  *
- * On newer AXIS OS (11.x+), AOA may be a built-in component that doesn't serve
- * the traditional /local/<name>/.api endpoint. In that case, we try:
- * - /axis-cgi/objectanalytics.cgi (CGI-based API)
- * - /axis-cgi/analytics/getConfiguration.cgi
- * - /local/<name>/.apioperator and /.apiviewer (alternate access levels)
+ * Discovery strategy (in order):
+ * 1. VAPIX API Discovery (apidiscovery.cgi) - asks the camera where AOA lives
+ * 2. Standard ACAP /local/ paths (from applications list)
+ * 3. Fallback CGI paths for newer AXIS OS
+ *
+ * Only tries getSupportedVersions first (lightest probe) per path. If that
+ * succeeds, follows up with getConfiguration. This avoids 30+ requests when
+ * all paths return 404.
  *
  * @param acapNames - ACAP package names to try (from applications list)
  * @returns scenarios and the working API path
@@ -626,106 +652,75 @@ async function queryObjectAnalyticsScenarios(
   timeout: number = 8000,
   conn?: CameraConnectionInfo
 ): Promise<{ scenarios: Array<{ name: string; type: string; id?: number; objectClassifications?: string[] }>; apiPath?: string }> {
-  // Build list of paths to try, using actual ACAP names from the app list
+
+  // Step 1: Use VAPIX API Discovery to find the correct path
+  const discoveredPath = await discoverAoaViaApiDiscovery(ipAddress, username, password, timeout, conn);
+
+  // Build list of paths to try
   const pathsToTry: string[] = [];
 
-  // First: try paths based on actual ACAP names discovered from applications/list.cgi
+  // Discovered path goes first
+  if (discoveredPath) {
+    pathsToTry.push(discoveredPath);
+  }
+
+  // ACAP names from applications/list.cgi
   for (const name of acapNames) {
     const lowerName = name.toLowerCase();
-    pathsToTry.push(`/local/${lowerName}/.api`);
-    pathsToTry.push(`/local/${lowerName}/.apioperator`);
-    pathsToTry.push(`/local/${lowerName}/.apiviewer`);
+    if (!pathsToTry.includes(`/local/${lowerName}/.api`)) {
+      pathsToTry.push(`/local/${lowerName}/.api`);
+    }
+    if (!pathsToTry.includes(`/local/${lowerName}/.apioperator`)) {
+      pathsToTry.push(`/local/${lowerName}/.apioperator`);
+    }
   }
 
-  // Then: standard paths as fallback
-  if (!pathsToTry.includes("/local/objectanalytics/.api")) {
-    pathsToTry.push("/local/objectanalytics/.api");
-    pathsToTry.push("/local/objectanalytics/.apioperator");
-    pathsToTry.push("/local/objectanalytics/.apiviewer");
+  // Standard fallback paths
+  const fallbacks = [
+    "/local/objectanalytics/.api",
+    "/local/objectanalytics/.apioperator",
+    "/axis-cgi/objectanalytics.cgi",
+    "/axis-cgi/analyticsscene.cgi",
+  ];
+  for (const fb of fallbacks) {
+    if (!pathsToTry.includes(fb)) pathsToTry.push(fb);
   }
-
-  // Newer AXIS OS: CGI-based analytics endpoints (built-in AOA doesn't use /local/)
-  pathsToTry.push("/axis-cgi/objectanalytics.cgi");
-  pathsToTry.push("/axis-cgi/analytics/getConfiguration.cgi");
-
-  // Methods to try for each path (getSupportedVersions first as lightest probe)
-  const methodsToTry = ["getSupportedVersions", "getConfiguration", "getScenarios"];
 
   console.log(`[Analytics] Probing AOA on ${ipAddress}, trying ${pathsToTry.length} paths...`);
 
+  // For each path, try getSupportedVersions first (lightest). Only try heavier
+  // methods if the path responds at all (not 404).
   for (const path of pathsToTry) {
-    // Try POST JSON-RPC first (standard AOA API)
-    for (const method of methodsToTry) {
-      const json = await tryAoaPost(ipAddress, username, password, path, method, timeout, conn);
-      if (!json) continue;
+    // Quick check: does this path exist at all?
+    const versionCheck = await tryAoaPost(ipAddress, username, password, path, "getSupportedVersions", timeout, conn);
+    if (!versionCheck) continue; // 404 or error - skip remaining methods for this path
 
-      console.log(`[Analytics] AOA ${method} on ${ipAddress} at ${path}: success`);
+    console.log(`[Analytics] AOA API found at ${path} on ${ipAddress}, fetching configuration...`);
 
-      // getSupportedVersions just confirms the API exists, still need getConfiguration
-      if (method === "getSupportedVersions") {
-        console.log(`[Analytics] AOA API found at ${path} via getSupportedVersions, fetching configuration...`);
-        const configJson = await tryAoaPost(ipAddress, username, password, path, "getConfiguration", timeout, conn);
-        if (configJson) {
-          const scenarios = extractAoaScenarios(configJson);
-          if (scenarios.length > 0) {
-            return { scenarios, apiPath: path };
-          }
-          console.log(`[Analytics] AOA getConfiguration at ${path}: no scenarios. Keys: ${JSON.stringify(Object.keys(configJson?.data || {}))}`);
-        }
-        // API exists but getConfiguration didn't return scenarios - still return the path
-        return { scenarios: [], apiPath: path };
-      }
-
-      // getConfiguration or getScenarios - extract scenarios directly
-      const scenarios = extractAoaScenarios(json);
+    // Path exists! Try getConfiguration to get scenarios
+    const configJson = await tryAoaPost(ipAddress, username, password, path, "getConfiguration", timeout, conn);
+    if (configJson) {
+      const scenarios = extractAoaScenarios(configJson);
       if (scenarios.length > 0) {
         return { scenarios, apiPath: path };
       }
-
-      // API responded but no scenarios in response
-      console.log(`[Analytics] AOA ${method} at ${path}: responded but no scenarios. Top-level keys: ${JSON.stringify(Object.keys(json || {}))}. Data keys: ${JSON.stringify(Object.keys(json?.data || {}))}`);
-      // Return the path even without scenarios - the API works, scenarios might come from data polling
-      return { scenarios: [], apiPath: path };
+      console.log(`[Analytics] AOA getConfiguration at ${path}: no scenarios. Data keys: ${JSON.stringify(Object.keys(configJson?.data || {}))}`);
     }
-  }
 
-  // POST paths all failed (404). Try GET discovery on key paths to find where AOA serves content.
-  console.log(`[Analytics] AOA on ${ipAddress}: all POST paths returned 404, trying GET discovery...`);
-  const getDiscoveryPaths = [
-    "/local/objectanalytics/",
-    "/local/objectanalytics/config",
-    "/local/objectanalytics/control.cgi",
-  ];
-  // Also add ACAP-specific GET paths
-  for (const name of acapNames) {
-    const lowerName = name.toLowerCase();
-    if (lowerName !== "objectanalytics") {
-      getDiscoveryPaths.push(`/local/${lowerName}/`);
-    }
-  }
-
-  for (const path of getDiscoveryPaths) {
-    const result = await tryAoaGet(ipAddress, username, password, path, timeout, conn);
-    if (result) {
-      const isRaw = result._pathExists;
-      if (isRaw) {
-        console.log(`[Analytics] AOA GET discovery on ${ipAddress}: ${path} responded (non-JSON, first 200 chars): ${result._raw?.substring(0, 200)}`);
-      } else {
-        console.log(`[Analytics] AOA GET discovery on ${ipAddress}: ${path} returned JSON. Keys: ${JSON.stringify(Object.keys(result))}`);
-        const scenarios = extractAoaScenarios(result);
-        if (scenarios.length > 0) {
-          return { scenarios, apiPath: path };
-        }
-      }
-      // Found content but can't extract scenarios - the ACAP exists but uses unknown API format
-      // Return the path so polling can try it later
-      if (!isRaw) {
-        return { scenarios: [], apiPath: path };
+    // Try getScenarios as alternative
+    const scenariosJson = await tryAoaPost(ipAddress, username, password, path, "getScenarios", timeout, conn);
+    if (scenariosJson) {
+      const scenarios = extractAoaScenarios(scenariosJson);
+      if (scenarios.length > 0) {
+        return { scenarios, apiPath: path };
       }
     }
+
+    // API exists but no scenarios - still return the working path
+    return { scenarios: [], apiPath: path };
   }
 
-  console.log(`[Analytics] AOA on ${ipAddress}: no working API path found (ACAP may be built-in with no HTTP API)`);
+  console.log(`[Analytics] AOA on ${ipAddress}: no working API path found across ${pathsToTry.length} paths`);
   return { scenarios: [] };
 }
 
@@ -831,13 +826,19 @@ export async function probeAnalyticsCapabilities(
     if (hasApp(["peoplecounter", "people counter", "people_counter"])) results.peopleCount = true;
     if (hasApp(["occupancy", "occupancy estimator"])) results.occupancyEstimation = true;
     if (hasApp(["crossline", "cross line", "linecrossing"])) results.lineCrossing = true;
-    if (hasApp(["objectanalytics", "object analytics", "object_analytics", "aoa"])) results.objectAnalytics = true;
+    // Note: objectAnalytics is NOT set from app list alone - we need a working API path
+    // to actually poll data. It gets set below only if the API is reachable.
     if (hasApp(["loitering", "loiteringguard", "loitering_guard"])) results.loiteringGuard = true;
     if (hasApp(["fenceguard", "fence guard", "fence_guard"])) results.fenceGuard = true;
     if (hasApp(["motionguard", "motion guard", "motion_guard", "vmd"])) results.motionGuard = true;
   }
 
-  console.log(`[Analytics] Installed ACAPs on ${ipAddress}: ${results.acapInstalled.join(", ") || "none found (app list empty or unavailable)"}`);
+  const aoaInstalledInAppList = apps.some((a) => {
+    const n = (a.name + " " + a.niceName).toLowerCase();
+    return n.includes("objectanalytics") || n.includes("object analytics") || n.includes("aoa");
+  });
+
+  console.log(`[Analytics] Installed ACAPs on ${ipAddress}: ${results.acapInstalled.join(", ") || "none"}`);
 
   // Extract actual ACAP package names for Object Analytics (used to build correct API URLs)
   const aoaAcapNames: string[] = [];
@@ -847,42 +848,42 @@ export async function probeAnalyticsCapabilities(
     if (nameLower.includes("objectanalytics") || nameLower.includes("object_analytics") ||
         nameLower.includes("aoa") || niceNameLower.includes("object analytics")) {
       aoaAcapNames.push(app.name);
-      console.log(`[Analytics] AOA ACAP on ${ipAddress}: Name="${app.name}", NiceName="${app.niceName}", Status="${app.status}", ID="${app.id || "n/a"}"`);
+      console.log(`[Analytics] AOA ACAP on ${ipAddress}: Name="${app.name}", Status="${app.status}"`);
     }
   }
 
-  // Step 2: Always try AOA directly via POST - this is the most common analytics platform
-  // and the most reliable way to detect it (app list can fail on some firmware)
-  const aoaResult = await queryObjectAnalyticsScenarios(ipAddress, username, password, aoaAcapNames, 8000, conn);
-  if (aoaResult.apiPath) {
-    results.objectAnalytics = true;
-    results.objectAnalyticsApiPath = aoaResult.apiPath;
-  }
-  if (aoaResult.scenarios.length > 0) {
-    results.objectAnalytics = true;
-    results.objectAnalyticsScenarios = aoaResult.scenarios;
-    console.log(`[Analytics] AOA scenarios on ${ipAddress}: ${aoaResult.scenarios.map((s) => {
-      const classes = s.objectClassifications?.length ? ` [${s.objectClassifications.join(",")}]` : "";
-      return `${s.name}(${s.type}${classes})`;
-    }).join(", ")}`);
-
-    // Infer capabilities from scenario types
-    for (const scenario of aoaResult.scenarios) {
-      const type = scenario.type.toLowerCase();
-      if (type.includes("crossline") || type.includes("line_crossing") || type.includes("crossing")) results.lineCrossing = true;
-      if (type.includes("occupancy") || type.includes("object_in_area")) results.occupancyEstimation = true;
-      if (type.includes("people") || type.includes("counting")) results.peopleCount = true;
+  // Step 2: Probe AOA API - uses API Discovery first, then standard paths
+  // Only set objectAnalytics=true if we find a reachable API path
+  if (aoaInstalledInAppList || aoaAcapNames.length > 0) {
+    const aoaResult = await queryObjectAnalyticsScenarios(ipAddress, username, password, aoaAcapNames, 8000, conn);
+    if (aoaResult.apiPath) {
+      results.objectAnalytics = true;
+      results.objectAnalyticsApiPath = aoaResult.apiPath;
+      console.log(`[Analytics] AOA API confirmed on ${ipAddress} at ${aoaResult.apiPath}`);
     }
-  } else {
-    console.log(`[Analytics] AOA on ${ipAddress}: no scenarios found or not available`);
+    if (aoaResult.scenarios.length > 0) {
+      results.objectAnalytics = true;
+      results.objectAnalyticsScenarios = aoaResult.scenarios;
+      console.log(`[Analytics] AOA scenarios on ${ipAddress}: ${aoaResult.scenarios.map((s) => {
+        const classes = s.objectClassifications?.length ? ` [${s.objectClassifications.join(",")}]` : "";
+        return `${s.name}(${s.type}${classes})`;
+      }).join(", ")}`);
+
+      for (const scenario of aoaResult.scenarios) {
+        const type = scenario.type.toLowerCase();
+        if (type.includes("crossline") || type.includes("line_crossing") || type.includes("crossing")) results.lineCrossing = true;
+        if (type.includes("occupancy") || type.includes("object_in_area")) results.occupancyEstimation = true;
+        if (type.includes("people") || type.includes("counting")) results.peopleCount = true;
+      }
+    } else if (!aoaResult.apiPath) {
+      console.log(`[Analytics] AOA on ${ipAddress}: installed but no reachable API (will not poll for analytics data)`);
+    }
   }
 
   // Step 3: Probe remaining ACAP endpoints in parallel for anything not yet detected
-  console.log(`[Analytics] Probing ACAP endpoints on ${ipAddress}...`);
-  const [pcAvail, occAvail, oaAvail, lgAvail, fgAvail, mgAvail] = await Promise.all([
+  const [pcAvail, occAvail, lgAvail, fgAvail, mgAvail] = await Promise.all([
     !results.peopleCount ? probeEndpoint(ipAddress, username, password, "/local/peoplecounter/query.cgi", 5000, conn) : Promise.resolve(true),
     !results.occupancyEstimation ? probeEndpoint(ipAddress, username, password, "/local/occupancy/.api?method=getOccupancy", 5000, conn) : Promise.resolve(true),
-    !results.objectAnalytics ? probeEndpoint(ipAddress, username, password, "/local/objectanalytics/.api", 5000, conn) : Promise.resolve(true),
     !results.loiteringGuard ? probeEndpoint(ipAddress, username, password, "/local/loiteringguard/.api", 5000, conn) : Promise.resolve(true),
     !results.fenceGuard ? probeEndpoint(ipAddress, username, password, "/local/fenceguard/.api", 5000, conn) : Promise.resolve(true),
     !results.motionGuard ? probeEndpoint(ipAddress, username, password, "/local/motionguard/.api", 5000, conn) : Promise.resolve(true),
@@ -890,31 +891,9 @@ export async function probeAnalyticsCapabilities(
 
   if (pcAvail) results.peopleCount = true;
   if (occAvail) results.occupancyEstimation = true;
-  if (oaAvail) results.objectAnalytics = true;
   if (lgAvail) results.loiteringGuard = true;
   if (fgAvail) results.fenceGuard = true;
   if (mgAvail) results.motionGuard = true;
-
-  // If AOA was found by endpoint probe but we haven't queried scenarios yet, do it now
-  if (results.objectAnalytics && results.objectAnalyticsScenarios.length === 0 && !results.objectAnalyticsApiPath) {
-    const lateResult = await queryObjectAnalyticsScenarios(ipAddress, username, password, aoaAcapNames, 8000, conn);
-    if (lateResult.apiPath) {
-      results.objectAnalyticsApiPath = lateResult.apiPath;
-    }
-    if (lateResult.scenarios.length > 0) {
-      results.objectAnalyticsScenarios = lateResult.scenarios;
-      console.log(`[Analytics] AOA scenarios (late probe) on ${ipAddress}: ${lateResult.scenarios.map((s) => {
-        const classes = s.objectClassifications?.length ? ` [${s.objectClassifications.join(",")}]` : "";
-        return `${s.name}(${s.type}${classes})`;
-      }).join(", ")}`);
-      for (const scenario of lateResult.scenarios) {
-        const type = scenario.type.toLowerCase();
-        if (type.includes("crossline") || type.includes("line_crossing") || type.includes("crossing")) results.lineCrossing = true;
-        if (type.includes("occupancy") || type.includes("object_in_area")) results.occupancyEstimation = true;
-        if (type.includes("people") || type.includes("counting")) results.peopleCount = true;
-      }
-    }
-  }
 
   const detected = [
     results.peopleCount && "PeopleCount",
@@ -1028,15 +1007,19 @@ async function pollAllCameraAnalytics(): Promise<void> {
   try {
     const allCameras = await db.select().from(cameras);
 
-    // Filter to cameras with analytics available AND enabled
+    // Filter to cameras with analytics available, enabled, AND a working API path.
+    // For objectAnalytics specifically, require objectAnalyticsApiPath - without it,
+    // the AOA API is unreachable (all paths returned 404) and polling would just spam 404s.
     const analyticsCameras = allCameras.filter((c) => {
       const caps = c.capabilities as CameraCapabilities | null;
       const enabled = caps?.enabledAnalytics;
-      // Require both detected and not explicitly disabled (undefined = legacy allow)
+      const hasWorkingOa = caps?.analytics?.objectAnalytics === true &&
+                           !!caps?.analytics?.objectAnalyticsApiPath &&
+                           enabled?.objectAnalytics !== false;
       return (
         (caps?.analytics?.peopleCount === true && enabled?.peopleCount !== false) ||
         (caps?.analytics?.occupancyEstimation === true && enabled?.occupancyEstimation !== false) ||
-        (caps?.analytics?.objectAnalytics === true && enabled?.objectAnalytics !== false)
+        hasWorkingOa
       );
     });
 
