@@ -12,6 +12,7 @@
 
 import cron from "node-cron";
 import pLimit from "p-limit";
+import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { cameras, type CameraCapabilities } from "@shared/schema";
 import { decryptPassword } from "../encryption";
@@ -588,19 +589,32 @@ async function vapixJsonRpc(
     });
     clearTimeout(timeoutId);
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      // Log non-200 responses for debugging (critical for understanding API availability)
+      console.log(`[Analytics] VAPIX ${path} ${method} on ${ipAddress}: HTTP ${response.status}`);
+      return null;
+    }
 
     const text = await response.text();
     if (!text.trim()) return null;
 
-    const json = JSON.parse(text);
-    if (json.error) {
-      console.log(`[Analytics] ${path} ${method} on ${ipAddress}: error ${JSON.stringify(json.error)}`);
+    try {
+      const json = JSON.parse(text);
+      if (json.error) {
+        console.log(`[Analytics] ${path} ${method} on ${ipAddress}: API error ${JSON.stringify(json.error)}`);
+        return null;
+      }
+      return json;
+    } catch {
+      // Response is not JSON - log first 200 chars for debugging
+      console.log(`[Analytics] ${path} ${method} on ${ipAddress}: non-JSON response: ${text.substring(0, 200)}`);
       return null;
     }
-    return json;
-  } catch {
+  } catch (err: any) {
     clearTimeout(timeoutId);
+    if (err?.name === "AbortError") {
+      console.log(`[Analytics] VAPIX ${path} ${method} on ${ipAddress}: timeout`);
+    }
     return null;
   }
 }
@@ -617,38 +631,38 @@ async function queryAnalyticsMetadataConfig(
   timeout: number = 8000,
   conn?: CameraConnectionInfo
 ): Promise<{ scenarios: Array<{ name: string; type: string; id?: number; objectClassifications?: string[] }>; apiPath: string } | null> {
-  const path = "/axis-cgi/analytics-metadata-config.cgi";
+  // Try multiple path formats - the API ID is "analytics-metadata-config" but
+  // the CGI path may use hyphens or underscores depending on firmware
+  const paths = [
+    "/axis-cgi/analytics-metadata-config.cgi",
+    "/axis-cgi/analytics_metadata_config.cgi",
+  ];
 
-  // Try getSupportedVersions first to check if the CGI exists
-  const versionJson = await vapixJsonRpc(ipAddress, username, password, path, "getSupportedVersions", "1.0", timeout, conn);
-  if (!versionJson) {
-    console.log(`[Analytics] analytics-metadata-config.cgi on ${ipAddress}: not available (getSupportedVersions returned null)`);
-    return null;
-  }
-
-  console.log(`[Analytics] analytics-metadata-config.cgi on ${ipAddress}: API exists (versions: ${JSON.stringify(versionJson?.data?.apiVersions || [])})`);
-
-  // Get the analytics configuration (scenarios)
-  const configJson = await vapixJsonRpc(ipAddress, username, password, path, "getConfiguration", "1.0", timeout, conn);
-  if (configJson) {
-    const scenarios = extractAoaScenarios(configJson);
-    if (scenarios.length > 0) {
-      return { scenarios, apiPath: path };
+  for (const path of paths) {
+    // Try getConfiguration directly - don't gate on getSupportedVersions
+    // because some firmware supports getConfiguration but not getSupportedVersions
+    const configJson = await vapixJsonRpc(ipAddress, username, password, path, "getConfiguration", "1.0", timeout, conn);
+    if (configJson) {
+      const scenarios = extractAoaScenarios(configJson);
+      if (scenarios.length > 0) {
+        console.log(`[Analytics] ${path} on ${ipAddress}: found ${scenarios.length} scenarios`);
+        return { scenarios, apiPath: path };
+      }
+      // API responded but no scenarios extracted - log the response structure
+      console.log(`[Analytics] ${path} on ${ipAddress}: getConfiguration OK but no scenarios. Data keys: ${JSON.stringify(Object.keys(configJson?.data || {}))}`);
+      // Still return success - the API works even if no scenarios configured
+      return { scenarios: [], apiPath: path };
     }
-    console.log(`[Analytics] analytics-metadata-config.cgi on ${ipAddress}: getConfiguration returned no scenarios. Data keys: ${JSON.stringify(Object.keys(configJson?.data || {}))}`);
-  }
 
-  // Try getAnalyticsScenes as alternative method
-  const scenesJson = await vapixJsonRpc(ipAddress, username, password, path, "getAnalyticsScenes", "1.0", timeout, conn);
-  if (scenesJson) {
-    const scenarios = extractAoaScenarios(scenesJson);
-    if (scenarios.length > 0) {
-      return { scenarios, apiPath: path };
+    // Try getSupportedVersions as a lighter existence check
+    const versionJson = await vapixJsonRpc(ipAddress, username, password, path, "getSupportedVersions", "1.0", timeout, conn);
+    if (versionJson) {
+      console.log(`[Analytics] ${path} on ${ipAddress}: API exists (versions: ${JSON.stringify(versionJson?.data?.apiVersions || [])}), but getConfiguration failed`);
+      return { scenarios: [], apiPath: path };
     }
   }
 
-  // API exists but couldn't extract scenarios - still return the path
-  return { scenarios: [], apiPath: path };
+  return null;
 }
 
 /**
@@ -667,14 +681,22 @@ async function queryEvent2Analytics(
 ): Promise<Array<{ eventType: string; value: number; metadata?: Record<string, any> }>> {
   const events: Array<{ eventType: string; value: number; metadata?: Record<string, any> }> = [];
 
-  const json = await vapixJsonRpc(
-    ipAddress, username, password,
+  // Try multiple event endpoint paths - the API may vary by firmware version
+  const eventPaths = [
     "/axis-cgi/event2/getEventInstances.cgi",
-    "getEventInstances", "1.0", timeout, conn
-  );
+    "/axis-cgi/eventinstances.cgi",
+  ];
+
+  let json: any = null;
+  for (const ePath of eventPaths) {
+    json = await vapixJsonRpc(
+      ipAddress, username, password,
+      ePath, "getEventInstances", "1.0", timeout, conn
+    );
+    if (json) break;
+  }
 
   if (!json) {
-    console.log(`[Analytics] Event2 getEventInstances on ${ipAddress}: no response`);
     return events;
   }
 
@@ -1216,6 +1238,42 @@ async function pollAllCameraAnalytics(): Promise<void> {
 }
 
 /**
+ * One-time startup cleanup: clear stale /local/ objectAnalyticsApiPath entries.
+ * These paths were stored during previous broken probes and always return 404,
+ * causing log spam every polling cycle.
+ */
+async function cleanupStaleAnalyticsPaths(): Promise<void> {
+  try {
+    const allCameras = await db.select().from(cameras);
+    let cleaned = 0;
+
+    for (const camera of allCameras) {
+      const caps = camera.capabilities as CameraCapabilities | null;
+      if (!caps?.analytics?.objectAnalyticsApiPath) continue;
+
+      const storedPath = caps.analytics.objectAnalyticsApiPath;
+      // Clear /local/ paths that are known to 404 on all modern cameras
+      if (storedPath.startsWith("/local/")) {
+        const updatedCaps = JSON.parse(JSON.stringify(caps));
+        delete updatedCaps.analytics.objectAnalyticsApiPath;
+        updatedCaps.analytics.objectAnalytics = false;
+
+        await db.update(cameras)
+          .set({ capabilities: updatedCaps })
+          .where(eq(cameras.id, camera.id));
+        cleaned++;
+      }
+    }
+
+    if (cleaned > 0) {
+      console.log(`[Analytics] Startup cleanup: cleared ${cleaned} stale /local/ API paths from DB`);
+    }
+  } catch (err: any) {
+    console.log(`[Analytics] Startup cleanup error: ${err.message}`);
+  }
+}
+
+/**
  * Start the analytics polling service.
  * Polls every 1 minute (configurable via ANALYTICS_POLL_INTERVAL env var).
  */
@@ -1231,10 +1289,13 @@ export function startAnalyticsPolling() {
   const intervalMinutes = parseInt(process.env.ANALYTICS_POLL_INTERVAL || "1", 10);
   console.log(`[Analytics] Initializing analytics polling service (every ${intervalMinutes} min)...`);
 
-  // Initial poll after startup delay
-  setTimeout(() => {
-    pollAllCameraAnalytics();
-  }, 15000); // 15s after startup (after camera monitor's 5s delay)
+  // Clean stale paths before first poll to prevent 404 spam
+  cleanupStaleAnalyticsPaths().then(() => {
+    // Initial poll after startup delay
+    setTimeout(() => {
+      pollAllCameraAnalytics();
+    }, 15000); // 15s after startup (after camera monitor's 5s delay)
+  });
 
   // Schedule regular polling
   cron.schedule(`*/${intervalMinutes} * * * *`, () => {
