@@ -250,23 +250,25 @@ async function queryObjectAnalyticsData(
   timeout: number = 8000,
   conn?: CameraConnectionInfo
 ): Promise<Array<{ eventType: string; value: number; metadata?: Record<string, any> }>> {
-  // Build paths to try: stored path first, then standard paths
-  const pathsToTry: string[] = [];
-  if (storedApiPath) {
-    pathsToTry.push(storedApiPath);
-  }
-  if (!pathsToTry.includes("/local/objectanalytics/.api")) {
-    pathsToTry.push("/local/objectanalytics/.api");
-  }
-  if (!pathsToTry.includes("/local/objectanalytics/.apioperator")) {
-    pathsToTry.push("/local/objectanalytics/.apioperator");
+  if (!storedApiPath) return [];
+
+  // Modern AXIS OS: use Event2 API to get analytics data from event instances
+  if (storedApiPath === "event2") {
+    return queryEvent2Analytics(ipAddress, username, password, timeout, conn);
   }
 
-  for (const path of pathsToTry) {
-    const json = await tryAoaPost(ipAddress, username, password, path, "getAccumulatedCounts", timeout, conn);
-    if (json) {
-      return parseAoaAccumulatedCounts(json);
-    }
+  // analytics-metadata-config.cgi path - try getAccumulatedCounts via the ACAP API
+  // But also fall back to Event2 since metadata-config is for configuration, not data
+  if (storedApiPath === "/axis-cgi/analytics-metadata-config.cgi") {
+    // The metadata config API is for configuration, not live data.
+    // Live data comes from Event2.
+    return queryEvent2Analytics(ipAddress, username, password, timeout, conn);
+  }
+
+  // Legacy ACAP /local/ path - use getAccumulatedCounts
+  const json = await tryAoaPost(ipAddress, username, password, storedApiPath, "getAccumulatedCounts", timeout, conn);
+  if (json) {
+    return parseAoaAccumulatedCounts(json);
   }
 
   return [];
@@ -558,88 +560,201 @@ async function tryAoaPost(
 }
 
 /**
- * Use VAPIX API Discovery (apidiscovery.cgi) to find where the Object Analytics
- * API is actually served. Available on AXIS OS 9.10+.
- *
- * Returns the discovered API path, or null if not found.
+ * Generic helper: POST a JSON-RPC request to a VAPIX CGI endpoint.
+ * Returns parsed JSON on success, null on failure.
  */
-async function discoverAoaViaApiDiscovery(
+async function vapixJsonRpc(
   ipAddress: string,
   username: string,
   password: string,
+  path: string,
+  method: string,
+  apiVersion: string = "1.0",
   timeout: number = 8000,
   conn?: CameraConnectionInfo
-): Promise<string | null> {
+): Promise<any | null> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   const dispatcher = getCameraDispatcher(conn);
 
   try {
-    const url = buildCameraUrl(ipAddress, "/axis-cgi/apidiscovery.cgi", conn);
+    const url = buildCameraUrl(ipAddress, path, conn);
     const response = await authFetch(url, username, password, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ apiVersion: "1.0", method: "getApiList" }),
+      body: JSON.stringify({ apiVersion, method }),
       signal: controller.signal,
       dispatcher,
     });
     clearTimeout(timeoutId);
 
-    if (!response.ok) {
-      console.log(`[Analytics] apidiscovery.cgi on ${ipAddress}: HTTP ${response.status}`);
-      return null;
-    }
+    if (!response.ok) return null;
 
-    const json = await response.json();
+    const text = await response.text();
+    if (!text.trim()) return null;
+
+    const json = JSON.parse(text);
     if (json.error) {
-      console.log(`[Analytics] apidiscovery.cgi on ${ipAddress}: API error: ${JSON.stringify(json.error)}`);
+      console.log(`[Analytics] ${path} ${method} on ${ipAddress}: error ${JSON.stringify(json.error)}`);
       return null;
     }
+    return json;
+  } catch {
+    clearTimeout(timeoutId);
+    return null;
+  }
+}
 
-    const apiList = json?.data?.apiList || [];
-    console.log(`[Analytics] apidiscovery.cgi on ${ipAddress}: found ${apiList.length} APIs`);
+/**
+ * Query VAPIX analytics-metadata-config.cgi for AOA scene configuration.
+ * This is the modern AXIS OS (11.x+) way to get analytics scenarios.
+ * The ACAP doesn't serve /local/ endpoints; configuration is via this CGI.
+ */
+async function queryAnalyticsMetadataConfig(
+  ipAddress: string,
+  username: string,
+  password: string,
+  timeout: number = 8000,
+  conn?: CameraConnectionInfo
+): Promise<{ scenarios: Array<{ name: string; type: string; id?: number; objectClassifications?: string[] }>; apiPath: string } | null> {
+  const path = "/axis-cgi/analytics-metadata-config.cgi";
 
-    // Look for Object Analytics or analytics-related APIs
-    for (const api of apiList) {
-      const id = (api.id || "").toLowerCase();
-      const name = (api.name || "").toLowerCase();
-      if (id.includes("objectanalytics") || id.includes("analyticsscene") ||
-          name.includes("object analytics") || name.includes("analytics scene")) {
-        const path = api.path || api.url;
-        if (path) {
-          console.log(`[Analytics] API Discovery found AOA on ${ipAddress}: id="${api.id}", version="${api.version}", path="${path}"`);
-          return path;
+  // Try getSupportedVersions first
+  const versionJson = await vapixJsonRpc(ipAddress, username, password, path, "getSupportedVersions", "1.0", timeout, conn);
+  if (!versionJson) return null;
+
+  console.log(`[Analytics] analytics-metadata-config.cgi on ${ipAddress}: API exists (versions: ${JSON.stringify(versionJson?.data?.apiVersions || [])})`);
+
+  // Get the analytics configuration (scenarios)
+  const configJson = await vapixJsonRpc(ipAddress, username, password, path, "getConfiguration", "1.0", timeout, conn);
+  if (configJson) {
+    const scenarios = extractAoaScenarios(configJson);
+    if (scenarios.length > 0) {
+      return { scenarios, apiPath: path };
+    }
+    console.log(`[Analytics] analytics-metadata-config.cgi on ${ipAddress}: getConfiguration returned no scenarios. Data keys: ${JSON.stringify(Object.keys(configJson?.data || {}))}`);
+  }
+
+  // Try getAnalyticsScenes as alternative method
+  const scenesJson = await vapixJsonRpc(ipAddress, username, password, path, "getAnalyticsScenes", "1.0", timeout, conn);
+  if (scenesJson) {
+    const scenarios = extractAoaScenarios(scenesJson);
+    if (scenarios.length > 0) {
+      return { scenarios, apiPath: path };
+    }
+  }
+
+  // API exists but couldn't extract scenarios - still return the path
+  return { scenarios: [], apiPath: path };
+}
+
+/**
+ * Query VAPIX Event2 API for current analytics event instances.
+ * On modern AXIS OS, Object Analytics publishes counting/occupancy data
+ * as events. This endpoint returns the current state of all event instances.
+ *
+ * Returns analytics events extracted from the event instances.
+ */
+async function queryEvent2Analytics(
+  ipAddress: string,
+  username: string,
+  password: string,
+  timeout: number = 8000,
+  conn?: CameraConnectionInfo
+): Promise<Array<{ eventType: string; value: number; metadata?: Record<string, any> }>> {
+  const events: Array<{ eventType: string; value: number; metadata?: Record<string, any> }> = [];
+
+  const json = await vapixJsonRpc(
+    ipAddress, username, password,
+    "/axis-cgi/event2/getEventInstances.cgi",
+    "getEventInstances", "1.0", timeout, conn
+  );
+
+  if (!json) return events;
+
+  // Parse event instances - look for analytics-related events
+  const instances = json?.data?.eventInstances || json?.data?.instances || [];
+
+  for (const instance of instances) {
+    const topic = (instance.topic || instance.declaration?.topic || "").toLowerCase();
+    const data = instance.data || instance.properties || {};
+
+    // CrossLine counting events
+    if (topic.includes("crossline") || topic.includes("crosslinecounting") || topic.includes("objectanalytics")) {
+      const inCount = parseInt(data.in || data.enters || data.total_in || "0") || 0;
+      const outCount = parseInt(data.out || data.exits || data.total_out || "0") || 0;
+      const total = parseInt(data.total || "0") || 0;
+
+      if (inCount > 0 || outCount > 0 || total > 0) {
+        if (inCount > 0) events.push({ eventType: "people_in", value: inCount, metadata: { source: "event2", topic } });
+        if (outCount > 0) events.push({ eventType: "people_out", value: outCount, metadata: { source: "event2", topic } });
+        if (total > 0 && inCount === 0 && outCount === 0) {
+          events.push({ eventType: "line_crossing", value: total, metadata: { source: "event2", topic } });
         }
       }
     }
 
-    // Log analytics-related APIs we found (even if not a direct match)
-    const analyticsApis = apiList.filter((a: any) =>
-      ((a.id || "") + (a.name || "")).toLowerCase().match(/analytic|scene|object|counting|occupancy/)
-    );
-    if (analyticsApis.length > 0) {
-      console.log(`[Analytics] Related APIs on ${ipAddress}: ${analyticsApis.map((a: any) => `${a.id}(v${a.version})`).join(", ")}`);
+    // Occupancy events
+    if (topic.includes("occupancy") || topic.includes("object_in_area") || topic.includes("objectinarea")) {
+      const count = parseInt(data.currentOccupancy || data.occupancy || data.count || data.objects || "0") || 0;
+      if (count >= 0) {
+        events.push({ eventType: "occupancy", value: count, metadata: { source: "event2", topic } });
+      }
     }
-
-    return null;
-  } catch (err: any) {
-    clearTimeout(timeoutId);
-    console.log(`[Analytics] apidiscovery.cgi on ${ipAddress}: ${err.name === "AbortError" ? "timeout" : err.message}`);
-    return null;
   }
+
+  if (events.length > 0) {
+    console.log(`[Analytics] Event2 on ${ipAddress}: found ${events.length} analytics events from ${instances.length} instances`);
+  }
+
+  return events;
+}
+
+/**
+ * Use VAPIX API Discovery (apidiscovery.cgi) to find available analytics APIs.
+ * Returns which APIs are available: analytics-metadata-config, event2, /local/ ACAP paths.
+ */
+async function discoverAnalyticsApis(
+  ipAddress: string,
+  username: string,
+  password: string,
+  timeout: number = 8000,
+  conn?: CameraConnectionInfo
+): Promise<{ hasMetadataConfig: boolean; hasEvent2: boolean; aoaLocalPath?: string }> {
+  const result = { hasMetadataConfig: false, hasEvent2: false, aoaLocalPath: undefined as string | undefined };
+
+  const json = await vapixJsonRpc(
+    ipAddress, username, password,
+    "/axis-cgi/apidiscovery.cgi",
+    "getApiList", "1.0", timeout, conn
+  );
+
+  if (!json) return result;
+
+  const apiList = json?.data?.apiList || [];
+  console.log(`[Analytics] apidiscovery.cgi on ${ipAddress}: ${apiList.length} APIs`);
+
+  for (const api of apiList) {
+    const id = (api.id || "").toLowerCase();
+    if (id === "analytics-metadata-config") result.hasMetadataConfig = true;
+    if (id === "event2") result.hasEvent2 = true;
+    if (id.includes("objectanalytics")) {
+      const path = api.path || api.url;
+      if (path) result.aoaLocalPath = path;
+    }
+  }
+
+  return result;
 }
 
 /**
  * Probe AXIS Object Analytics (AOA) for configured scenarios.
  *
  * Discovery strategy (in order):
- * 1. VAPIX API Discovery (apidiscovery.cgi) - asks the camera where AOA lives
- * 2. Standard ACAP /local/ paths (from applications list)
- * 3. Fallback CGI paths for newer AXIS OS
- *
- * Only tries getSupportedVersions first (lightest probe) per path. If that
- * succeeds, follows up with getConfiguration. This avoids 30+ requests when
- * all paths return 404.
+ * 1. VAPIX API Discovery to find available APIs
+ * 2. analytics-metadata-config.cgi (modern AXIS OS 11.x+ - the correct way)
+ * 3. Event2 API probe (for live analytics data)
+ * 4. Legacy /local/ ACAP paths (older firmware)
  *
  * @param acapNames - ACAP package names to try (from applications list)
  * @returns scenarios and the working API path
@@ -653,74 +768,75 @@ async function queryObjectAnalyticsScenarios(
   conn?: CameraConnectionInfo
 ): Promise<{ scenarios: Array<{ name: string; type: string; id?: number; objectClassifications?: string[] }>; apiPath?: string }> {
 
-  // Step 1: Use VAPIX API Discovery to find the correct path
-  const discoveredPath = await discoverAoaViaApiDiscovery(ipAddress, username, password, timeout, conn);
+  // Step 1: VAPIX API Discovery
+  const apis = await discoverAnalyticsApis(ipAddress, username, password, timeout, conn);
 
-  // Build list of paths to try
-  const pathsToTry: string[] = [];
-
-  // Discovered path goes first
-  if (discoveredPath) {
-    pathsToTry.push(discoveredPath);
+  // Step 2: Try analytics-metadata-config.cgi first (modern AXIS OS)
+  if (apis.hasMetadataConfig) {
+    const result = await queryAnalyticsMetadataConfig(ipAddress, username, password, timeout, conn);
+    if (result) {
+      return result;
+    }
   }
 
-  // ACAP names from applications/list.cgi
+  // Step 3: Try Event2 API to confirm analytics events are available
+  // Even without scenarios, if event2 has analytics data, we can poll it
+  if (apis.hasEvent2) {
+    const eventData = await queryEvent2Analytics(ipAddress, username, password, timeout, conn);
+    if (eventData.length > 0) {
+      console.log(`[Analytics] Event2 on ${ipAddress}: analytics data available via events API`);
+      // Return event2 as the API path - polling will use this
+      return { scenarios: [], apiPath: "event2" };
+    }
+  }
+
+  // Step 4: Try discovered AOA local path from API discovery
+  if (apis.aoaLocalPath) {
+    const versionCheck = await tryAoaPost(ipAddress, username, password, apis.aoaLocalPath, "getSupportedVersions", timeout, conn);
+    if (versionCheck) {
+      console.log(`[Analytics] AOA found at discovered path ${apis.aoaLocalPath} on ${ipAddress}`);
+      const configJson = await tryAoaPost(ipAddress, username, password, apis.aoaLocalPath, "getConfiguration", timeout, conn);
+      if (configJson) {
+        const scenarios = extractAoaScenarios(configJson);
+        return { scenarios, apiPath: apis.aoaLocalPath };
+      }
+      return { scenarios: [], apiPath: apis.aoaLocalPath };
+    }
+  }
+
+  // Step 5: Legacy /local/ ACAP paths
+  const legacyPaths: string[] = [];
   for (const name of acapNames) {
     const lowerName = name.toLowerCase();
-    if (!pathsToTry.includes(`/local/${lowerName}/.api`)) {
-      pathsToTry.push(`/local/${lowerName}/.api`);
-    }
-    if (!pathsToTry.includes(`/local/${lowerName}/.apioperator`)) {
-      pathsToTry.push(`/local/${lowerName}/.apioperator`);
-    }
+    legacyPaths.push(`/local/${lowerName}/.api`);
+    legacyPaths.push(`/local/${lowerName}/.apioperator`);
+  }
+  if (!legacyPaths.includes("/local/objectanalytics/.api")) {
+    legacyPaths.push("/local/objectanalytics/.api");
+    legacyPaths.push("/local/objectanalytics/.apioperator");
   }
 
-  // Standard fallback paths
-  const fallbacks = [
-    "/local/objectanalytics/.api",
-    "/local/objectanalytics/.apioperator",
-    "/axis-cgi/objectanalytics.cgi",
-    "/axis-cgi/analyticsscene.cgi",
-  ];
-  for (const fb of fallbacks) {
-    if (!pathsToTry.includes(fb)) pathsToTry.push(fb);
-  }
-
-  console.log(`[Analytics] Probing AOA on ${ipAddress}, trying ${pathsToTry.length} paths...`);
-
-  // For each path, try getSupportedVersions first (lightest). Only try heavier
-  // methods if the path responds at all (not 404).
-  for (const path of pathsToTry) {
-    // Quick check: does this path exist at all?
+  for (const path of legacyPaths) {
     const versionCheck = await tryAoaPost(ipAddress, username, password, path, "getSupportedVersions", timeout, conn);
-    if (!versionCheck) continue; // 404 or error - skip remaining methods for this path
+    if (!versionCheck) continue;
 
-    console.log(`[Analytics] AOA API found at ${path} on ${ipAddress}, fetching configuration...`);
-
-    // Path exists! Try getConfiguration to get scenarios
+    console.log(`[Analytics] AOA found at legacy path ${path} on ${ipAddress}`);
     const configJson = await tryAoaPost(ipAddress, username, password, path, "getConfiguration", timeout, conn);
     if (configJson) {
       const scenarios = extractAoaScenarios(configJson);
-      if (scenarios.length > 0) {
-        return { scenarios, apiPath: path };
-      }
-      console.log(`[Analytics] AOA getConfiguration at ${path}: no scenarios. Data keys: ${JSON.stringify(Object.keys(configJson?.data || {}))}`);
+      return { scenarios, apiPath: path };
     }
-
-    // Try getScenarios as alternative
-    const scenariosJson = await tryAoaPost(ipAddress, username, password, path, "getScenarios", timeout, conn);
-    if (scenariosJson) {
-      const scenarios = extractAoaScenarios(scenariosJson);
-      if (scenarios.length > 0) {
-        return { scenarios, apiPath: path };
-      }
-    }
-
-    // API exists but no scenarios - still return the working path
     return { scenarios: [], apiPath: path };
   }
 
-  console.log(`[Analytics] AOA on ${ipAddress}: no working API path found across ${pathsToTry.length} paths`);
+  // If we have event2 available but no data YET, still mark it as the path
+  // (analytics events may not have fired yet but will during normal operation)
+  if (apis.hasEvent2) {
+    console.log(`[Analytics] AOA on ${ipAddress}: no ACAP API, but Event2 available - will poll via events`);
+    return { scenarios: [], apiPath: "event2" };
+  }
+
+  console.log(`[Analytics] AOA on ${ipAddress}: no working analytics API found`);
   return { scenarios: [] };
 }
 
