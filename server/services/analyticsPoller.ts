@@ -27,6 +27,11 @@ const analyticsLimit = pLimit(ANALYTICS_CONCURRENCY);
 // Track which cameras have already had their Event2 topics logged (avoid per-poll log spam)
 const event2LoggedCameras = new Set<string>();
 
+// Track cameras where getAccumulatedCounts failed — suppress repeated error logs.
+// Cleared on re-probe or after 1 hour.
+const aoaCountsFailedCache = new Map<string, number>(); // ip → timestamp of first failure
+const AOA_FAILURE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
 interface PeopleCountData {
   in: number;
   out: number;
@@ -291,47 +296,43 @@ async function queryObjectAnalyticsData(
   }
 
   // ACAP local path (control.cgi or legacy .api) - use getAccumulatedCounts
-  // The API requires a scenarioID parameter - query each scenario individually
+  // The AOA API expects { channel: 0 } and returns ALL scenario counts at once.
   const allEvents: Array<{ eventType: string; value: number; metadata?: Record<string, any> }> = [];
 
-  // Check if any stored scenarios have IDs
-  let scenariosWithIds = (scenarios || []).filter(s => s.id !== undefined && s.id !== null);
+  // Check failure cache — if this camera's getAccumulatedCounts has been failing,
+  // skip directly to Event2/SOAP fallback to avoid log spam.
+  const failedAt = aoaCountsFailedCache.get(ipAddress);
+  const skipAcap = failedAt && (Date.now() - failedAt) < AOA_FAILURE_CACHE_TTL;
 
-  // If stored scenarios don't have IDs, fetch fresh config to get them
-  if (scenariosWithIds.length === 0 && storedApiPath.startsWith("/local/")) {
-    const configJson = await tryAoaPost(ipAddress, username, password, storedApiPath, "getConfiguration", timeout, conn);
-    if (configJson) {
-      const freshScenarios = extractAoaScenarios(configJson);
-      if (freshScenarios.length > 0) {
-        scenariosWithIds = freshScenarios.filter(s => s.id !== undefined && s.id !== null);
-        if (scenariosWithIds.length > 0) {
-          console.log(`[Analytics] AOA on ${ipAddress}: refreshed ${scenariosWithIds.length} scenario(s) with IDs from getConfiguration`);
-        }
-      }
+  if (!skipAcap) {
+    // Try getAccumulatedCounts with channel parameter (returns all scenarios)
+    const json = await tryAoaPost(
+      ipAddress, username, password, storedApiPath,
+      "getAccumulatedCounts", timeout, conn,
+      { channel: 0 }
+    );
+    if (json) {
+      aoaCountsFailedCache.delete(ipAddress); // Clear failure cache on success
+      const parsed = parseAoaAccumulatedCounts(json);
+      allEvents.push(...parsed);
     }
-  }
 
-  if (scenariosWithIds.length > 0) {
-    for (const scenario of scenariosWithIds) {
-      const json = await tryAoaPost(
+    // If channel:0 didn't work, try without params (some firmware returns all channels)
+    if (allEvents.length === 0) {
+      const jsonNoParams = await tryAoaPost(
         ipAddress, username, password, storedApiPath,
-        "getAccumulatedCounts", timeout, conn,
-        { scenarioID: scenario.id }
+        "getAccumulatedCounts", timeout, conn
       );
-      if (json) {
-        const parsed = parseAoaAccumulatedCounts(json, scenario);
-        for (const evt of parsed) {
-          if (!evt.metadata?.scenario) {
-            evt.metadata = { ...evt.metadata, scenario: scenario.name, source: "objectanalytics" };
-          }
-          allEvents.push(evt);
-        }
+      if (jsonNoParams) {
+        aoaCountsFailedCache.delete(ipAddress);
+        const parsed = parseAoaAccumulatedCounts(jsonNoParams);
+        allEvents.push(...parsed);
+      } else if (!failedAt) {
+        // Both attempts failed — cache the failure to suppress future log spam
+        aoaCountsFailedCache.set(ipAddress, Date.now());
+        console.log(`[Analytics] AOA getAccumulatedCounts failed on ${ipAddress}, suppressing retries for 1h (will use Event2/SOAP fallback)`);
       }
     }
-  } else {
-    // No scenarios with IDs available — getAccumulatedCounts requires scenarioID,
-    // so skip the call entirely to avoid "Could not unpack the scenario id" errors.
-    // Fall through to Event2/SOAP fallback below.
   }
 
   // If ACAP path yielded no events, try Event2 as fallback
@@ -1194,6 +1195,10 @@ export async function probeAnalyticsCapabilities(
     acapInstalled: [],
     objectAnalyticsScenarios: [],
   };
+
+  // Clear failure caches so a re-probe can retry getAccumulatedCounts
+  aoaCountsFailedCache.delete(ipAddress);
+  event2LoggedCameras.delete(ipAddress);
 
   console.log(`[Analytics] Starting probe for ${ipAddress}...`);
 
