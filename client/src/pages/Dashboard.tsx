@@ -626,16 +626,16 @@ Cameras matching filters: ${filteredCameras.length}
             accentColor="blue"
           />
           <MetricCard
-            title="People In Today"
+            title="Total Entering"
             value={summary.totalPeopleIn}
-            subtitle="Total entries across all cameras"
+            subtitle="Cumulative entries (people + vehicles)"
             icon={ArrowUpDown}
             accentColor="green"
           />
           <MetricCard
-            title="People Out Today"
+            title="Total Exiting"
             value={summary.totalPeopleOut}
-            subtitle="Total exits across all cameras"
+            subtitle="Cumulative exits (people + vehicles)"
             icon={ArrowUpDown}
             accentColor="amber"
           />

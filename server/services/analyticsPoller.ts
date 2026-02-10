@@ -212,11 +212,27 @@ function parseAoaAccumulatedCounts(
       if (scenario.out !== undefined) scenarioOut += parseInt(scenario.out) || 0;
 
       // Format C: AXIS getAccumulatedCounts flat response
-      // { total: N, human: N, car: M, ... } — no in/out, use scenario name for direction
+      // { total: N, totalHuman: N, totalCar: M, totalBus: B, totalTruck: T, totalBike: K, totalOtherVehicle: O }
+      // Use scenario name for direction (entering vs exiting)
+      const vehicleBreakdown: Record<string, number> = {};
       if (scenarioIn === 0 && scenarioOut === 0 && scenario.total !== undefined) {
         const total = parseInt(scenario.total) || 0;
-        const humanCount = parseInt(scenario.human || "0") || 0;
-        const count = humanCount || total;
+        const humanCount = parseInt(scenario.totalHuman || scenario.human || "0") || 0;
+        const carCount = parseInt(scenario.totalCar || "0") || 0;
+        const busCount = parseInt(scenario.totalBus || "0") || 0;
+        const truckCount = parseInt(scenario.totalTruck || "0") || 0;
+        const bikeCount = parseInt(scenario.totalBike || "0") || 0;
+        const otherVehicleCount = parseInt(scenario.totalOtherVehicle || "0") || 0;
+
+        // Store vehicle breakdown
+        if (humanCount > 0) vehicleBreakdown.human = humanCount;
+        if (carCount > 0) vehicleBreakdown.car = carCount;
+        if (busCount > 0) vehicleBreakdown.bus = busCount;
+        if (truckCount > 0) vehicleBreakdown.truck = truckCount;
+        if (bikeCount > 0) vehicleBreakdown.bike = bikeCount;
+        if (otherVehicleCount > 0) vehicleBreakdown.otherVehicle = otherVehicleCount;
+
+        const count = total;
         const nameLower = name.toLowerCase();
         if (nameLower.includes("enter") || nameLower.includes("in")) {
           scenarioIn = count;
@@ -228,18 +244,22 @@ function parseAoaAccumulatedCounts(
         }
       }
 
+      const categoryMeta = Object.keys(vehicleBreakdown).length > 0
+        ? { ...vehicleBreakdown }
+        : {};
+
       if (scenarioIn > 0) {
         events.push({
           eventType: "people_in",
           value: scenarioIn,
-          metadata: { scenario: name, source: "objectanalytics" },
+          metadata: { scenario: name, source: "objectanalytics", ...categoryMeta },
         });
       }
       if (scenarioOut > 0) {
         events.push({
           eventType: "people_out",
           value: scenarioOut,
-          metadata: { scenario: name, source: "objectanalytics" },
+          metadata: { scenario: name, source: "objectanalytics", ...categoryMeta },
         });
       }
       const totalCrossings = scenarioIn + scenarioOut;
@@ -247,7 +267,7 @@ function parseAoaAccumulatedCounts(
         events.push({
           eventType: "line_crossing",
           value: totalCrossings,
-          metadata: { scenario: name, source: "objectanalytics", in: scenarioIn, out: scenarioOut },
+          metadata: { scenario: name, source: "objectanalytics", in: scenarioIn, out: scenarioOut, ...categoryMeta },
         });
       }
     }

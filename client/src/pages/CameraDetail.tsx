@@ -6,12 +6,14 @@ import UptimeChart from "@/components/UptimeChart";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BarChart3, Users, ArrowUpDown, GitBranchPlus } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { BarChart3, Users, ArrowDownToLine, ArrowUpFromLine, GitBranchPlus, Car, Bike, Bus, Truck } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import type { Camera, UptimeEvent } from "@shared/schema";
 import type { CameraStatus } from "@/components/StatusIndicator";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 
 interface UptimeResponse {
   percentage: number;
@@ -21,6 +23,67 @@ interface UptimeResponse {
 interface EventsResponse {
   events: UptimeEvent[];
   priorEvent: UptimeEvent | null;
+}
+
+interface AnalyticsEventWithMeta {
+  eventType: string;
+  value: number;
+  timestamp: string;
+  metadata?: Record<string, any>;
+}
+
+interface AnalyticsResponse {
+  latest: AnalyticsEventWithMeta | null;
+  events: AnalyticsEventWithMeta[];
+}
+
+// Vehicle breakdown component for displaying category counts
+function VehicleBreakdown({ metadata }: { metadata?: Record<string, any> }) {
+  if (!metadata) return null;
+
+  const categories = [
+    { key: "human", label: "People", icon: Users, color: "text-blue-600" },
+    { key: "car", label: "Cars", icon: Car, color: "text-slate-600" },
+    { key: "truck", label: "Trucks", icon: Truck, color: "text-orange-600" },
+    { key: "bus", label: "Buses", icon: Bus, color: "text-yellow-600" },
+    { key: "bike", label: "Bikes", icon: Bike, color: "text-green-600" },
+    { key: "otherVehicle", label: "Other", icon: Car, color: "text-gray-500" },
+  ];
+
+  const activeCategories = categories.filter(c => metadata[c.key] && metadata[c.key] > 0);
+  if (activeCategories.length === 0) return null;
+
+  return (
+    <div className="mt-2 pt-2 border-t border-dashed">
+      <div className="flex flex-wrap gap-x-3 gap-y-1 justify-center">
+        {activeCategories.map(({ key, label, icon: Icon, color }) => (
+          <div key={key} className="flex items-center gap-1 text-xs">
+            <Icon className={`h-3 w-3 ${color}`} />
+            <span className={`font-medium ${color}`}>{metadata[key].toLocaleString()}</span>
+            <span className="text-muted-foreground">{label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const ANALYTICS_VISIBILITY_KEY = "analytics-card-visibility";
+
+type AnalyticsCardKey = "occupancy" | "entering" | "exiting" | "lineCrossing";
+
+function getDefaultVisibility(): Record<AnalyticsCardKey, boolean> {
+  return { occupancy: true, entering: true, exiting: true, lineCrossing: true };
+}
+
+function loadVisibility(): Record<AnalyticsCardKey, boolean> {
+  try {
+    const stored = localStorage.getItem(ANALYTICS_VISIBILITY_KEY);
+    if (stored) {
+      return { ...getDefaultVisibility(), ...JSON.parse(stored) };
+    }
+  } catch {}
+  return getDefaultVisibility();
 }
 
 export default function CameraDetail() {
@@ -57,10 +120,18 @@ export default function CameraDetail() {
     (camera.capabilities as any)?.enabledAnalytics &&
     Object.values((camera.capabilities as any).enabledAnalytics).some(Boolean);
 
-  const { data: analyticsData } = useQuery<{
-    latest: { eventType: string; value: number; timestamp: string } | null;
-    events: Array<{ eventType: string; value: number; timestamp: string }>;
-  }>({
+  // Analytics card visibility toggles
+  const [cardVisibility, setCardVisibility] = useState<Record<AnalyticsCardKey, boolean>>(loadVisibility);
+
+  const toggleCard = useCallback((key: AnalyticsCardKey) => {
+    setCardVisibility(prev => {
+      const next = { ...prev, [key]: !prev[key] };
+      localStorage.setItem(ANALYTICS_VISIBILITY_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const { data: analyticsData } = useQuery<AnalyticsResponse>({
     queryKey: ["/api/cameras", cameraId, "analytics"],
     queryFn: async () => {
       const res = await fetch(`/api/cameras/${cameraId}/analytics?days=1`, { credentials: "include" });
@@ -72,9 +143,7 @@ export default function CameraDetail() {
   });
 
   // Also fetch people_in and people_out
-  const { data: peopleInData } = useQuery<{
-    latest: { eventType: string; value: number; timestamp: string } | null;
-  }>({
+  const { data: peopleInData } = useQuery<AnalyticsResponse>({
     queryKey: ["/api/cameras", cameraId, "analytics-in"],
     queryFn: async () => {
       const res = await fetch(`/api/cameras/${cameraId}/analytics?eventType=people_in&days=1`, { credentials: "include" });
@@ -85,9 +154,7 @@ export default function CameraDetail() {
     refetchInterval: 15000,
   });
 
-  const { data: peopleOutData } = useQuery<{
-    latest: { eventType: string; value: number; timestamp: string } | null;
-  }>({
+  const { data: peopleOutData } = useQuery<AnalyticsResponse>({
     queryKey: ["/api/cameras", cameraId, "analytics-out"],
     queryFn: async () => {
       const res = await fetch(`/api/cameras/${cameraId}/analytics?eventType=people_out&days=1`, { credentials: "include" });
@@ -98,9 +165,7 @@ export default function CameraDetail() {
     refetchInterval: 15000,
   });
 
-  const { data: lineCrossingData } = useQuery<{
-    latest: { eventType: string; value: number; timestamp: string } | null;
-  }>({
+  const { data: lineCrossingData } = useQuery<AnalyticsResponse>({
     queryKey: ["/api/cameras", cameraId, "analytics-lc"],
     queryFn: async () => {
       const res = await fetch(`/api/cameras/${cameraId}/analytics?eventType=line_crossing&days=1`, { credentials: "include" });
@@ -470,67 +535,132 @@ export default function CameraDetail() {
       {hasEnabledAnalytics && (analyticsData?.latest || peopleInData?.latest || peopleOutData?.latest || lineCrossingData?.latest) && (
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <BarChart3 className="h-5 w-5" />
-              Live Analytics
-            </CardTitle>
-            <CardDescription>Real-time analytics data from this camera (last 24h)</CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <BarChart3 className="h-5 w-5" />
+                  Live Analytics
+                </CardTitle>
+                <CardDescription>Real-time analytics data from this camera (last 24h)</CardDescription>
+              </div>
+              {/* Toggle switches for card visibility */}
+              <div className="flex flex-wrap items-center gap-3">
+                {analyticsData?.latest && (
+                  <div className="flex items-center gap-1.5">
+                    <Switch id="toggle-occupancy" checked={cardVisibility.occupancy} onCheckedChange={() => toggleCard("occupancy")} className="scale-75" />
+                    <Label htmlFor="toggle-occupancy" className="text-xs text-muted-foreground cursor-pointer">Occupancy</Label>
+                  </div>
+                )}
+                {peopleInData?.latest && (
+                  <div className="flex items-center gap-1.5">
+                    <Switch id="toggle-entering" checked={cardVisibility.entering} onCheckedChange={() => toggleCard("entering")} className="scale-75" />
+                    <Label htmlFor="toggle-entering" className="text-xs text-muted-foreground cursor-pointer">Entering</Label>
+                  </div>
+                )}
+                {peopleOutData?.latest && (
+                  <div className="flex items-center gap-1.5">
+                    <Switch id="toggle-exiting" checked={cardVisibility.exiting} onCheckedChange={() => toggleCard("exiting")} className="scale-75" />
+                    <Label htmlFor="toggle-exiting" className="text-xs text-muted-foreground cursor-pointer">Exiting</Label>
+                  </div>
+                )}
+                {lineCrossingData?.latest && (
+                  <div className="flex items-center gap-1.5">
+                    <Switch id="toggle-linecrossing" checked={cardVisibility.lineCrossing} onCheckedChange={() => toggleCard("lineCrossing")} className="scale-75" />
+                    <Label htmlFor="toggle-linecrossing" className="text-xs text-muted-foreground cursor-pointer">Crossings</Label>
+                  </div>
+                )}
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* Occupancy */}
-              {analyticsData?.latest && (
+              {analyticsData?.latest && cardVisibility.occupancy && (
                 <div className="rounded-lg border p-4 text-center">
                   <div className="flex items-center justify-center gap-2 mb-2">
                     <Users className="h-4 w-4 text-muted-foreground" />
                     <span className="text-sm font-medium text-muted-foreground">Current Occupancy</span>
                   </div>
-                  <div className="text-3xl font-bold">{analyticsData.latest.value}</div>
+                  <div className="text-3xl font-bold">{analyticsData.latest.value.toLocaleString()}</div>
                   <div className="text-xs text-muted-foreground mt-1">
                     {new Date(analyticsData.latest.timestamp).toLocaleTimeString()}
                   </div>
+                  {analyticsData.latest.metadata?.scenario && (
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {analyticsData.latest.metadata.scenario}
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* People In */}
-              {peopleInData?.latest && (
+              {/* Entering (People In + Vehicles) */}
+              {peopleInData?.latest && cardVisibility.entering && (
                 <div className="rounded-lg border p-4 text-center">
                   <div className="flex items-center justify-center gap-2 mb-2">
-                    <ArrowUpDown className="h-4 w-4 text-green-600" />
-                    <span className="text-sm font-medium text-muted-foreground">People In</span>
+                    <ArrowDownToLine className="h-4 w-4 text-green-600" />
+                    <span className="text-sm font-medium text-muted-foreground">Entering</span>
                   </div>
-                  <div className="text-3xl font-bold text-green-600">{peopleInData.latest.value}</div>
+                  <div className="text-3xl font-bold text-green-600">{peopleInData.latest.value.toLocaleString()}</div>
                   <div className="text-xs text-muted-foreground mt-1">
                     {new Date(peopleInData.latest.timestamp).toLocaleTimeString()}
                   </div>
+                  {peopleInData.latest.metadata?.scenario && (
+                    <div className="text-xs text-muted-foreground mt-0.5">
+                      {peopleInData.latest.metadata.scenario}
+                    </div>
+                  )}
+                  <VehicleBreakdown metadata={peopleInData.latest.metadata} />
                 </div>
               )}
 
-              {/* People Out */}
-              {peopleOutData?.latest && (
+              {/* Exiting (People Out + Vehicles) */}
+              {peopleOutData?.latest && cardVisibility.exiting && (
                 <div className="rounded-lg border p-4 text-center">
                   <div className="flex items-center justify-center gap-2 mb-2">
-                    <ArrowUpDown className="h-4 w-4 text-red-600" />
-                    <span className="text-sm font-medium text-muted-foreground">People Out</span>
+                    <ArrowUpFromLine className="h-4 w-4 text-red-600" />
+                    <span className="text-sm font-medium text-muted-foreground">Exiting</span>
                   </div>
-                  <div className="text-3xl font-bold text-red-600">{peopleOutData.latest.value}</div>
+                  <div className="text-3xl font-bold text-red-600">{peopleOutData.latest.value.toLocaleString()}</div>
                   <div className="text-xs text-muted-foreground mt-1">
                     {new Date(peopleOutData.latest.timestamp).toLocaleTimeString()}
                   </div>
+                  {peopleOutData.latest.metadata?.scenario && (
+                    <div className="text-xs text-muted-foreground mt-0.5">
+                      {peopleOutData.latest.metadata.scenario}
+                    </div>
+                  )}
+                  <VehicleBreakdown metadata={peopleOutData.latest.metadata} />
                 </div>
               )}
 
-              {/* Line Crossing */}
-              {lineCrossingData?.latest && (
+              {/* Line Crossing Total */}
+              {lineCrossingData?.latest && cardVisibility.lineCrossing && (
                 <div className="rounded-lg border p-4 text-center">
                   <div className="flex items-center justify-center gap-2 mb-2">
                     <GitBranchPlus className="h-4 w-4 text-purple-600" />
                     <span className="text-sm font-medium text-muted-foreground">Line Crossings</span>
                   </div>
-                  <div className="text-3xl font-bold text-purple-600">{lineCrossingData.latest.value}</div>
+                  <div className="text-3xl font-bold text-purple-600">{lineCrossingData.latest.value.toLocaleString()}</div>
                   <div className="text-xs text-muted-foreground mt-1">
                     {new Date(lineCrossingData.latest.timestamp).toLocaleTimeString()}
                   </div>
+                  {lineCrossingData.latest.metadata?.scenario && (
+                    <div className="text-xs text-muted-foreground mt-0.5">
+                      {lineCrossingData.latest.metadata.scenario}
+                    </div>
+                  )}
+                  {/* Show in/out breakdown if available */}
+                  {(lineCrossingData.latest.metadata?.in > 0 || lineCrossingData.latest.metadata?.out > 0) && (
+                    <div className="mt-2 pt-2 border-t border-dashed flex justify-center gap-4 text-xs">
+                      {lineCrossingData.latest.metadata?.in > 0 && (
+                        <span className="text-green-600 font-medium">{Number(lineCrossingData.latest.metadata?.in).toLocaleString()} in</span>
+                      )}
+                      {lineCrossingData.latest.metadata?.out > 0 && (
+                        <span className="text-red-600 font-medium">{Number(lineCrossingData.latest.metadata?.out).toLocaleString()} out</span>
+                      )}
+                    </div>
+                  )}
+                  <VehicleBreakdown metadata={lineCrossingData.latest.metadata} />
                 </div>
               )}
             </div>

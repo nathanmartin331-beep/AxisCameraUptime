@@ -935,19 +935,19 @@ export class DatabaseStorage implements IStorage {
 
     const perCamera = await Promise.all(
       members.map(async (camera) => {
-        const inEvents = await this.getAnalyticsEvents(camera.id, "people_in", startDate, endDate);
-        const outEvents = await this.getAnalyticsEvents(camera.id, "people_out", startDate, endDate);
-
-        // Sum all values in the range
-        const totalIn = inEvents.reduce((sum, e) => sum + e.value, 0);
-        const totalOut = outEvents.reduce((sum, e) => sum + e.value, 0);
+        // Use latest event value per camera (not sum), because
+        // getAccumulatedCounts returns cumulative totals
+        const [latestIn, latestOut] = await Promise.all([
+          this.getLatestAnalyticsEvent(camera.id, "people_in"),
+          this.getLatestAnalyticsEvent(camera.id, "people_out"),
+        ]);
         const cameraOcc = occupancyData.cameras.find((c) => c.id === camera.id);
 
         return {
           id: camera.id,
           name: camera.name,
-          in: totalIn,
-          out: totalOut,
+          in: latestIn?.value ?? 0,
+          out: latestOut?.value ?? 0,
           occupancy: cameraOcc?.occupancy ?? 0,
         };
       })

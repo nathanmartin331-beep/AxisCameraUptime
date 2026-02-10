@@ -475,19 +475,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (analyticsCameras.length > 0) {
         analyticsEnabled = analyticsCameras.length;
-        const today = new Date();
-        const dayStart = new Date(today);
-        dayStart.setHours(0, 0, 0, 0);
 
+        // Use latest event per camera (not sum), because getAccumulatedCounts
+        // returns cumulative totals that would be double-counted if summed
         await Promise.all(analyticsCameras.map(async (cam) => {
           try {
-            const [inEvents, outEvents, latestOcc] = await Promise.all([
-              storage.getAnalyticsEvents(cam.id, "people_in", dayStart, today),
-              storage.getAnalyticsEvents(cam.id, "people_out", dayStart, today),
+            const [latestIn, latestOut, latestOcc] = await Promise.all([
+              storage.getLatestAnalyticsEvent(cam.id, "people_in"),
+              storage.getLatestAnalyticsEvent(cam.id, "people_out"),
               storage.getLatestAnalyticsEvent(cam.id, "occupancy"),
             ]);
-            totalPeopleIn += inEvents.reduce((sum, e) => sum + e.value, 0);
-            totalPeopleOut += outEvents.reduce((sum, e) => sum + e.value, 0);
+            totalPeopleIn += latestIn?.value ?? 0;
+            totalPeopleOut += latestOut?.value ?? 0;
             currentOccupancy += latestOcc?.value ?? 0;
           } catch {
             // Skip camera on error
