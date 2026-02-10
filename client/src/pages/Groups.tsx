@@ -13,7 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { FolderOpen, Plus, Trash2, Edit, Users } from "lucide-react";
+import { FolderOpen, Plus, Trash2, Edit, Users, UserCheck } from "lucide-react";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -24,6 +24,7 @@ interface Group {
   description: string | null;
   color: string | null;
   memberCount: number;
+  totalOccupancy: number;
   createdAt: string;
 }
 
@@ -224,11 +225,17 @@ export default function Groups() {
                   <CardDescription className="mt-1">{group.description}</CardDescription>
                 )}
               </CardHeader>
-              <CardContent className="pt-0">
+              <CardContent className="pt-0 flex items-center gap-2">
                 <Badge variant="secondary">
                   <Users className="w-3 h-3 mr-1" />
                   {group.memberCount} camera{group.memberCount !== 1 ? "s" : ""}
                 </Badge>
+                {group.totalOccupancy > 0 && (
+                  <Badge variant="outline">
+                    <UserCheck className="w-3 h-3 mr-1" />
+                    {group.totalOccupancy} occupancy
+                  </Badge>
+                )}
               </CardContent>
             </Card>
           ))}

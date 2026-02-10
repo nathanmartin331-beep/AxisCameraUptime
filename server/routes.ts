@@ -1453,11 +1453,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = getUserId(req);
       const groups = await storage.getGroupsByUserId(userId);
 
-      // Attach member count to each group
+      // Attach member count and current occupancy to each group
       const groupsWithCounts = await Promise.all(
         groups.map(async (group) => {
-          const members = await storage.getGroupMembers(group.id);
-          return { ...group, memberCount: members.length };
+          const [members, occupancy] = await Promise.all([
+            storage.getGroupMembers(group.id),
+            storage.getGroupCurrentOccupancy(group.id),
+          ]);
+          return { ...group, memberCount: members.length, totalOccupancy: occupancy.total };
         })
       );
 
