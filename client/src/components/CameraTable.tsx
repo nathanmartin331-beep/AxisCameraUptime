@@ -9,7 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import StatusIndicator, { CameraStatus } from "./StatusIndicator";
-import { MoreVertical, Eye, CheckCircle2, AlertTriangle, XCircle, Move, Mic, Camera as CameraIcon, Loader2 } from "lucide-react";
+import { MoreVertical, Eye, CheckCircle2, AlertTriangle, XCircle, Move, Mic, Camera as CameraIcon, Loader2, BarChart3 } from "lucide-react";
 import { 
   Tooltip,
   TooltipContent,
@@ -180,8 +180,18 @@ export default function CameraTable({
                             </span>
                           )}
                         </div>
-                        {(camera.hasPTZ || camera.hasAudio || (camera.numberOfViews && camera.numberOfViews > 1)) && (
+                        {(camera.hasPTZ || camera.hasAudio || (camera.numberOfViews && camera.numberOfViews > 1) || (camera.capabilities as any)?.enabledAnalytics && Object.values((camera.capabilities as any).enabledAnalytics).some(Boolean)) && (
                           <div className="flex items-center gap-1">
+                            {(camera.capabilities as any)?.enabledAnalytics && Object.values((camera.capabilities as any).enabledAnalytics).some(Boolean) && (
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <BarChart3 className="w-3 h-3 text-blue-500" />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-xs">Analytics Enabled</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            )}
                             {camera.hasPTZ && (
                               <Tooltip>
                                 <TooltipTrigger>

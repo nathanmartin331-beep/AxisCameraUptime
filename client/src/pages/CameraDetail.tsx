@@ -117,10 +117,16 @@ export default function CameraDetail() {
   });
 
   // Fetch analytics data if camera has any enabled analytics
-  const hasEnabledAnalytics = camera?.capabilities &&
-    typeof camera.capabilities === "object" &&
-    (camera.capabilities as any)?.enabledAnalytics &&
-    Object.values((camera.capabilities as any).enabledAnalytics).some(Boolean);
+  const caps = camera?.capabilities as any;
+  const enabledAnalytics = caps?.enabledAnalytics;
+  const analyticsInfo = caps?.analytics;
+  const hasEnabledAnalytics = enabledAnalytics && Object.values(enabledAnalytics).some(Boolean);
+
+  // Determine which specific analytics this camera supports
+  const hasOccupancy = analyticsInfo?.occupancyEstimation && enabledAnalytics?.occupancyEstimation !== false;
+  const hasCrossline = (analyticsInfo?.objectAnalytics && enabledAnalytics?.objectAnalytics !== false) ||
+    (analyticsInfo?.peopleCount && enabledAnalytics?.peopleCount !== false) ||
+    (analyticsInfo?.lineCrossing && enabledAnalytics?.lineCrossing !== false);
 
   // Analytics card visibility toggles
   const [cardVisibility, setCardVisibility] = useState<Record<AnalyticsCardKey, boolean>>(loadVisibility);
@@ -133,6 +139,7 @@ export default function CameraDetail() {
     });
   }, []);
 
+  // Only query occupancy if camera has occupancy capability
   const { data: analyticsData } = useQuery<AnalyticsResponse>({
     queryKey: ["/api/cameras", cameraId, "analytics"],
     queryFn: async () => {
@@ -140,11 +147,11 @@ export default function CameraDetail() {
       if (!res.ok) throw new Error("Failed to fetch analytics");
       return res.json();
     },
-    enabled: !!cameraId && !!hasEnabledAnalytics,
+    enabled: !!cameraId && !!hasOccupancy,
     refetchInterval: 15000,
   });
 
-  // Also fetch people_in and people_out
+  // Only query crossline data if camera has counting capabilities
   const { data: peopleInData } = useQuery<AnalyticsResponse>({
     queryKey: ["/api/cameras", cameraId, "analytics-in"],
     queryFn: async () => {
@@ -152,7 +159,7 @@ export default function CameraDetail() {
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
-    enabled: !!cameraId && !!hasEnabledAnalytics,
+    enabled: !!cameraId && !!hasCrossline,
     refetchInterval: 15000,
   });
 
@@ -163,7 +170,7 @@ export default function CameraDetail() {
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
-    enabled: !!cameraId && !!hasEnabledAnalytics,
+    enabled: !!cameraId && !!hasCrossline,
     refetchInterval: 15000,
   });
 
@@ -174,7 +181,7 @@ export default function CameraDetail() {
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
-    enabled: !!cameraId && !!hasEnabledAnalytics,
+    enabled: !!cameraId && !!hasCrossline,
     refetchInterval: 15000,
   });
 
@@ -190,7 +197,7 @@ export default function CameraDetail() {
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
-    enabled: !!cameraId && !!hasEnabledAnalytics,
+    enabled: !!cameraId && !!hasCrossline,
     refetchInterval: 60000,
   });
 
@@ -203,7 +210,7 @@ export default function CameraDetail() {
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
-    enabled: !!cameraId && !!hasEnabledAnalytics,
+    enabled: !!cameraId && !!hasCrossline,
     refetchInterval: 60000,
   });
 

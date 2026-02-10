@@ -192,16 +192,37 @@ function parseAoaAccumulatedCounts(
 
   for (const scenario of scenarios) {
     const name = scenario.name || "Unnamed";
-    const type = (scenario.type || "").toLowerCase();
+    let type = (scenario.type || "").toLowerCase();
 
     // Base metadata for all events from this response
     const baseMeta: Record<string, any> = { scenario: name, source: "objectanalytics" };
     if (resetTime) baseMeta.resetTime = resetTime;
     if (cameraTimestamp) baseMeta.cameraTimestamp = cameraTimestamp;
 
-    // Crossline counting scenarios (includes "fence" which is AOA's line-crossing type)
-    if (type.includes("crossline") || type.includes("line_crossing") || type.includes("crossing") ||
-        type.includes("fence") || type.includes("tripwire")) {
+    // Infer type from data fields when type is missing or unrecognized
+    const isCrossingType = type.includes("crossline") || type.includes("line_crossing") ||
+      type.includes("crossing") || type.includes("fence") || type.includes("tripwire");
+    const isOccupancyType = type.includes("occupancy") || type.includes("object_in_area") ||
+      type.includes("occupancyinarea");
+
+    if (!isCrossingType && !isOccupancyType) {
+      // Try to infer from data fields present
+      if (scenario.currentOccupancy !== undefined || scenario.objects !== undefined) {
+        type = "occupancy_inferred";
+      } else if (scenario.total !== undefined || scenario.in !== undefined ||
+                 scenario.out !== undefined || scenario.passings || scenario.counts) {
+        type = "crossline_inferred";
+      } else if (type) {
+        console.log(`[Analytics] Unknown scenario type "${type}" for "${name}" — skipping (no recognizable data fields)`);
+        continue;
+      } else {
+        console.log(`[Analytics] Scenario "${name}" has no type and no recognizable data fields — skipping`);
+        continue;
+      }
+    }
+
+    // --- Crossline counting scenarios ---
+    if (isCrossingType || type === "crossline_inferred") {
       let scenarioIn = 0;
       let scenarioOut = 0;
 
@@ -222,7 +243,6 @@ function parseAoaAccumulatedCounts(
 
       // Format C: AXIS getAccumulatedCounts flat response
       // { total: N, totalHuman: N, totalCar: M, totalBus: B, totalTruck: T, totalBike: K, totalOtherVehicle: O }
-      // Use scenario name for direction (entering vs exiting)
       const vehicleBreakdown: Record<string, number> = {};
       if (scenarioIn === 0 && scenarioOut === 0 && scenario.total !== undefined) {
         const total = parseInt(scenario.total) || 0;
@@ -241,15 +261,23 @@ function parseAoaAccumulatedCounts(
         if (bikeCount > 0) vehicleBreakdown.bike = bikeCount;
         if (otherVehicleCount > 0) vehicleBreakdown.otherVehicle = otherVehicleCount;
 
-        const count = total;
+        // Determine direction from scenario name. If name is generic (no direction
+        // keywords), emit as line_crossing ONLY — don't guess entering/exiting.
         const nameLower = name.toLowerCase();
-        if (nameLower.includes("enter") || nameLower.includes("in")) {
-          scenarioIn = count;
+        if (nameLower.includes("enter") || nameLower.includes("in") && !nameLower.includes("line")) {
+          scenarioIn = total;
         } else if (nameLower.includes("exit") || nameLower.includes("out") || nameLower.includes("leav")) {
-          scenarioOut = count;
+          scenarioOut = total;
         } else {
-          // Direction unknown — emit as generic line_crossing
-          scenarioIn = count;
+          // Direction unknown — emit ONLY as line_crossing, don't fake people_in
+          const categoryMeta = Object.keys(vehicleBreakdown).length > 0
+            ? { ...vehicleBreakdown } : {};
+          events.push({
+            eventType: "line_crossing",
+            value: total,
+            metadata: { ...baseMeta, direction: "unknown", ...categoryMeta },
+          });
+          continue; // Skip people_in/people_out for this scenario
         }
       }
 
@@ -281,8 +309,8 @@ function parseAoaAccumulatedCounts(
       }
     }
 
-    // Occupancy in area scenarios
-    if (type.includes("occupancy") || type.includes("object_in_area") || type.includes("occupancyinarea")) {
+    // --- Occupancy in area scenarios ---
+    if (isOccupancyType || type === "occupancy_inferred") {
       const count = scenario.currentOccupancy || scenario.count || scenario.objects || 0;
       events.push({
         eventType: "occupancy",
@@ -332,7 +360,7 @@ async function queryObjectAnalyticsData(
       const json = await tryAoaPost(
         ipAddress, username, password, acapPath,
         "getAccumulatedCounts", timeout, conn,
-        { scenario: s.id }
+        { scenario: Number(s.id) }
       );
       if (json) {
         aoaCountsFailedCache.delete(ipAddress);
@@ -1273,7 +1301,7 @@ async function queryObjectAnalyticsScenarios(
       // AXIS docs: correct key is "scenario" (not "scenarioID"), value is UID integer
       for (const s of scenarios) {
         if (s.id !== undefined && s.id !== null) {
-          paramFormats.push({ label: `scenario:${s.id}`, params: { scenario: s.id } });
+          paramFormats.push({ label: `scenario:${s.id}`, params: { scenario: Number(s.id) } });
         }
       }
       // Fallbacks: no params key, empty params, channel:0
