@@ -303,59 +303,42 @@ async function queryObjectAnalyticsData(
 ): Promise<Array<{ eventType: string; value: number; metadata?: Record<string, any> }>> {
   if (!storedApiPath) return [];
 
-  // Modern AXIS OS: use Event2 API to get analytics data from event instances
-  if (storedApiPath === "event2") {
-    return (await queryEvent2Analytics(ipAddress, username, password, timeout, conn)).events;
-  }
-
-  // SOAP event service fallback (for cameras without Event2)
-  if (storedApiPath === "soap-events") {
-    return (await querySoapEventInstances(ipAddress, username, password, timeout, conn)).events;
-  }
-
-  // analytics-metadata-config.cgi path - try getAccumulatedCounts via the ACAP API
-  // But also fall back to Event2 since metadata-config is for configuration, not data
-  if (storedApiPath === "/axis-cgi/analytics-metadata-config.cgi") {
-    const event2Result = (await queryEvent2Analytics(ipAddress, username, password, timeout, conn)).events;
-    if (event2Result.length > 0) return event2Result;
-    return (await querySoapEventInstances(ipAddress, username, password, timeout, conn)).events;
-  }
-
-  // ACAP local path (control.cgi or legacy .api) - use getAccumulatedCounts
   const allEvents: Array<{ eventType: string; value: number; metadata?: Record<string, any> }> = [];
 
-  // Check failure cache — if this camera's getAccumulatedCounts has been failing,
-  // skip directly to Event2/SOAP fallback to avoid log spam.
+  // Always try getAccumulatedCounts first when we have scenarios with IDs,
+  // even if the stored path is "soap-events" or "event2". This auto-upgrades
+  // cameras that were probed before the correct "scenario" param key was fixed.
+  const scenariosWithIds = (scenarios || []).filter(s => s.id !== undefined && s.id !== null);
   const failedAt = aoaCountsFailedCache.get(ipAddress);
   const skipAcap = failedAt && (Date.now() - failedAt) < AOA_FAILURE_CACHE_TTL;
 
-  if (!skipAcap) {
-    // Strategy 1: Per-scenario calls using actual scenario IDs
-    // AXIS docs: params key is "scenario" (NOT "scenarioID"), value is the UID integer
-    if (scenarios && scenarios.length > 0) {
-      const scenariosWithIds = scenarios.filter(s => s.id !== undefined && s.id !== null);
-      for (const s of scenariosWithIds) {
-        const json = await tryAoaPost(
-          ipAddress, username, password, storedApiPath,
-          "getAccumulatedCounts", timeout, conn,
-          { scenario: s.id }
-        );
-        if (json) {
-          aoaCountsFailedCache.delete(ipAddress);
-          // Log first successful response to verify data format
-          if (allEvents.length === 0) {
-            console.log(`[Analytics] AOA getAccumulatedCounts on ${ipAddress} scenario "${s.name}": ${JSON.stringify(json.data || {}).substring(0, 300)}`);
-          }
-          const parsed = parseAoaAccumulatedCounts(json, { name: s.name, type: s.type });
-          allEvents.push(...parsed);
+  if (scenariosWithIds.length > 0 && !skipAcap) {
+    // Determine which ACAP path to try getAccumulatedCounts on
+    const acapPath = (storedApiPath === "event2" || storedApiPath === "soap-events" ||
+                      storedApiPath === "/axis-cgi/analytics-metadata-config.cgi")
+      ? "/local/objectanalytics/control.cgi"
+      : storedApiPath;
+
+    for (const s of scenariosWithIds) {
+      const json = await tryAoaPost(
+        ipAddress, username, password, acapPath,
+        "getAccumulatedCounts", timeout, conn,
+        { scenario: s.id }
+      );
+      if (json) {
+        aoaCountsFailedCache.delete(ipAddress);
+        if (allEvents.length === 0) {
+          console.log(`[Analytics] AOA getAccumulatedCounts on ${ipAddress} scenario "${s.name}": ${JSON.stringify(json.data || {}).substring(0, 300)}`);
         }
+        const parsed = parseAoaAccumulatedCounts(json, { name: s.name, type: s.type });
+        allEvents.push(...parsed);
       }
     }
 
     // Strategy 2: No params (some firmware returns all scenarios)
     if (allEvents.length === 0) {
       const jsonNoParams = await tryAoaPost(
-        ipAddress, username, password, storedApiPath,
+        ipAddress, username, password, acapPath,
         "getAccumulatedCounts", timeout, conn,
         null
       );
@@ -368,13 +351,33 @@ async function queryObjectAnalyticsData(
         console.log(`[Analytics] AOA getAccumulatedCounts failed on ${ipAddress}, suppressing retries for 1h`);
       }
     }
+
+    if (allEvents.length > 0) return allEvents;
   }
 
-  // If ACAP path yielded no events, try Event2 as fallback
-  if (allEvents.length === 0) {
+  // ACAP local path (control.cgi or legacy .api) - also try without scenario IDs
+  if (storedApiPath.startsWith("/local/") && !skipAcap && scenariosWithIds.length === 0) {
+    const jsonNoParams = await tryAoaPost(
+      ipAddress, username, password, storedApiPath,
+      "getAccumulatedCounts", timeout, conn,
+      null
+    );
+    if (jsonNoParams) {
+      aoaCountsFailedCache.delete(ipAddress);
+      const parsed = parseAoaAccumulatedCounts(jsonNoParams);
+      allEvents.push(...parsed);
+    }
+    if (allEvents.length > 0) return allEvents;
+  }
+
+  // Fallback: Event2 API
+  if (storedApiPath === "event2" || storedApiPath === "/axis-cgi/analytics-metadata-config.cgi" || allEvents.length === 0) {
     const { events: event2Events } = await queryEvent2Analytics(ipAddress, username, password, timeout, conn);
     if (event2Events.length > 0) return event2Events;
-    // Last resort: SOAP events
+  }
+
+  // Last resort: SOAP events
+  if (storedApiPath === "soap-events" || allEvents.length === 0) {
     const { events: soapEvents } = await querySoapEventInstances(ipAddress, username, password, timeout, conn);
     if (soapEvents.length > 0) return soapEvents;
   }
