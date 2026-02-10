@@ -186,9 +186,18 @@ function parseAoaAccumulatedCounts(
     }
   }
 
+  // Extract resetTime/timestamp from the top-level data (shared across all scenarios)
+  const resetTime = json?.data?.resetTime || null;
+  const cameraTimestamp = json?.data?.timestamp || json?.data?.timeStamp || null;
+
   for (const scenario of scenarios) {
     const name = scenario.name || "Unnamed";
     const type = (scenario.type || "").toLowerCase();
+
+    // Base metadata for all events from this response
+    const baseMeta: Record<string, any> = { scenario: name, source: "objectanalytics" };
+    if (resetTime) baseMeta.resetTime = resetTime;
+    if (cameraTimestamp) baseMeta.cameraTimestamp = cameraTimestamp;
 
     // Crossline counting scenarios (includes "fence" which is AOA's line-crossing type)
     if (type.includes("crossline") || type.includes("line_crossing") || type.includes("crossing") ||
@@ -252,14 +261,14 @@ function parseAoaAccumulatedCounts(
         events.push({
           eventType: "people_in",
           value: scenarioIn,
-          metadata: { scenario: name, source: "objectanalytics", ...categoryMeta },
+          metadata: { ...baseMeta, ...categoryMeta },
         });
       }
       if (scenarioOut > 0) {
         events.push({
           eventType: "people_out",
           value: scenarioOut,
-          metadata: { scenario: name, source: "objectanalytics", ...categoryMeta },
+          metadata: { ...baseMeta, ...categoryMeta },
         });
       }
       const totalCrossings = scenarioIn + scenarioOut;
@@ -267,7 +276,7 @@ function parseAoaAccumulatedCounts(
         events.push({
           eventType: "line_crossing",
           value: totalCrossings,
-          metadata: { scenario: name, source: "objectanalytics", in: scenarioIn, out: scenarioOut, ...categoryMeta },
+          metadata: { ...baseMeta, in: scenarioIn, out: scenarioOut, ...categoryMeta },
         });
       }
     }
@@ -278,7 +287,7 @@ function parseAoaAccumulatedCounts(
       events.push({
         eventType: "occupancy",
         value: parseInt(String(count)) || 0,
-        metadata: { scenario: name, source: "objectanalytics" },
+        metadata: { ...baseMeta },
       });
     }
   }

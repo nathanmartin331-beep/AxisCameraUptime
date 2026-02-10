@@ -219,6 +219,7 @@ export interface IStorage {
   createAnalyticsEventBatch(events: InsertAnalyticsEvent[]): Promise<void>;
   getAnalyticsEvents(cameraId: string, eventType: string, startDate: Date, endDate: Date): Promise<AnalyticsEvent[]>;
   getLatestAnalyticsEvent(cameraId: string, eventType: string): Promise<AnalyticsEvent | undefined>;
+  getAnalyticsDailyTotals(cameraId: string, eventType: string, days: number): Promise<Array<{ date: string; total: number; metadata?: Record<string, any> }>>;
   getGroupCurrentOccupancy(groupId: string): Promise<{ total: number; cameras: Array<{ id: string; name: string; occupancy: number }> }>;
   getGroupAnalyticsSummary(groupId: string, startDate: Date, endDate: Date): Promise<{
     totalIn: number;
@@ -896,6 +897,48 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(analyticsEvents.timestamp))
       .limit(1);
     return event;
+  }
+
+  async getAnalyticsDailyTotals(
+    cameraId: string,
+    eventType: string,
+    days: number
+  ): Promise<Array<{ date: string; total: number; metadata?: Record<string, any> }>> {
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    startDate.setHours(0, 0, 0, 0);
+
+    // Fetch all events in range, then group by day and take max value per day.
+    // Since AXIS counters are cumulative and reset at midnight, the max value
+    // each day IS the daily total. Also grab the metadata from the max-value event.
+    const events = await db
+      .select()
+      .from(analyticsEvents)
+      .where(
+        and(
+          eq(analyticsEvents.cameraId, cameraId),
+          eq(analyticsEvents.eventType, eventType),
+          gte(analyticsEvents.timestamp, startDate),
+          lte(analyticsEvents.timestamp, endDate)
+        )
+      )
+      .orderBy(analyticsEvents.timestamp);
+
+    // Group by date string (YYYY-MM-DD) and take max value per day
+    const dailyMap = new Map<string, { total: number; metadata?: Record<string, any> }>();
+    for (const evt of events) {
+      const d = new Date(evt.timestamp);
+      const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const existing = dailyMap.get(dateKey);
+      if (!existing || evt.value > existing.total) {
+        dailyMap.set(dateKey, { total: evt.value, metadata: evt.metadata ?? undefined });
+      }
+    }
+
+    return Array.from(dailyMap.entries())
+      .map(([date, data]) => ({ date, ...data }))
+      .sort((a, b) => a.date.localeCompare(b.date));
   }
 
   async getGroupCurrentOccupancy(groupId: string): Promise<{

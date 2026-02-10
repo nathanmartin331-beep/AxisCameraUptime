@@ -1675,6 +1675,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Camera analytics daily history (max value per day = daily total since counters reset at midnight)
+  app.get("/api/cameras/:id/analytics/daily", requireAuth, async (req: any, res) => {
+    try {
+      const cameraId = validateId(req.params.id);
+      if (!cameraId) return sendError(res, 400, "Invalid camera ID");
+
+      const days = Math.min(parseInt(req.query.days as string) || 30, 90);
+      const VALID_EVENT_TYPES = ["occupancy", "people_in", "people_out", "line_crossing"];
+      const eventType = (req.query.eventType as string) || "people_in";
+      if (!VALID_EVENT_TYPES.includes(eventType)) {
+        return sendError(res, 400, `Invalid eventType. Must be one of: ${VALID_EVENT_TYPES.join(", ")}`);
+      }
+
+      const camera = await storage.getCameraById(cameraId);
+      if (!camera) return sendError(res, 404, "Camera not found");
+      if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
+
+      const dailyTotals = await storage.getAnalyticsDailyTotals(cameraId, eventType, days);
+      res.json({ cameraId, eventType, days, dailyTotals });
+    } catch (error) {
+      console.error("Error fetching daily analytics:", error);
+      sendError(res, 500, "Failed to fetch daily analytics");
+    }
+  });
+
   // Group real-time occupancy
   app.get("/api/groups/:id/occupancy", requireAuth, async (req: any, res) => {
     try {
