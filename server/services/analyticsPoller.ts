@@ -897,114 +897,145 @@ async function querySoapEventInstances(
     reachable = true;
     const text = await response.text();
 
-    // Debug: save full SOAP response to file for first camera, and log structure for all
-    if (!soapDebuggedCameras.has(ipAddress)) {
-      soapDebuggedCameras.add(ipAddress);
-
-      // Save full response for first camera only (for offline analysis)
-      try {
-        const fs = await import("fs");
-        const debugDir = "./data";
-        if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true });
-        fs.writeFileSync(`${debugDir}/soap-debug-${ipAddress.replace(/\./g, "_")}.xml`, text);
-        console.log(`[Analytics] SOAP debug: saved full response to ${debugDir}/soap-debug-${ipAddress.replace(/\./g, "_")}.xml (${text.length} bytes)`);
-      } catch { /* ignore write errors */ }
-
-      // Search for ANY Name/Value attribute patterns in the XML (namespace-agnostic)
-      const nameValueRegex = /Name="([^"]+)"[^>]*Value="([^"]+)"/gi;
-      const allItems: string[] = [];
-      let dm;
-      while ((dm = nameValueRegex.exec(text)) !== null) {
-        allItems.push(`${dm[1]}=${dm[2]}`);
-      }
-      // Also check Value before Name
-      const valueNameRegex = /Value="([^"]+)"[^>]*Name="([^"]+)"/gi;
-      while ((dm = valueNameRegex.exec(text)) !== null) {
-        allItems.push(`${dm[2]}=${dm[1]}`);
-      }
-
-      // Find all element names containing "Message", "Topic", "Instance", "Analytics", "Scenario"
-      const interestingTags: string[] = [];
-      const tagRegex = /<([a-zA-Z0-9:_]+)[^>]*(?:topic|analytics|scenario|counting|occupancy|crossline|message|instance)/gi;
-      let tm;
-      while ((tm = tagRegex.exec(text)) !== null) {
-        interestingTags.push(tm[1]);
-      }
-
-      // Look for wstop:topic="true" elements (ONVIF topic tree nodes)
-      const topicNodes: string[] = [];
-      const topicNodeRegex = /<([a-zA-Z0-9:_]+)\s[^>]*wstop:topic="true"/gi;
-      while ((tm = topicNodeRegex.exec(text)) !== null) {
-        topicNodes.push(tm[1]);
-      }
-
-      console.log(`[Analytics] SOAP debug on ${ipAddress}: ${text.length} bytes, ${allItems.length} Name/Value pairs, ${topicNodes.length} topic nodes`);
-      if (allItems.length > 0) {
-        console.log(`[Analytics] SOAP items on ${ipAddress}: ${allItems.slice(0, 30).join(", ")}`);
-      }
-      if (topicNodes.length > 0) {
-        console.log(`[Analytics] SOAP topic nodes on ${ipAddress}: ${topicNodes.join(", ")}`);
-      }
-      if (interestingTags.length > 0) {
-        console.log(`[Analytics] SOAP interesting tags on ${ipAddress}: ${Array.from(new Set(interestingTags)).join(", ")}`);
-      }
-      // Show a sample from the body (skip namespace prologue)
-      const bodyStart = text.indexOf("<SOAP-ENV:Body");
-      if (bodyStart > 0) {
-        console.log(`[Analytics] SOAP body sample on ${ipAddress}: ${text.substring(bodyStart, bodyStart + 2000)}`);
-      }
-    }
-
     // Parse analytics-related data from SOAP XML response.
-    // Strategy: extract ALL SimpleItem name/value pairs (from any topic) and check for
-    // counting and occupancy data fields using multiple known field names.
-    const simpleItemRegex = /<(?:tt:)?SimpleItem\s+[^>]*Name="([^"]+)"[^>]*Value="([^"]+)"/gi;
+    // AXIS cameras use two XML formats for event data:
+    //   1. Standard ONVIF: <tt:SimpleItem Name="x" Value="y"/>
+    //   2. AXIS extension: <aev:SimpleItemInstance Name="x" Type="...">
+    //                        <aev:Value>y</aev:Value>
+    //                      </aev:SimpleItemInstance>
+    // Data values live inside <DataInstance> blocks; source/key values are in <SourceInstance>.
+    // We parse per-DataInstance to emit events per scenario.
 
-    // Extract all SimpleItem name/value pairs from the response
-    let match;
-    const items = new Map<string, string>();
-    while ((match = simpleItemRegex.exec(text)) !== null) {
-      items.set(match[1].toLowerCase(), match[2]);
+    // Helper: extract name/value pairs from a section of XML using both formats
+    const extractItems = (section: string): Map<string, string> => {
+      const items = new Map<string, string>();
+
+      // Format 1: <tt:SimpleItem Name="x" Value="y"/> (namespace-agnostic)
+      const simpleItemRegex = /<(?:\w+:)?SimpleItem\s+[^>]*Name="([^"]+)"[^>]*Value="([^"]+)"/gi;
+      let m;
+      while ((m = simpleItemRegex.exec(section)) !== null) {
+        items.set(m[1].toLowerCase(), m[2]);
+      }
+      // Also Value before Name attribute order
+      const simpleItemRevRegex = /<(?:\w+:)?SimpleItem\s+[^>]*Value="([^"]+)"[^>]*Name="([^"]+)"/gi;
+      while ((m = simpleItemRevRegex.exec(section)) !== null) {
+        items.set(m[2].toLowerCase(), m[1]);
+      }
+
+      // Format 2: <aev:SimpleItemInstance Name="x" ...><aev:Value>y</aev:Value></aev:SimpleItemInstance>
+      const itemInstanceRegex = /<(?:\w+:)?SimpleItemInstance\s+[^>]*Name="([^"]+)"[^>]*>\s*<(?:\w+:)?Value>([^<]+)<\/(?:\w+:)?Value>/gi;
+      while ((m = itemInstanceRegex.exec(section)) !== null) {
+        items.set(m[1].toLowerCase(), m[2]);
+      }
+
+      return items;
     }
 
-    // Check for counting data (various field names used by different firmware)
-    const total = parseInt(items.get("total") || "0") || 0;
-    const totalHuman = parseInt(items.get("totalhuman") || items.get("total_human") || "0") || 0;
-    const totalCar = parseInt(items.get("totalcar") || items.get("total_car") || "0") || 0;
-    const enters = parseInt(items.get("enters") || items.get("in") || items.get("totalin") || items.get("total_in") || "0") || 0;
-    const exits = parseInt(items.get("exits") || items.get("out") || items.get("totalout") || items.get("total_out") || "0") || 0;
-    const active = parseInt(items.get("active") || "0") || 0;
+    // Phase 1: Extract data from <DataInstance> blocks (most reliable — only data fields, no source keys)
+    const dataInstanceRegex = /<(?:\w+:)?DataInstance>([\s\S]*?)<\/(?:\w+:)?DataInstance>/gi;
+    let dataBlock;
+    let dataBlockCount = 0;
+    // Accumulators across all DataInstance blocks
+    let totalAcc = 0, totalHumanAcc = 0, totalCarAcc = 0;
+    let entersAcc = 0, exitsAcc = 0;
+    let maxOccupancy = 0;
+    let foundCounting = false, foundOccupancy = false;
 
-    if (total > 0 || totalHuman > 0 || enters > 0 || exits > 0) {
-      if (enters > 0 || totalHuman > 0) {
-        events.push({ eventType: "people_in", value: enters || totalHuman, metadata: { source: "soap-events" } });
+    while ((dataBlock = dataInstanceRegex.exec(text)) !== null) {
+      const items = extractItems(dataBlock[1]);
+      if (items.size === 0) continue;
+      dataBlockCount++;
+
+      // Check for counting fields
+      const total = parseInt(items.get("total") || "0") || 0;
+      const totalHuman = parseInt(items.get("totalhuman") || items.get("total_human") || "0") || 0;
+      const totalCar = parseInt(items.get("totalcar") || items.get("total_car") || "0") || 0;
+      const enters = parseInt(items.get("enters") || items.get("in") || items.get("totalin") || items.get("total_in") || "0") || 0;
+      const exits = parseInt(items.get("exits") || items.get("out") || items.get("totalout") || items.get("total_out") || "0") || 0;
+
+      if (total > 0 || totalHuman > 0 || enters > 0 || exits > 0) {
+        foundCounting = true;
+        totalAcc += total;
+        totalHumanAcc += totalHuman;
+        totalCarAcc += totalCar;
+        entersAcc += enters;
+        exitsAcc += exits;
       }
-      if (exits > 0) {
-        events.push({ eventType: "people_out", value: exits, metadata: { source: "soap-events" } });
+
+      // Check for occupancy fields (take max — occupancy is a gauge, not a counter)
+      const occ = parseInt(
+        items.get("currentoccupancy") || items.get("occupancy") || items.get("current_occupancy") ||
+        items.get("count") || items.get("objects") || items.get("currentcount") ||
+        items.get("active") || "0"
+      ) || 0;
+      if (occ > 0) {
+        foundOccupancy = true;
+        maxOccupancy = Math.max(maxOccupancy, occ);
       }
-      const crossingTotal = total || (enters + exits) || totalHuman;
+    }
+
+    // Phase 2: If no DataInstance blocks yielded analytics data, try global extraction
+    if (!foundCounting && !foundOccupancy) {
+      const globalItems = extractItems(text);
+      if (globalItems.size > 0) {
+        const total = parseInt(globalItems.get("total") || "0") || 0;
+        const totalHuman = parseInt(globalItems.get("totalhuman") || globalItems.get("total_human") || "0") || 0;
+        const totalCar = parseInt(globalItems.get("totalcar") || globalItems.get("total_car") || "0") || 0;
+        const enters = parseInt(globalItems.get("enters") || globalItems.get("in") || globalItems.get("totalin") || globalItems.get("total_in") || "0") || 0;
+        const exits = parseInt(globalItems.get("exits") || globalItems.get("out") || globalItems.get("totalout") || globalItems.get("total_out") || "0") || 0;
+
+        if (total > 0 || totalHuman > 0 || enters > 0 || exits > 0) {
+          foundCounting = true;
+          totalAcc = total; totalHumanAcc = totalHuman; totalCarAcc = totalCar;
+          entersAcc = enters; exitsAcc = exits;
+        }
+
+        const occ = parseInt(
+          globalItems.get("currentoccupancy") || globalItems.get("occupancy") || globalItems.get("current_occupancy") ||
+          globalItems.get("count") || globalItems.get("objects") || globalItems.get("currentcount") ||
+          globalItems.get("active") || "0"
+        ) || 0;
+        if (occ > 0) { foundOccupancy = true; maxOccupancy = occ; }
+      }
+    }
+
+    // Emit events from accumulated data
+    if (foundCounting) {
+      if (entersAcc > 0 || totalHumanAcc > 0) {
+        events.push({ eventType: "people_in", value: entersAcc || totalHumanAcc, metadata: { source: "soap-events" } });
+      }
+      if (exitsAcc > 0) {
+        events.push({ eventType: "people_out", value: exitsAcc, metadata: { source: "soap-events" } });
+      }
+      const crossingTotal = totalAcc || (entersAcc + exitsAcc) || totalHumanAcc;
       if (crossingTotal > 0) {
         events.push({
           eventType: "line_crossing",
           value: crossingTotal,
-          metadata: { source: "soap-events", totalHuman, totalCar, enters, exits },
+          metadata: { source: "soap-events", totalHuman: totalHumanAcc, totalCar: totalCarAcc, enters: entersAcc, exits: exitsAcc },
         });
       }
     }
-
-    // Check for occupancy data (various field names)
-    const occupancy = parseInt(
-      items.get("currentoccupancy") || items.get("occupancy") || items.get("current_occupancy") ||
-      items.get("count") || items.get("objects") || items.get("currentcount") ||
-      (active > 0 ? String(active) : "0") || "0"
-    ) || 0;
-    if (occupancy > 0) {
-      events.push({ eventType: "occupancy", value: occupancy, metadata: { source: "soap-events" } });
+    if (foundOccupancy && maxOccupancy > 0) {
+      events.push({ eventType: "occupancy", value: maxOccupancy, metadata: { source: "soap-events" } });
     }
 
-    if (events.length > 0) {
-      console.log(`[Analytics] SOAP events on ${ipAddress}: found ${events.length} analytics events`);
+    // One-time log per camera showing parse results
+    if (!soapDebuggedCameras.has(ipAddress)) {
+      soapDebuggedCameras.add(ipAddress);
+      console.log(`[Analytics] SOAP on ${ipAddress}: ${text.length} bytes, ${dataBlockCount} DataInstance blocks, ${events.length} events`);
+      if (events.length > 0) {
+        console.log(`[Analytics] SOAP events on ${ipAddress}: ${events.map(e => `${e.eventType}=${e.value}`).join(", ")}`);
+      } else {
+        // Log what we found to help diagnose zero-event situations
+        const allItems = extractItems(text);
+        if (allItems.size > 0) {
+          const pairs = Array.from(allItems.entries()).slice(0, 20).map(([k, v]) => `${k}=${v}`).join(", ");
+          console.log(`[Analytics] SOAP items on ${ipAddress} (no analytics match): ${pairs}`);
+        }
+      }
     }
+
   } catch (err: any) {
     clearTimeout(timeoutId);
     // Silent - SOAP might not be supported
