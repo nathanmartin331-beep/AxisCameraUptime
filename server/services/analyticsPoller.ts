@@ -299,7 +299,6 @@ async function queryObjectAnalyticsData(
   }
 
   // ACAP local path (control.cgi or legacy .api) - use getAccumulatedCounts
-  // The AOA API expects { channel: 0 } and returns ALL scenario counts at once.
   const allEvents: Array<{ eventType: string; value: number; metadata?: Record<string, any> }> = [];
 
   // Check failure cache — if this camera's getAccumulatedCounts has been failing,
@@ -308,19 +307,38 @@ async function queryObjectAnalyticsData(
   const skipAcap = failedAt && (Date.now() - failedAt) < AOA_FAILURE_CACHE_TTL;
 
   if (!skipAcap) {
-    // Try getAccumulatedCounts with channel parameter (returns all scenarios)
-    const json = await tryAoaPost(
-      ipAddress, username, password, storedApiPath,
-      "getAccumulatedCounts", timeout, conn,
-      { channel: 0 }
-    );
-    if (json) {
-      aoaCountsFailedCache.delete(ipAddress); // Clear failure cache on success
-      const parsed = parseAoaAccumulatedCounts(json);
-      allEvents.push(...parsed);
+    // Strategy 1: Per-scenario calls using actual scenario IDs from capabilities
+    if (scenarios && scenarios.length > 0) {
+      const scenariosWithIds = scenarios.filter(s => s.id !== undefined && s.id !== null);
+      for (const s of scenariosWithIds) {
+        const json = await tryAoaPost(
+          ipAddress, username, password, storedApiPath,
+          "getAccumulatedCounts", timeout, conn,
+          { scenarioID: s.id }
+        );
+        if (json) {
+          aoaCountsFailedCache.delete(ipAddress);
+          const parsed = parseAoaAccumulatedCounts(json, { name: s.name, type: s.type });
+          allEvents.push(...parsed);
+        }
+      }
     }
 
-    // If channel:0 didn't work, try without params (some firmware returns all channels)
+    // Strategy 2: channel:0 (some firmware returns all scenarios at once)
+    if (allEvents.length === 0) {
+      const json = await tryAoaPost(
+        ipAddress, username, password, storedApiPath,
+        "getAccumulatedCounts", timeout, conn,
+        { channel: 0 }
+      );
+      if (json) {
+        aoaCountsFailedCache.delete(ipAddress);
+        const parsed = parseAoaAccumulatedCounts(json);
+        allEvents.push(...parsed);
+      }
+    }
+
+    // Strategy 3: No params
     if (allEvents.length === 0) {
       const jsonNoParams = await tryAoaPost(
         ipAddress, username, password, storedApiPath,
@@ -331,7 +349,6 @@ async function queryObjectAnalyticsData(
         const parsed = parseAoaAccumulatedCounts(jsonNoParams);
         allEvents.push(...parsed);
       } else if (!failedAt) {
-        // Both attempts failed — cache the failure to suppress future log spam
         aoaCountsFailedCache.set(ipAddress, Date.now());
         console.log(`[Analytics] AOA getAccumulatedCounts failed on ${ipAddress}, suppressing retries for 1h (will use Event2/SOAP fallback)`);
       }
@@ -1203,13 +1220,19 @@ async function queryObjectAnalyticsScenarios(
       acapScenarios = scenarios;
 
       // Validate that getAccumulatedCounts actually works on this path.
-      // Try multiple parameter formats to find what the ACAP accepts.
-      const paramFormats: Array<{ label: string; params: Record<string, any> }> = [
+      // Try actual scenario IDs from getConfiguration first, then generic params.
+      const paramFormats: Array<{ label: string; params: Record<string, any> }> = [];
+      // Add real scenario IDs first (most likely to work)
+      for (const s of scenarios) {
+        if (s.id !== undefined && s.id !== null) {
+          paramFormats.push({ label: `scenarioID:${s.id}`, params: { scenarioID: s.id } });
+        }
+      }
+      // Then try generic params
+      paramFormats.push(
         { label: "channel:0", params: { channel: 0 } },
         { label: "no-params", params: {} },
-        { label: "scenarioID:0", params: { scenarioID: 0 } },
-        { label: "scenarioID:\"0\"", params: { scenarioID: "0" } },
-      ];
+      );
       for (const fmt of paramFormats) {
         const countCheck = await tryAoaPost(ipAddress, username, password, path, "getAccumulatedCounts", timeout, conn, fmt.params);
         if (countCheck) {
