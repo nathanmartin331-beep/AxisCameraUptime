@@ -173,13 +173,13 @@ function parseAoaAccumulatedCounts(
   // Process accumulated counts from scenarios
   let scenarios = json?.data?.scenarios || json?.data?.devices?.[0]?.channels?.[0]?.scenarios || [];
 
-  // Single-scenario response: data contains the scenario directly (when queried by scenarioID)
+  // Single-scenario response: data contains counts directly (AXIS getAccumulatedCounts format)
+  // Response: { data: { resetTime: "...", timeStamp: "...", total: N, human: N, car: M } }
   if (scenarios.length === 0 && json?.data) {
     const d = json.data;
-    if (d.passings || d.in !== undefined || d.out !== undefined ||
-        d.currentOccupancy !== undefined || d.count !== undefined ||
-        d.name || d.scenarioID !== undefined) {
-      // Use hint type if the response doesn't include type
+    if (d.total !== undefined || d.human !== undefined || d.resetTime !== undefined ||
+        d.passings || d.in !== undefined || d.out !== undefined ||
+        d.currentOccupancy !== undefined || d.count !== undefined) {
       if (!d.type && scenarioHint?.type) d.type = scenarioHint.type;
       if (!d.name && scenarioHint?.name) d.name = scenarioHint.name;
       scenarios = [d];
@@ -196,49 +196,52 @@ function parseAoaAccumulatedCounts(
       let scenarioIn = 0;
       let scenarioOut = 0;
 
+      // Format A: passings array (some firmware versions)
       const passings = scenario.passings || scenario.counts || [];
       for (const passing of passings) {
         if (passing.in !== undefined || passing.enters !== undefined) {
-          const val = parseInt(passing.in || passing.enters || "0") || 0;
-          scenarioIn += val;
-          events.push({
-            eventType: "people_in",
-            value: val,
-            metadata: { scenario: name, source: "objectanalytics" },
-          });
+          scenarioIn += parseInt(passing.in || passing.enters || "0") || 0;
         }
         if (passing.out !== undefined || passing.exits !== undefined) {
-          const val = parseInt(passing.out || passing.exits || "0") || 0;
-          scenarioOut += val;
-          events.push({
-            eventType: "people_out",
-            value: val,
-            metadata: { scenario: name, source: "objectanalytics" },
-          });
+          scenarioOut += parseInt(passing.out || passing.exits || "0") || 0;
         }
       }
 
-      // Also check for direct in/out counts on the scenario itself
-      if (scenario.in !== undefined) {
-        const val = parseInt(scenario.in) || 0;
-        scenarioIn += val;
-        events.push({
-          eventType: "people_in",
-          value: val,
-          metadata: { scenario: name, source: "objectanalytics" },
-        });
-      }
-      if (scenario.out !== undefined) {
-        const val = parseInt(scenario.out) || 0;
-        scenarioOut += val;
-        events.push({
-          eventType: "people_out",
-          value: val,
-          metadata: { scenario: name, source: "objectanalytics" },
-        });
+      // Format B: direct in/out on the scenario object
+      if (scenario.in !== undefined) scenarioIn += parseInt(scenario.in) || 0;
+      if (scenario.out !== undefined) scenarioOut += parseInt(scenario.out) || 0;
+
+      // Format C: AXIS getAccumulatedCounts flat response
+      // { total: N, human: N, car: M, ... } — no in/out, use scenario name for direction
+      if (scenarioIn === 0 && scenarioOut === 0 && scenario.total !== undefined) {
+        const total = parseInt(scenario.total) || 0;
+        const humanCount = parseInt(scenario.human || "0") || 0;
+        const count = humanCount || total;
+        const nameLower = name.toLowerCase();
+        if (nameLower.includes("enter") || nameLower.includes("in")) {
+          scenarioIn = count;
+        } else if (nameLower.includes("exit") || nameLower.includes("out") || nameLower.includes("leav")) {
+          scenarioOut = count;
+        } else {
+          // Direction unknown — emit as generic line_crossing
+          scenarioIn = count;
+        }
       }
 
-      // Generate a line_crossing event with total crossings (in + out)
+      if (scenarioIn > 0) {
+        events.push({
+          eventType: "people_in",
+          value: scenarioIn,
+          metadata: { scenario: name, source: "objectanalytics" },
+        });
+      }
+      if (scenarioOut > 0) {
+        events.push({
+          eventType: "people_out",
+          value: scenarioOut,
+          metadata: { scenario: name, source: "objectanalytics" },
+        });
+      }
       const totalCrossings = scenarioIn + scenarioOut;
       if (totalCrossings > 0) {
         events.push({
@@ -307,42 +310,34 @@ async function queryObjectAnalyticsData(
   const skipAcap = failedAt && (Date.now() - failedAt) < AOA_FAILURE_CACHE_TTL;
 
   if (!skipAcap) {
-    // Strategy 1: Per-scenario calls using actual scenario IDs from capabilities
+    // Strategy 1: Per-scenario calls using actual scenario IDs
+    // AXIS docs: params key is "scenario" (NOT "scenarioID"), value is the UID integer
     if (scenarios && scenarios.length > 0) {
       const scenariosWithIds = scenarios.filter(s => s.id !== undefined && s.id !== null);
       for (const s of scenariosWithIds) {
         const json = await tryAoaPost(
           ipAddress, username, password, storedApiPath,
           "getAccumulatedCounts", timeout, conn,
-          { scenarioID: s.id }
+          { scenario: s.id }
         );
         if (json) {
           aoaCountsFailedCache.delete(ipAddress);
+          // Log first successful response to verify data format
+          if (allEvents.length === 0) {
+            console.log(`[Analytics] AOA getAccumulatedCounts on ${ipAddress} scenario "${s.name}": ${JSON.stringify(json.data || {}).substring(0, 300)}`);
+          }
           const parsed = parseAoaAccumulatedCounts(json, { name: s.name, type: s.type });
           allEvents.push(...parsed);
         }
       }
     }
 
-    // Strategy 2: channel:0 (some firmware returns all scenarios at once)
-    if (allEvents.length === 0) {
-      const json = await tryAoaPost(
-        ipAddress, username, password, storedApiPath,
-        "getAccumulatedCounts", timeout, conn,
-        { channel: 0 }
-      );
-      if (json) {
-        aoaCountsFailedCache.delete(ipAddress);
-        const parsed = parseAoaAccumulatedCounts(json);
-        allEvents.push(...parsed);
-      }
-    }
-
-    // Strategy 3: No params
+    // Strategy 2: No params (some firmware returns all scenarios)
     if (allEvents.length === 0) {
       const jsonNoParams = await tryAoaPost(
         ipAddress, username, password, storedApiPath,
-        "getAccumulatedCounts", timeout, conn
+        "getAccumulatedCounts", timeout, conn,
+        null
       );
       if (jsonNoParams) {
         aoaCountsFailedCache.delete(ipAddress);
@@ -350,7 +345,7 @@ async function queryObjectAnalyticsData(
         allEvents.push(...parsed);
       } else if (!failedAt) {
         aoaCountsFailedCache.set(ipAddress, Date.now());
-        console.log(`[Analytics] AOA getAccumulatedCounts failed on ${ipAddress}, suppressing retries for 1h (will use Event2/SOAP fallback)`);
+        console.log(`[Analytics] AOA getAccumulatedCounts failed on ${ipAddress}, suppressing retries for 1h`);
       }
     }
   }
@@ -1243,24 +1238,18 @@ async function queryObjectAnalyticsScenarios(
       // Validate that getAccumulatedCounts actually works on this path.
       // Try actual scenario IDs from getConfiguration first, then generic params.
       const paramFormats: Array<{ label: string; params: Record<string, any> | null }> = [];
-      // Add real scenario IDs first (most likely to work)
-      for (const s of scenarios) {
-        if (s.id !== undefined && s.id !== null) {
-          paramFormats.push({ label: `scenarioID:${s.id}`, params: { scenarioID: s.id } });
-        }
-      }
-      // Then try generic params and alternate key names
-      paramFormats.push(
-        { label: "channel:0", params: { channel: 0 } },
-        { label: "empty-params", params: {} },
-        { label: "no-params-key", params: null },
-      );
-      // Also try "scenario" key name (some ACAP versions use this instead of "scenarioID")
+      // AXIS docs: correct key is "scenario" (not "scenarioID"), value is UID integer
       for (const s of scenarios) {
         if (s.id !== undefined && s.id !== null) {
           paramFormats.push({ label: `scenario:${s.id}`, params: { scenario: s.id } });
         }
       }
+      // Fallbacks: no params key, empty params, channel:0
+      paramFormats.push(
+        { label: "no-params-key", params: null },
+        { label: "empty-params", params: {} },
+        { label: "channel:0", params: { channel: 0 } },
+      );
       for (const fmt of paramFormats) {
         const countCheck = await tryAoaPost(ipAddress, username, password, path, "getAccumulatedCounts", timeout, conn, fmt.params);
         if (countCheck) {
