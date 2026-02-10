@@ -574,6 +574,7 @@ async function tryAoaPost(
   // getAccumulatedCounts was introduced in API v1.2 — skip 1.0 to avoid error spam
   const apiVersions = method === "getAccumulatedCounts" ? ["1.2", "1.3"] : ["1.0", "1.2", "1.3"];
   let lastStatus = 0;
+  let lastApiError: any = null;
 
   for (const apiVersion of apiVersions) {
     const controller = new AbortController();
@@ -607,12 +608,11 @@ async function tryAoaPost(
       try {
         const json = JSON.parse(text);
         if (json.error) {
-          console.log(`[Analytics] AOA ${path} ${method} on ${ipAddress}: API error: ${JSON.stringify(json.error)}`);
+          lastApiError = json.error;
           continue;
         }
         return json;
       } catch {
-        console.log(`[Analytics] AOA ${path} ${method} on ${ipAddress}: invalid JSON response`);
         continue;
       }
     } catch (err: any) {
@@ -626,10 +626,10 @@ async function tryAoaPost(
     }
   }
 
-  // Only log 404s once per path (not per version)
-  if (lastStatus === 404) {
-    // Don't log 404s individually - the caller summarizes the result
-  } else if (lastStatus > 0) {
+  // Log failures once (not per version) — compact summary
+  if (lastApiError) {
+    console.log(`[Analytics] AOA ${path} ${method} on ${ipAddress}: API error: ${JSON.stringify(lastApiError)}`);
+  } else if (lastStatus > 0 && lastStatus !== 404) {
     console.log(`[Analytics] AOA ${path} ${method} on ${ipAddress}: HTTP ${lastStatus}`);
   }
 
@@ -1081,6 +1081,9 @@ async function queryObjectAnalyticsScenarios(
     legacyPaths.push("/local/objectanalytics/.apioperator");
   }
 
+  // Track scenarios found via getConfiguration even if getAccumulatedCounts fails
+  let acapScenarios: Array<{ name: string; type: string; id?: number; objectClassifications?: string[] }> = [];
+
   for (const path of legacyPaths) {
     console.log(`[Analytics] Trying ACAP path ${path} on ${ipAddress}...`);
     // Try getConfiguration directly - don't gate on getSupportedVersions
@@ -1088,8 +1091,19 @@ async function queryObjectAnalyticsScenarios(
     const configJson = await tryAoaPost(ipAddress, username, password, path, "getConfiguration", timeout, conn);
     if (configJson) {
       const scenarios = extractAoaScenarios(configJson);
-      console.log(`[Analytics] AOA found at ACAP path ${path} on ${ipAddress}`);
-      return { scenarios, apiPath: path };
+      console.log(`[Analytics] AOA config found at ${path} on ${ipAddress} (${scenarios.length} scenarios)`);
+      acapScenarios = scenarios;
+
+      // Validate that getAccumulatedCounts actually works on this path
+      // before committing it as the polling path
+      const countCheck = await tryAoaPost(ipAddress, username, password, path, "getAccumulatedCounts", timeout, conn, { channel: 0 });
+      if (countCheck) {
+        console.log(`[Analytics] AOA getAccumulatedCounts confirmed on ${path} at ${ipAddress}`);
+        return { scenarios, apiPath: path };
+      }
+      console.log(`[Analytics] AOA ${path} on ${ipAddress}: getConfiguration works but getAccumulatedCounts unsupported`);
+      // Don't return yet — try SOAP/Event2 for data polling below
+      break;
     }
   }
 
@@ -1097,25 +1111,36 @@ async function queryObjectAnalyticsScenarios(
   const { events: soapEvents, reachable: soapReachable } = await querySoapEventInstances(ipAddress, username, password, timeout, conn);
   if (soapEvents.length > 0 || soapReachable) {
     console.log(`[Analytics] SOAP events on ${ipAddress}: ${soapReachable ? "API reachable" : ""} ${soapEvents.length} analytics events - using SOAP for polling`);
-    return { scenarios: [], apiPath: "soap-events" };
+    return { scenarios: acapScenarios, apiPath: "soap-events" };
   }
 
-  // Step 7: If analytics-metadata-config.cgi existed (returned non-null but no scenarios),
-  // fall back to event2 for data polling even without current events
-  if (metadataResult) {
-    console.log(`[Analytics] AOA on ${ipAddress}: metadata-config API exists but no scenarios - using Event2 for polling`);
-    return { scenarios: [], apiPath: "event2" };
+  // Step 7: If analytics-metadata-config exists in API discovery,
+  // try getAccumulatedCounts on it (different CGI than the ACAP control.cgi)
+  if (apis.hasMetadataConfig && acapScenarios.length > 0) {
+    const mdPaths = ["/axis-cgi/analytics-metadata-config.cgi", "/axis-cgi/analytics_metadata_config.cgi"];
+    for (const mdPath of mdPaths) {
+      const mdCountCheck = await tryAoaPost(ipAddress, username, password, mdPath, "getAccumulatedCounts", timeout, conn, { channel: 0 });
+      if (mdCountCheck) {
+        console.log(`[Analytics] AOA getAccumulatedCounts works on ${mdPath} at ${ipAddress}`);
+        return { scenarios: acapScenarios, apiPath: mdPath };
+      }
+    }
   }
 
   // Step 8: If event2 exists in API discovery, use it as fallback even without current data
   // (analytics events may not have fired yet but will during normal operation)
   if (apis.hasEvent2) {
     console.log(`[Analytics] AOA on ${ipAddress}: Event2 available in API discovery - will poll via events`);
-    return { scenarios: [], apiPath: "event2" };
+    return { scenarios: acapScenarios, apiPath: "event2" };
   }
 
-  console.log(`[Analytics] AOA on ${ipAddress}: no working analytics API found (tried metadata-config, Event2, control.cgi, SOAP events)`);
-  return { scenarios: [] };
+  // No working polling path found — return scenarios for display but no apiPath for polling
+  if (acapScenarios.length > 0) {
+    console.log(`[Analytics] AOA on ${ipAddress}: ${acapScenarios.length} scenarios found but no working polling API (config-only)`);
+  } else {
+    console.log(`[Analytics] AOA on ${ipAddress}: no working analytics API found`);
+  }
+  return { scenarios: acapScenarios };
 }
 
 /**
