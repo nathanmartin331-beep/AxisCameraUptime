@@ -27,6 +27,9 @@ const analyticsLimit = pLimit(ANALYTICS_CONCURRENCY);
 // Track which cameras have already had their Event2 topics logged (avoid per-poll log spam)
 const event2LoggedCameras = new Set<string>();
 
+// Track cameras where SOAP response has been debug-logged (one-time per session)
+const soapDebuggedCameras = new Set<string>();
+
 // Track cameras where getAccumulatedCounts failed — suppress repeated error logs.
 // Cleared on re-probe or after 1 hour.
 const aoaCountsFailedCache = new Map<string, number>(); // ip → timestamp of first failure
@@ -894,11 +897,47 @@ async function querySoapEventInstances(
     reachable = true;
     const text = await response.text();
 
-    // Parse analytics-related event topics from SOAP XML response
-    // Look for ObjectAnalytics topics with counting data
-    const topicRegex = /CameraApplicationPlatform\/ObjectAnalytics\/[^<"]+/gi;
-    const dataRegex = /<tt:Data[^>]*>([\s\S]*?)<\/tt:Data>/gi;
-    const simpleItemRegex = /<tt:SimpleItem\s+Name="([^"]+)"\s+Value="([^"]+)"/gi;
+    // Debug: log SOAP response structure on first call per camera
+    if (!soapDebuggedCameras.has(ipAddress)) {
+      soapDebuggedCameras.add(ipAddress);
+      // Extract all topics for debugging
+      const allTopics: string[] = [];
+      const topicExtract = /topic[^>]*>([^<]+)</gi;
+      let tm;
+      while ((tm = topicExtract.exec(text)) !== null) {
+        allTopics.push(tm[1].trim());
+      }
+      // Extract all SimpleItem name/value pairs for debugging
+      const debugItems: string[] = [];
+      const debugSimpleRegex = /<tt:SimpleItem\s+[^>]*Name="([^"]+)"[^>]*Value="([^"]+)"/gi;
+      let dm;
+      while ((dm = debugSimpleRegex.exec(text)) !== null) {
+        debugItems.push(`${dm[1]}=${dm[2]}`);
+      }
+      // Also try without tt: namespace prefix
+      const debugSimpleRegex2 = /<SimpleItem\s+[^>]*Name="([^"]+)"[^>]*Value="([^"]+)"/gi;
+      while ((dm = debugSimpleRegex2.exec(text)) !== null) {
+        debugItems.push(`${dm[1]}=${dm[2]}`);
+      }
+      console.log(`[Analytics] SOAP debug on ${ipAddress}: ${text.length} bytes, ${allTopics.length} topics, ${debugItems.length} SimpleItems`);
+      if (allTopics.length > 0) {
+        // Log all unique topics (useful for understanding camera's event structure)
+        const uniqueTopics = Array.from(new Set(allTopics));
+        console.log(`[Analytics] SOAP topics on ${ipAddress}: ${uniqueTopics.join(" | ")}`);
+      }
+      if (debugItems.length > 0) {
+        console.log(`[Analytics] SOAP data on ${ipAddress}: ${debugItems.join(", ")}`);
+      }
+      if (allTopics.length === 0 && debugItems.length === 0) {
+        // Log first portion of response to understand format
+        console.log(`[Analytics] SOAP raw on ${ipAddress}: ${text.substring(0, 1500)}`);
+      }
+    }
+
+    // Parse analytics-related data from SOAP XML response.
+    // Strategy: extract ALL SimpleItem name/value pairs (from any topic) and check for
+    // counting and occupancy data fields using multiple known field names.
+    const simpleItemRegex = /<(?:tt:)?SimpleItem\s+[^>]*Name="([^"]+)"[^>]*Value="([^"]+)"/gi;
 
     // Extract all SimpleItem name/value pairs from the response
     let match;
@@ -907,24 +946,37 @@ async function querySoapEventInstances(
       items.set(match[1].toLowerCase(), match[2]);
     }
 
-    // Check for counting data
+    // Check for counting data (various field names used by different firmware)
     const total = parseInt(items.get("total") || "0") || 0;
-    const totalHuman = parseInt(items.get("totalhuman") || "0") || 0;
-    const totalCar = parseInt(items.get("totalcar") || "0") || 0;
+    const totalHuman = parseInt(items.get("totalhuman") || items.get("total_human") || "0") || 0;
+    const totalCar = parseInt(items.get("totalcar") || items.get("total_car") || "0") || 0;
+    const enters = parseInt(items.get("enters") || items.get("in") || items.get("totalin") || items.get("total_in") || "0") || 0;
+    const exits = parseInt(items.get("exits") || items.get("out") || items.get("totalout") || items.get("total_out") || "0") || 0;
+    const active = parseInt(items.get("active") || "0") || 0;
 
-    if (total > 0 || totalHuman > 0) {
-      events.push({
-        eventType: "line_crossing",
-        value: total || totalHuman,
-        metadata: { source: "soap-events", totalHuman, totalCar },
-      });
-      if (totalHuman > 0) {
-        events.push({ eventType: "people_in", value: totalHuman, metadata: { source: "soap-events" } });
+    if (total > 0 || totalHuman > 0 || enters > 0 || exits > 0) {
+      if (enters > 0 || totalHuman > 0) {
+        events.push({ eventType: "people_in", value: enters || totalHuman, metadata: { source: "soap-events" } });
+      }
+      if (exits > 0) {
+        events.push({ eventType: "people_out", value: exits, metadata: { source: "soap-events" } });
+      }
+      const crossingTotal = total || (enters + exits) || totalHuman;
+      if (crossingTotal > 0) {
+        events.push({
+          eventType: "line_crossing",
+          value: crossingTotal,
+          metadata: { source: "soap-events", totalHuman, totalCar, enters, exits },
+        });
       }
     }
 
-    // Check for occupancy data
-    const occupancy = parseInt(items.get("currentoccupancy") || items.get("occupancy") || "0") || 0;
+    // Check for occupancy data (various field names)
+    const occupancy = parseInt(
+      items.get("currentoccupancy") || items.get("occupancy") || items.get("current_occupancy") ||
+      items.get("count") || items.get("objects") || items.get("currentcount") ||
+      (active > 0 ? String(active) : "0") || "0"
+    ) || 0;
     if (occupancy > 0) {
       events.push({ eventType: "occupancy", value: occupancy, metadata: { source: "soap-events" } });
     }
@@ -1092,16 +1144,28 @@ async function queryObjectAnalyticsScenarios(
     if (configJson) {
       const scenarios = extractAoaScenarios(configJson);
       console.log(`[Analytics] AOA config found at ${path} on ${ipAddress} (${scenarios.length} scenarios)`);
+      // Debug: log full scenario details including IDs
+      for (const s of scenarios) {
+        console.log(`[Analytics] AOA scenario on ${ipAddress}: id=${s.id} name="${s.name}" type="${s.type}" classes=${JSON.stringify(s.objectClassifications || [])}`);
+      }
       acapScenarios = scenarios;
 
-      // Validate that getAccumulatedCounts actually works on this path
-      // before committing it as the polling path
-      const countCheck = await tryAoaPost(ipAddress, username, password, path, "getAccumulatedCounts", timeout, conn, { channel: 0 });
-      if (countCheck) {
-        console.log(`[Analytics] AOA getAccumulatedCounts confirmed on ${path} at ${ipAddress}`);
-        return { scenarios, apiPath: path };
+      // Validate that getAccumulatedCounts actually works on this path.
+      // Try multiple parameter formats to find what the ACAP accepts.
+      const paramFormats: Array<{ label: string; params: Record<string, any> }> = [
+        { label: "channel:0", params: { channel: 0 } },
+        { label: "no-params", params: {} },
+        { label: "scenarioID:0", params: { scenarioID: 0 } },
+        { label: "scenarioID:\"0\"", params: { scenarioID: "0" } },
+      ];
+      for (const fmt of paramFormats) {
+        const countCheck = await tryAoaPost(ipAddress, username, password, path, "getAccumulatedCounts", timeout, conn, fmt.params);
+        if (countCheck) {
+          console.log(`[Analytics] AOA getAccumulatedCounts confirmed on ${path} at ${ipAddress} with params: ${fmt.label}`);
+          return { scenarios, apiPath: path };
+        }
       }
-      console.log(`[Analytics] AOA ${path} on ${ipAddress}: getConfiguration works but getAccumulatedCounts unsupported`);
+      console.log(`[Analytics] AOA ${path} on ${ipAddress}: getConfiguration works but getAccumulatedCounts unsupported (tried all param formats)`);
       // Don't return yet — try SOAP/Event2 for data polling below
       break;
     }
@@ -1221,9 +1285,10 @@ export async function probeAnalyticsCapabilities(
     objectAnalyticsScenarios: [],
   };
 
-  // Clear failure caches so a re-probe can retry getAccumulatedCounts
+  // Clear failure/debug caches so a re-probe can retry and log fresh data
   aoaCountsFailedCache.delete(ipAddress);
   event2LoggedCameras.delete(ipAddress);
+  soapDebuggedCameras.delete(ipAddress);
 
   console.log(`[Analytics] Starting probe for ${ipAddress}...`);
 
