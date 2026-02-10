@@ -220,6 +220,7 @@ export interface IStorage {
   getAnalyticsEvents(cameraId: string, eventType: string, startDate: Date, endDate: Date): Promise<AnalyticsEvent[]>;
   getLatestAnalyticsEvent(cameraId: string, eventType: string): Promise<AnalyticsEvent | undefined>;
   getAnalyticsDailyTotals(cameraId: string, eventType: string, days: number): Promise<Array<{ date: string; total: number; metadata?: Record<string, any> }>>;
+  getLatestAnalyticsPerCamera(cameraIds: string[], eventTypes: string[]): Promise<Map<string, Map<string, { value: number; metadata?: Record<string, any> }>>>;
   getGroupCurrentOccupancy(groupId: string): Promise<{ total: number; cameras: Array<{ id: string; name: string; occupancy: number }> }>;
   getGroupAnalyticsSummary(groupId: string, startDate: Date, endDate: Date): Promise<{
     totalIn: number;
@@ -908,10 +909,44 @@ export class DatabaseStorage implements IStorage {
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
     startDate.setHours(0, 0, 0, 0);
+    const startTs = Math.floor(startDate.getTime() / 1000);
+    const endTs = Math.floor(endDate.getTime() / 1000);
 
-    // Fetch all events in range, then group by day and take max value per day.
-    // Since AXIS counters are cumulative and reset at midnight, the max value
-    // each day IS the daily total. Also grab the metadata from the max-value event.
+    const dailyMap = new Map<string, { total: number; metadata?: Record<string, any> }>();
+
+    // 1. Fetch from pre-aggregated daily summary table (data older than 48h)
+    const dailyRows = sqlite.prepare(`
+      SELECT day_start, max_value, metadata FROM analytics_daily_summary
+      WHERE camera_id = ? AND event_type = ? AND day_start >= ? AND day_start <= ?
+    `).all(cameraId, eventType, startTs, endTs) as Array<{ day_start: number; max_value: number; metadata: string | null }>;
+
+    for (const row of dailyRows) {
+      const d = new Date(row.day_start * 1000);
+      const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      let meta: Record<string, any> | undefined;
+      if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
+      dailyMap.set(dateKey, { total: row.max_value ?? 0, metadata: meta });
+    }
+
+    // 2. Fetch from hourly summary table (data 6h–48h old)
+    const hourlyRows = sqlite.prepare(`
+      SELECT hour_start, max_value, metadata FROM analytics_hourly_summary
+      WHERE camera_id = ? AND event_type = ? AND hour_start >= ? AND hour_start <= ?
+    `).all(cameraId, eventType, startTs, endTs) as Array<{ hour_start: number; max_value: number; metadata: string | null }>;
+
+    for (const row of hourlyRows) {
+      const d = new Date(row.hour_start * 1000);
+      const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const existing = dailyMap.get(dateKey);
+      const hourMax = row.max_value ?? 0;
+      if (!existing || hourMax > existing.total) {
+        let meta: Record<string, any> | undefined;
+        if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
+        dailyMap.set(dateKey, { total: hourMax, metadata: meta });
+      }
+    }
+
+    // 3. Fetch from raw events table (recent data < 6h, not yet rolled up)
     const events = await db
       .select()
       .from(analyticsEvents)
@@ -925,8 +960,6 @@ export class DatabaseStorage implements IStorage {
       )
       .orderBy(analyticsEvents.timestamp);
 
-    // Group by date string (YYYY-MM-DD) and take max value per day
-    const dailyMap = new Map<string, { total: number; metadata?: Record<string, any> }>();
     for (const evt of events) {
       const d = new Date(evt.timestamp);
       const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -939,6 +972,53 @@ export class DatabaseStorage implements IStorage {
     return Array.from(dailyMap.entries())
       .map(([date, data]) => ({ date, ...data }))
       .sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  /**
+   * Get the latest analytics event per camera per event type in a single query.
+   * Replaces N individual getLatestAnalyticsEvent calls with one GROUP BY query.
+   * At 500 analytics cameras, this turns ~1,500 queries into 1.
+   */
+  async getLatestAnalyticsPerCamera(
+    cameraIds: string[],
+    eventTypes: string[]
+  ): Promise<Map<string, Map<string, { value: number; metadata?: Record<string, any> }>>> {
+    const result = new Map<string, Map<string, { value: number; metadata?: Record<string, any> }>>();
+    if (cameraIds.length === 0 || eventTypes.length === 0) return result;
+
+    // Use raw SQL for the GROUP BY with window function to get latest row per camera+type
+    const placeholders = cameraIds.map(() => "?").join(",");
+    const typePlaceholders = eventTypes.map(() => "?").join(",");
+
+    const rows = sqlite.prepare(`
+      SELECT camera_id, event_type, value, metadata
+      FROM analytics_events ae
+      WHERE camera_id IN (${placeholders})
+        AND event_type IN (${typePlaceholders})
+        AND timestamp = (
+          SELECT MAX(ae2.timestamp)
+          FROM analytics_events ae2
+          WHERE ae2.camera_id = ae.camera_id AND ae2.event_type = ae.event_type
+        )
+    `).all(...cameraIds, ...eventTypes) as Array<{
+      camera_id: string;
+      event_type: string;
+      value: number;
+      metadata: string | null;
+    }>;
+
+    for (const row of rows) {
+      if (!result.has(row.camera_id)) {
+        result.set(row.camera_id, new Map());
+      }
+      let meta: Record<string, any> | undefined;
+      if (row.metadata) {
+        try { meta = JSON.parse(row.metadata); } catch {}
+      }
+      result.get(row.camera_id)!.set(row.event_type, { value: row.value, metadata: meta });
+    }
+
+    return result;
   }
 
   async getGroupCurrentOccupancy(groupId: string): Promise<{

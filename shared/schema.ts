@@ -412,6 +412,7 @@ export const analyticsHourlySummary = sqliteTable(
     maxValue: integer("max_value"),
     minValue: integer("min_value"),
     sampleCount: integer("sample_count").notNull().default(0),
+    metadata: text("metadata", { mode: "json" }).$type<Record<string, any>>(), // vehicle breakdown from max-value row
   },
   (table) => ({
     uniqueHour: uniqueIndex("idx_analytics_hourly_camera_type_hour").on(table.cameraId, table.eventType, table.hourStart),
@@ -435,6 +436,7 @@ export const analyticsDailySummary = sqliteTable(
     maxValue: integer("max_value"),
     minValue: integer("min_value"),
     sampleCount: integer("sample_count").notNull().default(0),
+    metadata: text("metadata", { mode: "json" }).$type<Record<string, any>>(), // vehicle breakdown from max-value row
   },
   (table) => ({
     uniqueDay: uniqueIndex("idx_analytics_daily_camera_type_day").on(table.cameraId, table.eventType, table.dayStart),

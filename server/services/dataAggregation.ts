@@ -69,9 +69,9 @@ async function runHourlyAggregation() {
 
     console.log(`[Aggregation] Uptime hourly: ${(uptimeInserted as any).changes ?? 0} summaries upserted`);
 
-    // Analytics hourly rollup
+    // Analytics hourly rollup — preserve metadata from the max-value row (vehicle breakdown)
     const analyticsInserted = sqlite.prepare(`
-      INSERT OR REPLACE INTO analytics_hourly_summary (id, camera_id, hour_start, event_type, sum_value, avg_value, max_value, min_value, sample_count)
+      INSERT OR REPLACE INTO analytics_hourly_summary (id, camera_id, hour_start, event_type, sum_value, avg_value, max_value, min_value, sample_count, metadata)
       SELECT
         lower(hex(randomblob(16))),
         camera_id,
@@ -81,8 +81,12 @@ async function runHourlyAggregation() {
         AVG(value) AS avg_value,
         MAX(value) AS max_value,
         MIN(value) AS min_value,
-        COUNT(*) AS sample_count
-      FROM analytics_events
+        COUNT(*) AS sample_count,
+        (SELECT ae2.metadata FROM analytics_events ae2
+         WHERE ae2.camera_id = ae.camera_id AND ae2.event_type = ae.event_type
+           AND (ae2.timestamp / 3600) = (ae.timestamp / 3600)
+         ORDER BY ae2.value DESC LIMIT 1) AS metadata
+      FROM analytics_events ae
       WHERE timestamp <= ?
       GROUP BY camera_id, event_type, hour_start
     `).run(cutoffTs);
@@ -148,9 +152,9 @@ async function runDailyAggregation() {
 
     console.log(`[Aggregation] Uptime daily: ${(uptimeInserted as any).changes ?? 0} summaries upserted`);
 
-    // Analytics daily rollup from hourly
+    // Analytics daily rollup from hourly — preserve metadata from the max-value hour
     const analyticsInserted = sqlite.prepare(`
-      INSERT OR REPLACE INTO analytics_daily_summary (id, camera_id, day_start, event_type, sum_value, avg_value, max_value, min_value, sample_count)
+      INSERT OR REPLACE INTO analytics_daily_summary (id, camera_id, day_start, event_type, sum_value, avg_value, max_value, min_value, sample_count, metadata)
       SELECT
         lower(hex(randomblob(16))),
         camera_id,
@@ -160,8 +164,12 @@ async function runDailyAggregation() {
         AVG(avg_value) AS avg_value,
         MAX(max_value) AS max_value,
         MIN(min_value) AS min_value,
-        SUM(sample_count) AS sample_count
-      FROM analytics_hourly_summary
+        SUM(sample_count) AS sample_count,
+        (SELECT h2.metadata FROM analytics_hourly_summary h2
+         WHERE h2.camera_id = h.camera_id AND h2.event_type = h.event_type
+           AND (h2.hour_start / 86400) = (h.hour_start / 86400)
+         ORDER BY h2.max_value DESC LIMIT 1) AS metadata
+      FROM analytics_hourly_summary h
       WHERE hour_start <= ?
       GROUP BY camera_id, event_type, day_start
     `).run(cutoffTs);

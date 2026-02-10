@@ -356,20 +356,26 @@ async function queryObjectAnalyticsData(
       ? "/local/objectanalytics/control.cgi"
       : storedApiPath;
 
-    for (const s of scenariosWithIds) {
-      const json = await tryAoaPost(
-        ipAddress, username, password, acapPath,
-        "getAccumulatedCounts", timeout, conn,
-        { scenario: Number(s.id) }
-      );
-      if (json) {
-        aoaCountsFailedCache.delete(ipAddress);
-        if (allEvents.length === 0) {
-          console.log(`[Analytics] AOA getAccumulatedCounts on ${ipAddress} scenario "${s.name}": ${JSON.stringify(json.data || {}).substring(0, 300)}`);
-        }
-        const parsed = parseAoaAccumulatedCounts(json, { name: s.name, type: s.type });
-        allEvents.push(...parsed);
+    // Fire all per-scenario requests in parallel to cut per-camera latency
+    const scenarioResults = await Promise.allSettled(
+      scenariosWithIds.map(s =>
+        tryAoaPost(
+          ipAddress, username, password, acapPath,
+          "getAccumulatedCounts", timeout, conn,
+          { scenario: Number(s.id) }
+        ).then(json => ({ json, scenario: s }))
+      )
+    );
+
+    for (const result of scenarioResults) {
+      if (result.status !== "fulfilled" || !result.value.json) continue;
+      const { json, scenario: s } = result.value;
+      aoaCountsFailedCache.delete(ipAddress);
+      if (allEvents.length === 0) {
+        console.log(`[Analytics] AOA getAccumulatedCounts on ${ipAddress} scenario "${s.name}": ${JSON.stringify(json.data || {}).substring(0, 300)}`);
       }
+      const parsed = parseAoaAccumulatedCounts(json, { name: s.name, type: s.type });
+      allEvents.push(...parsed);
     }
 
     // Strategy 2: No params (some firmware returns all scenarios)
@@ -1646,27 +1652,30 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
 }
 
 /**
- * Poll all cameras with analytics capabilities
+ * Filter all cameras down to those with analytics enabled and a working API path.
+ */
+function getAnalyticsCameraList(allCameras: any[]): any[] {
+  return allCameras.filter((c) => {
+    const caps = c.capabilities as CameraCapabilities | null;
+    const enabled = caps?.enabledAnalytics;
+    const hasWorkingOa = caps?.analytics?.objectAnalytics === true &&
+                         !!caps?.analytics?.objectAnalyticsApiPath &&
+                         enabled?.objectAnalytics !== false;
+    return (
+      (caps?.analytics?.peopleCount === true && enabled?.peopleCount !== false) ||
+      (caps?.analytics?.occupancyEstimation === true && enabled?.occupancyEstimation !== false) ||
+      hasWorkingOa
+    );
+  });
+}
+
+/**
+ * Poll all cameras with analytics capabilities (used for initial one-shot poll).
  */
 async function pollAllCameraAnalytics(): Promise<void> {
   try {
     const allCameras = await db.select().from(cameras);
-
-    // Filter to cameras with analytics available, enabled, AND a working API path.
-    // For objectAnalytics specifically, require objectAnalyticsApiPath - without it,
-    // the AOA API is unreachable (all paths returned 404) and polling would just spam 404s.
-    const analyticsCameras = allCameras.filter((c) => {
-      const caps = c.capabilities as CameraCapabilities | null;
-      const enabled = caps?.enabledAnalytics;
-      const hasWorkingOa = caps?.analytics?.objectAnalytics === true &&
-                           !!caps?.analytics?.objectAnalyticsApiPath &&
-                           enabled?.objectAnalytics !== false;
-      return (
-        (caps?.analytics?.peopleCount === true && enabled?.peopleCount !== false) ||
-        (caps?.analytics?.occupancyEstimation === true && enabled?.occupancyEstimation !== false) ||
-        hasWorkingOa
-      );
-    });
+    const analyticsCameras = getAnalyticsCameraList(allCameras);
 
     if (analyticsCameras.length === 0) {
       return; // No analytics cameras, skip silently
@@ -1686,6 +1695,45 @@ async function pollAllCameraAnalytics(): Promise<void> {
     }
   } catch (error) {
     console.error("[Analytics] Error during polling cycle:", error);
+  }
+}
+
+// Staggered cohort polling — same pattern as uptime monitor in cameraMonitor.ts
+const ANALYTICS_NUM_COHORTS = 3;
+const ANALYTICS_COHORT_STAGGER_MS = 20_000; // 20s between cohorts within 1-min window
+
+/**
+ * Poll a single cohort of analytics cameras.
+ * Cameras are deterministically assigned to cohorts by hashing their ID.
+ */
+async function pollAnalyticsCohort(cohortIndex: number): Promise<void> {
+  try {
+    const allCameras = await db.select().from(cameras);
+    const analyticsCameras = getAnalyticsCameraList(allCameras);
+
+    // Assign cameras to cohorts using the same hash as cameraMonitor.ts
+    const cohortCameras = analyticsCameras.filter((cam) => {
+      let hash = 0;
+      for (let i = 0; i < cam.id.length; i++) {
+        hash = ((hash << 5) - hash + cam.id.charCodeAt(i)) | 0;
+      }
+      return ((hash >>> 0) % ANALYTICS_NUM_COHORTS) === cohortIndex;
+    });
+
+    if (cohortCameras.length === 0) return;
+
+    console.log(`[Analytics] Cohort ${cohortIndex}/${ANALYTICS_NUM_COHORTS - 1}: polling ${cohortCameras.length} cameras`);
+
+    const results = await Promise.allSettled(
+      cohortCameras.map((camera) => analyticsLimit(() => pollCameraAnalytics(camera)))
+    );
+
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed > 0) {
+      console.log(`[Analytics] Cohort ${cohortIndex} complete: ${cohortCameras.length - failed} ok, ${failed} failed`);
+    }
+  } catch (error) {
+    console.error(`[Analytics] Error in cohort ${cohortIndex}:`, error);
   }
 }
 
@@ -1744,16 +1792,22 @@ export function startAnalyticsPolling() {
 
   // Clean stale paths before first poll to prevent 404 spam
   cleanupStaleAnalyticsPaths().then(() => {
-    // Initial poll after startup delay
+    // Initial full poll after startup delay (one-shot, not staggered)
     setTimeout(() => {
       pollAllCameraAnalytics();
     }, 15000); // 15s after startup (after camera monitor's 5s delay)
   });
 
-  // Schedule regular polling
+  // Schedule staggered cohort polling: every N minutes, fire cohorts 20s apart
   cron.schedule(`*/${intervalMinutes} * * * *`, () => {
-    pollAllCameraAnalytics();
+    for (let cohort = 0; cohort < ANALYTICS_NUM_COHORTS; cohort++) {
+      setTimeout(() => {
+        pollAnalyticsCohort(cohort);
+      }, cohort * ANALYTICS_COHORT_STAGGER_MS);
+    }
   });
+
+  console.log(`[Analytics] Staggered polling: ${ANALYTICS_NUM_COHORTS} cohorts, ${ANALYTICS_COHORT_STAGGER_MS}ms apart`);
 }
 
 // Export for manual triggering
