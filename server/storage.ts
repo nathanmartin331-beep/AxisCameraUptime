@@ -702,6 +702,17 @@ export class DatabaseStorage implements IStorage {
 
     const priorEvent = await this.getLatestEventBefore(cameraId, startDate);
 
+    // Determine the prior status. If no event exists before the window
+    // but the camera's last known boot time predates the window start,
+    // the camera was online throughout (its boot event was purged by retention).
+    let priorStatus = priorEvent?.status;
+    if (!priorStatus && camera?.lastBootAt) {
+      const bootTime = new Date(camera.lastBootAt);
+      if (bootTime < startDate) {
+        priorStatus = "online";
+      }
+    }
+
     // Use validated pure function for calculation
     const { calculateUptimeFromEvents } = await import('./uptimeCalculator.js');
 
@@ -714,7 +725,7 @@ export class DatabaseStorage implements IStorage {
       eventList,
       startDate,
       endDate,
-      priorEvent?.status
+      priorStatus
     );
 
     const result = { percentage, monitoredDays };
