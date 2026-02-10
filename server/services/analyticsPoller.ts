@@ -589,10 +589,9 @@ async function tryAoaPost(
   method: string,
   timeout: number = 8000,
   conn?: CameraConnectionInfo,
-  extraParams: Record<string, any> = {}
+  extraParams: Record<string, any> | null = {}
 ): Promise<any | null> {
-  // getAccumulatedCounts was introduced in API v1.2 — skip 1.0 to avoid error spam
-  const apiVersions = method === "getAccumulatedCounts" ? ["1.2", "1.3"] : ["1.0", "1.2", "1.3"];
+  const apiVersions = method === "getAccumulatedCounts" ? ["1.0", "1.2", "1.3"] : ["1.0", "1.2", "1.3"];
   let lastStatus = 0;
   let lastApiError: any = null;
 
@@ -603,6 +602,9 @@ async function tryAoaPost(
 
     try {
       const url = buildCameraUrl(ipAddress, path, conn);
+      // When extraParams is null, omit the params key entirely from the JSON body
+      const bodyObj: any = { apiVersion, method };
+      if (extraParams !== null) bodyObj.params = extraParams;
       const response = await authFetch(
         url,
         username,
@@ -610,7 +612,7 @@ async function tryAoaPost(
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ apiVersion, method, params: extraParams }),
+          body: JSON.stringify(bodyObj),
           signal: controller.signal,
           dispatcher,
         }
@@ -1050,6 +1052,25 @@ async function querySoapEventInstances(
           const pairs = Array.from(allItems.entries()).slice(0, 20).map(([k, v]) => `${k}=${v}`).join(", ");
           console.log(`[Analytics] SOAP items on ${ipAddress} (no analytics match): ${pairs}`);
         }
+        // DEBUG: Extract the ObjectAnalytics section to understand data format
+        const oaMatch = text.match(/(<[^<]*ObjectAnalytics[\s\S]{0,3000})/i);
+        if (oaMatch) {
+          console.log(`[Analytics] SOAP ObjectAnalytics section on ${ipAddress}: ${oaMatch[1].substring(0, 1500)}`);
+        }
+        // DEBUG: Find all MessageInstance blocks and log their content tags
+        const msgBlocks = text.match(/<(?:\w+:)?MessageInstance>[\s\S]*?<\/(?:\w+:)?MessageInstance>/gi) || [];
+        console.log(`[Analytics] SOAP on ${ipAddress}: ${msgBlocks.length} MessageInstance blocks`);
+        if (msgBlocks.length > 0) {
+          // Log the first 2 non-trivial MessageInstance blocks
+          let logged = 0;
+          for (const block of msgBlocks) {
+            if (logged >= 2) break;
+            if (block.includes("Analytics") || block.includes("Scenario") || block.includes("counting") || block.includes("Crossed")) {
+              console.log(`[Analytics] SOAP analytics MessageInstance on ${ipAddress}: ${block.substring(0, 800)}`);
+              logged++;
+            }
+          }
+        }
       }
     }
 
@@ -1221,18 +1242,25 @@ async function queryObjectAnalyticsScenarios(
 
       // Validate that getAccumulatedCounts actually works on this path.
       // Try actual scenario IDs from getConfiguration first, then generic params.
-      const paramFormats: Array<{ label: string; params: Record<string, any> }> = [];
+      const paramFormats: Array<{ label: string; params: Record<string, any> | null }> = [];
       // Add real scenario IDs first (most likely to work)
       for (const s of scenarios) {
         if (s.id !== undefined && s.id !== null) {
           paramFormats.push({ label: `scenarioID:${s.id}`, params: { scenarioID: s.id } });
         }
       }
-      // Then try generic params
+      // Then try generic params and alternate key names
       paramFormats.push(
         { label: "channel:0", params: { channel: 0 } },
-        { label: "no-params", params: {} },
+        { label: "empty-params", params: {} },
+        { label: "no-params-key", params: null },
       );
+      // Also try "scenario" key name (some ACAP versions use this instead of "scenarioID")
+      for (const s of scenarios) {
+        if (s.id !== undefined && s.id !== null) {
+          paramFormats.push({ label: `scenario:${s.id}`, params: { scenario: s.id } });
+        }
+      }
       for (const fmt of paramFormats) {
         const countCheck = await tryAoaPost(ipAddress, username, password, path, "getAccumulatedCounts", timeout, conn, fmt.params);
         if (countCheck) {
