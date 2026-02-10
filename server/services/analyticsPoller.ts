@@ -897,40 +897,61 @@ async function querySoapEventInstances(
     reachable = true;
     const text = await response.text();
 
-    // Debug: log SOAP response structure on first call per camera
+    // Debug: save full SOAP response to file for first camera, and log structure for all
     if (!soapDebuggedCameras.has(ipAddress)) {
       soapDebuggedCameras.add(ipAddress);
-      // Extract all topics for debugging
-      const allTopics: string[] = [];
-      const topicExtract = /topic[^>]*>([^<]+)</gi;
-      let tm;
-      while ((tm = topicExtract.exec(text)) !== null) {
-        allTopics.push(tm[1].trim());
-      }
-      // Extract all SimpleItem name/value pairs for debugging
-      const debugItems: string[] = [];
-      const debugSimpleRegex = /<tt:SimpleItem\s+[^>]*Name="([^"]+)"[^>]*Value="([^"]+)"/gi;
+
+      // Save full response for first camera only (for offline analysis)
+      try {
+        const fs = await import("fs");
+        const debugDir = "./data";
+        if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true });
+        fs.writeFileSync(`${debugDir}/soap-debug-${ipAddress.replace(/\./g, "_")}.xml`, text);
+        console.log(`[Analytics] SOAP debug: saved full response to ${debugDir}/soap-debug-${ipAddress.replace(/\./g, "_")}.xml (${text.length} bytes)`);
+      } catch { /* ignore write errors */ }
+
+      // Search for ANY Name/Value attribute patterns in the XML (namespace-agnostic)
+      const nameValueRegex = /Name="([^"]+)"[^>]*Value="([^"]+)"/gi;
+      const allItems: string[] = [];
       let dm;
-      while ((dm = debugSimpleRegex.exec(text)) !== null) {
-        debugItems.push(`${dm[1]}=${dm[2]}`);
+      while ((dm = nameValueRegex.exec(text)) !== null) {
+        allItems.push(`${dm[1]}=${dm[2]}`);
       }
-      // Also try without tt: namespace prefix
-      const debugSimpleRegex2 = /<SimpleItem\s+[^>]*Name="([^"]+)"[^>]*Value="([^"]+)"/gi;
-      while ((dm = debugSimpleRegex2.exec(text)) !== null) {
-        debugItems.push(`${dm[1]}=${dm[2]}`);
+      // Also check Value before Name
+      const valueNameRegex = /Value="([^"]+)"[^>]*Name="([^"]+)"/gi;
+      while ((dm = valueNameRegex.exec(text)) !== null) {
+        allItems.push(`${dm[2]}=${dm[1]}`);
       }
-      console.log(`[Analytics] SOAP debug on ${ipAddress}: ${text.length} bytes, ${allTopics.length} topics, ${debugItems.length} SimpleItems`);
-      if (allTopics.length > 0) {
-        // Log all unique topics (useful for understanding camera's event structure)
-        const uniqueTopics = Array.from(new Set(allTopics));
-        console.log(`[Analytics] SOAP topics on ${ipAddress}: ${uniqueTopics.join(" | ")}`);
+
+      // Find all element names containing "Message", "Topic", "Instance", "Analytics", "Scenario"
+      const interestingTags: string[] = [];
+      const tagRegex = /<([a-zA-Z0-9:_]+)[^>]*(?:topic|analytics|scenario|counting|occupancy|crossline|message|instance)/gi;
+      let tm;
+      while ((tm = tagRegex.exec(text)) !== null) {
+        interestingTags.push(tm[1]);
       }
-      if (debugItems.length > 0) {
-        console.log(`[Analytics] SOAP data on ${ipAddress}: ${debugItems.join(", ")}`);
+
+      // Look for wstop:topic="true" elements (ONVIF topic tree nodes)
+      const topicNodes: string[] = [];
+      const topicNodeRegex = /<([a-zA-Z0-9:_]+)\s[^>]*wstop:topic="true"/gi;
+      while ((tm = topicNodeRegex.exec(text)) !== null) {
+        topicNodes.push(tm[1]);
       }
-      if (allTopics.length === 0 && debugItems.length === 0) {
-        // Log first portion of response to understand format
-        console.log(`[Analytics] SOAP raw on ${ipAddress}: ${text.substring(0, 1500)}`);
+
+      console.log(`[Analytics] SOAP debug on ${ipAddress}: ${text.length} bytes, ${allItems.length} Name/Value pairs, ${topicNodes.length} topic nodes`);
+      if (allItems.length > 0) {
+        console.log(`[Analytics] SOAP items on ${ipAddress}: ${allItems.slice(0, 30).join(", ")}`);
+      }
+      if (topicNodes.length > 0) {
+        console.log(`[Analytics] SOAP topic nodes on ${ipAddress}: ${topicNodes.join(", ")}`);
+      }
+      if (interestingTags.length > 0) {
+        console.log(`[Analytics] SOAP interesting tags on ${ipAddress}: ${Array.from(new Set(interestingTags)).join(", ")}`);
+      }
+      // Show a sample from the body (skip namespace prologue)
+      const bodyStart = text.indexOf("<SOAP-ENV:Body");
+      if (bodyStart > 0) {
+        console.log(`[Analytics] SOAP body sample on ${ipAddress}: ${text.substring(bodyStart, bodyStart + 2000)}`);
       }
     }
 
