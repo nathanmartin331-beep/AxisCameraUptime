@@ -124,7 +124,7 @@ async function probeBasicDeviceInfo(
   }
 }
 
-async function checkAxisCamera(ipAddress: string, timeout: number = 3000): Promise<ScanResult> {
+async function checkAxisCamera(ipAddress: string, timeout: number = 5000): Promise<ScanResult> {
   // Try HTTP first, then HTTPS fallback (AXIS OS 13+ may have HTTP disabled)
   for (const protocol of ['http', 'https'] as const) {
     const controller = new AbortController();
@@ -143,8 +143,28 @@ async function checkAxisCamera(ipAddress: string, timeout: number = 3000): Promi
 
       if (response.ok) {
         const text = await response.text();
-        if (text.includes("systemready=")) {
-          // Confirmed Axis camera - get device info without auth
+        const trimmed = text.trim();
+
+        // Detect Axis camera from systemready response:
+        // Legacy format: "systemready=yes\n..."
+        // Modern JSON: {"apiVersion":"1.0","data":{"systemReady":"yes"}}
+        // Also accept any valid response from /axis-cgi/ path as Axis indicator
+        let isAxisResponse = false;
+
+        if (trimmed.includes("systemready=")) {
+          isAxisResponse = true;
+        } else if (trimmed.startsWith('{')) {
+          try {
+            const json = JSON.parse(trimmed);
+            if (json.data?.systemReady || json.data?.systemready || json.apiVersion) {
+              isAxisResponse = true;
+            }
+          } catch {
+            // Not valid JSON, ignore
+          }
+        }
+
+        if (isAxisResponse) {
           const deviceInfo = await probeBasicDeviceInfo(ipAddress, 3000, protocol);
 
           let model = deviceInfo?.model;
@@ -153,7 +173,6 @@ async function checkAxisCamera(ipAddress: string, timeout: number = 3000): Promi
           if (!model) {
             model = "Axis Camera";
           } else {
-            // Parse series from model string
             const seriesMatch = model.match(/AXIS\s+([PQMFAITDWC])\d/i);
             series = seriesMatch ? seriesMatch[1].toUpperCase() : undefined;
           }
@@ -171,9 +190,9 @@ async function checkAxisCamera(ipAddress: string, timeout: number = 3000): Promi
         }
       }
 
-      // If HTTP gave a non-200 response, try HTTPS next
+      // If HTTP gave a non-200 or unrecognized response, try HTTPS next
       if (protocol === 'http') continue;
-      return { ipAddress, isAxis: false, error: `HTTP ${response.status}` };
+      return { ipAddress, isAxis: false, error: `Unrecognized response (HTTP ${response.status})` };
     } catch (error: any) {
       clearTimeout(timeoutId);
       // If HTTP failed (connection refused/timeout), try HTTPS
@@ -243,7 +262,9 @@ export async function discoverSSDP(timeoutMs: number = 5000): Promise<ScanResult
   const seen = new Set<string>();
 
   try {
-    const { Client: SSDPClient } = await import('node-ssdp');
+    const nodeSsdp = await import('node-ssdp');
+    const SSDPClient = (nodeSsdp as any).default?.Client || (nodeSsdp as any).Client;
+    if (!SSDPClient) throw new Error('Could not resolve SSDP Client from node-ssdp');
     const client = new SSDPClient();
 
     return new Promise((resolve) => {
