@@ -744,7 +744,32 @@ async function checkAllCameras() {
           pendingStatusUpdates.push(result.statusUpdate);
           pendingEvents.push(result.pendingEvent);
         } catch (error: any) {
-          // Camera is offline or unreachable
+          // Auto-fallback: if camera is on HTTP and unreachable, try HTTPS
+          // Handles AXIS OS 13+ upgrades that disable HTTP port 80
+          const conn = getConnectionInfo(camera);
+          if (conn.protocol === "http") {
+            try {
+              const httpsConn: CameraConnectionInfo = { protocol: "https", port: 443, verifySslCert: false };
+              const result = await pollSingleCamera(camera, httpsConn);
+
+              // HTTPS worked — auto-migrate the camera record
+              await db.update(cameras)
+                .set({ protocol: "https", port: 443, updatedAt: new Date() })
+                .where(eq(cameras.id, camera.id));
+              console.log(`[Monitor] ${camera.name} (${camera.ipAddress}) - Auto-migrated to HTTPS (HTTP unreachable)`);
+
+              // Clear the VAPIX protocol cache so it re-discovers on the new protocol
+              protocolCache.delete(camera.ipAddress);
+
+              pendingStatusUpdates.push(result.statusUpdate);
+              pendingEvents.push(result.pendingEvent);
+              return; // Success via HTTPS — skip offline recording
+            } catch {
+              // HTTPS also failed — fall through to offline
+            }
+          }
+
+          // Camera is offline or unreachable on both protocols
           pendingStatusUpdates.push({
             id: camera.id,
             status: "offline",
@@ -820,6 +845,27 @@ async function checkCameraCohort(cohortIndex: number) {
           pendingStatusUpdates.push(result.statusUpdate);
           pendingEvents.push(result.pendingEvent);
         } catch (error: any) {
+          // Auto-fallback: if camera is on HTTP and unreachable, try HTTPS
+          const conn = getConnectionInfo(camera);
+          if (conn.protocol === "http") {
+            try {
+              const httpsConn: CameraConnectionInfo = { protocol: "https", port: 443, verifySslCert: false };
+              const result = await pollSingleCamera(camera, httpsConn);
+
+              await db.update(cameras)
+                .set({ protocol: "https", port: 443, updatedAt: new Date() })
+                .where(eq(cameras.id, camera.id));
+              console.log(`[Monitor] ${camera.name} (${camera.ipAddress}) - Auto-migrated to HTTPS`);
+              protocolCache.delete(camera.ipAddress);
+
+              pendingStatusUpdates.push(result.statusUpdate);
+              pendingEvents.push(result.pendingEvent);
+              return;
+            } catch {
+              // HTTPS also failed
+            }
+          }
+
           pendingStatusUpdates.push({ id: camera.id, status: "offline", videoStatus: "unknown" });
           pendingEvents.push({ cameraId: camera.id, timestamp: new Date(), status: "offline", videoStatus: "unknown", errorMessage: error.message, responseTimeMs: Date.now() - startTime });
           console.log(`[Monitor] ${camera.name} (${camera.ipAddress}) - Offline: ${error.message}`);

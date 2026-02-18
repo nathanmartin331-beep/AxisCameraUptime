@@ -461,10 +461,17 @@ export async function discoverCameras(
 
   allResults.push(...Array.from(seen.values()));
 
-  // For any camera found via multicast without full info, enrich via HTTP
+  // For any camera found via multicast without full info, enrich via HTTP (then HTTPS fallback)
   for (const result of allResults) {
     if (!result.firmware && !result.serial) {
-      const deviceInfo = await probeBasicDeviceInfo(result.ipAddress, 3000);
+      let deviceInfo = await probeBasicDeviceInfo(result.ipAddress, 3000, 'http');
+      if (!deviceInfo) {
+        // HTTP failed — try HTTPS (AXIS OS 13+ may have HTTP disabled)
+        deviceInfo = await probeBasicDeviceInfo(result.ipAddress, 3000, 'https');
+        if (deviceInfo) {
+          result.detectedProtocol = 'https';
+        }
+      }
       if (deviceInfo) {
         result.model = deviceInfo.model || result.model;
         result.serial = deviceInfo.serial || result.serial;

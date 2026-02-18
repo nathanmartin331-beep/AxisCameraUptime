@@ -961,6 +961,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         firmware: r.firmware,
         series: r.series,
         discoveryMethod: r.discoveryMethod,
+        detectedProtocol: r.detectedProtocol || 'http',
         alreadyAdded: existingIPs.has(r.ipAddress.trim().toLowerCase()),
       }));
 
