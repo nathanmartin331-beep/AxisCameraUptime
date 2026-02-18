@@ -201,14 +201,23 @@ curl http://localhost:5000/api/cameras/stats/models \
 
 ---
 
-## Authentication
+## Authentication & Authorization
 
-All endpoints require authentication. Include session cookie in requests:
+All endpoints require authentication via session cookie. Write operations (POST, PATCH, DELETE) require **admin** role.
+
+| Method | Access Level |
+|--------|-------------|
+| GET (read) | Any authenticated user |
+| POST (create/detect) | Admin only |
+| PATCH (update) | Admin only |
+| DELETE (remove) | Admin only |
 
 ```bash
 curl http://localhost:5000/api/... \
   -H "Cookie: connect.sid=YOUR_SESSION_COOKIE"
 ```
+
+Non-admin users attempting write operations will receive a `403 Forbidden` response.
 
 ## Error Handling
 
@@ -286,16 +295,9 @@ curl -X POST http://localhost:5000/api/cameras/abc123/detect-model \
 - ✅ GET /api/models
 - ✅ GET /api/cameras/stats/models
 
-**Waiting for:**
-- Storage methods integration (`getCamerasByModel`, `getCamerasByCapability`, `updateCameraModel`, `getCameraModel`)
-- Camera detection service implementation
-- Camera models database
-
----
-
-## Next Steps
-
-1. Integrate storage methods into main `storage.ts`
-2. Implement camera detection service
-3. Test all endpoints with real cameras
-4. Add frontend integration
+**Also implemented (not listed above):**
+- Role-based access control (Admin/Viewer) on all write endpoints
+- User management endpoints (GET/POST/PATCH/DELETE `/api/auth/users`)
+- Profile editing endpoint (PATCH `/api/auth/me`)
+- Camera group management (GET/POST/PATCH/DELETE `/api/groups`)
+- Product lifecycle/EOL tracking

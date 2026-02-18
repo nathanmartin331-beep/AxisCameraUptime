@@ -35,9 +35,12 @@ dsp -c# Axis Camera Uptime Monitor
 - **Intelligent Alerting** - Automated notifications for camera downtime and failures
 - **Historical Reporting** - Detailed uptime reports with customizable date ranges
 - **Camera Model Detection** - Automatic identification of Axis camera models
+- **Product Lifecycle Tracking** - EOL/EOS status from Axis Communications
 - **Customizable Dashboard** - Drag-and-drop widget arrangement with grid layout
+- **Camera Groups** - Organize cameras into logical groups
 - **Dark Mode** - Full dark mode support with theme persistence
-- **Session Management** - Secure authentication with Replit Auth integration
+- **User Management** - Role-based access control with Admin and Viewer roles
+- **Session Management** - Secure local authentication with Passport.js
 
 ### Monitoring Capabilities
 - **Ping Monitoring** - ICMP-based health checks
@@ -62,7 +65,7 @@ dsp -c# Axis Camera Uptime Monitor
 - **Runtime**: Node.js with TypeScript
 - **Framework**: Express 4.21
 - **Database**: SQLite with Drizzle ORM 0.39
-- **Authentication**: Passport.js with Replit Auth / Local Strategy
+- **Authentication**: Passport.js with Local Strategy (email/password)
 - **Session Store**: SQLite-based sessions with express-session
 - **Security**: Helmet, bcrypt for password hashing, rate limiting
 
@@ -163,10 +166,23 @@ Click on any camera to view:
 ### Configuration
 
 Access Settings page to configure:
+- **Profile** - Update your name (first/last)
+- **Password** - Change your account password
 - **Monitoring Interval** - How often to check cameras (default: 5 minutes)
-- **Timeout Settings** - Request timeout duration
-- **Alert Preferences** - Email/notification settings
-- **User Management** - Add/remove users (admin only)
+- **Email Notifications** - Toggle downtime alerts
+- **Data Retention** - How long to keep historical data
+
+### User Management (Admin Only)
+
+Navigate to the Users page to:
+- View all registered users
+- Create new users with Admin or Viewer roles
+- Edit user details and change roles
+- Delete users (with confirmation)
+
+**Roles**:
+- **Admin** - Full access: manage cameras, groups, users, settings, and scans
+- **Viewer** - Read-only access: view dashboards, cameras, and reports
 
 ## 📁 Project Structure
 
@@ -183,11 +199,15 @@ AxisCameraUptime/
 │   │   │   └── UptimeChart.tsx
 │   │   ├── pages/           # Page components
 │   │   │   ├── Dashboard.tsx
+│   │   │   ├── CustomizableDashboard.tsx
 │   │   │   ├── Cameras.tsx
 │   │   │   ├── CameraDetail.tsx
+│   │   │   ├── Groups.tsx
+│   │   │   ├── GroupDetail.tsx
+│   │   │   ├── NetworkScan.tsx
 │   │   │   ├── Reports.tsx
 │   │   │   ├── Settings.tsx
-│   │   │   └── NetworkScan.tsx
+│   │   │   └── Users.tsx
 │   │   ├── lib/             # Utilities and helpers
 │   │   ├── hooks/           # Custom React hooks
 │   │   └── main.tsx         # Application entry point
@@ -262,9 +282,34 @@ Authenticate user and create session.
   "id": "uuid",
   "email": "user@example.com",
   "firstName": "John",
-  "lastName": "Doe"
+  "lastName": "Doe",
+  "role": "viewer"
 }
 ```
+
+#### POST `/api/auth/logout`
+End the current session.
+
+#### GET `/api/auth/me`
+Get the currently authenticated user. Requires authentication.
+
+#### POST `/api/auth/change-password`
+Change the current user's password. Requires authentication.
+
+#### PATCH `/api/auth/me`
+Update the current user's profile (firstName, lastName). Requires authentication.
+
+#### GET `/api/auth/users` (Admin only)
+List all users.
+
+#### POST `/api/auth/users` (Admin only)
+Create a new user with email, password, firstName, lastName, and role.
+
+#### PATCH `/api/auth/users/:id` (Admin only)
+Update a user's details (name, email, role, password).
+
+#### DELETE `/api/auth/users/:id` (Admin only)
+Delete a user. Returns 204 on success.
 
 ### Cameras
 
@@ -560,9 +605,6 @@ PORT=5000
 # Authentication
 SESSION_SECRET=your-secret-key-here
 
-# Replit Auth (if using Replit)
-REPLIT_DOMAINS=your-replit-domain.repl.co
-
 # Monitoring
 DEFAULT_CHECK_INTERVAL=300000
 DEFAULT_TIMEOUT=5000
@@ -570,17 +612,13 @@ DEFAULT_TIMEOUT=5000
 
 ## 🌐 Deployment
 
-### Replit
+### Default Credentials
 
-This project is optimized for Replit deployment:
+On first startup, a default admin user is created:
+- **Email**: `admin@local`
+- **Password**: `admin123`
 
-1. Fork the repository on Replit
-2. Configure environment variables in Secrets
-3. Run the Repl - it will automatically:
-   - Install dependencies
-   - Initialize database
-   - Create default user
-   - Start the application
+Change these immediately after first login via the Settings page.
 
 ### Docker
 
@@ -642,7 +680,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🙏 Acknowledgments
 
 - [Axis Communications](https://www.axis.com/) - For excellent network camera products
-- [Replit](https://replit.com/) - For hosting and authentication infrastructure
 - [Radix UI](https://www.radix-ui.com/) - For accessible UI components
 - [Recharts](https://recharts.org/) - For beautiful data visualization
 - [Drizzle ORM](https://orm.drizzle.team/) - For type-safe database operations

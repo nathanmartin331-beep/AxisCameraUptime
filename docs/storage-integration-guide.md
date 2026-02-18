@@ -270,17 +270,28 @@ If issues arise:
 - ✅ `server/__tests__/storage-model-extension.test.ts` - Unit tests
 - ✅ `docs/storage-integration-guide.md` - This file
 
-## Next Steps
+## User Management Methods
 
-1. Wait for backend developer to update schema
-2. Run database migration
-3. Follow integration steps above
-4. Run all tests
-5. Update API routes
-6. Test end-to-end functionality
+The storage layer also includes user management methods added for RBAC support:
+
+```typescript
+export interface IStorage {
+  // ... existing methods ...
+
+  // User management
+  getAllUsers(): Promise<SafeUser[]>;
+  deleteUser(id: string): Promise<void>;
+  updateUser(id: string, data: Partial<User>): Promise<SafeUser>;
+  getUserByEmail(email: string): Promise<User | undefined>;
+  getUserById(id: string): Promise<User | undefined>;
+  getSafeUser(id: string): Promise<SafeUser | undefined>;
+}
+```
+
+The `SafeUser` type is `Omit<User, 'password'>` — it strips the password field from all user objects returned to API consumers.
 
 ---
 
-**Status**: Ready for integration
-**Blocked by**: Schema updates in `shared/schema.ts`
-**Coordination**: Use memory namespace `aqe/model-detection/*`
+**Status**: Integrated and operational
+**Schema**: Updated with `role` column and model detection fields
+**Migration**: Run `npx drizzle-kit push` to apply schema changes
