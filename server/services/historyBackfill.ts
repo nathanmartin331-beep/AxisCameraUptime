@@ -9,7 +9,7 @@
  */
 
 import { db } from "../db";
-import { cameras, uptimeEvents } from "@shared/schema";
+import { cameras, uptimeEvents, analyticsHourlySummary, type CameraCapabilities } from "@shared/schema";
 import { eq, and, lte } from "drizzle-orm";
 import { storage } from "../storage";
 import { authFetch } from "./digestAuth";
@@ -304,6 +304,216 @@ export async function backfillFromSystemLog(
   } catch (error: any) {
     // System log access may fail on many cameras (404, auth issues) - that's OK
     console.log(`[Backfill] System log not available for ${ipAddress}: ${error.message}`);
+    return 0;
+  }
+}
+
+/**
+ * List available TVPC data days from the camera.
+ * Endpoint: GET /local/tvpc/.api?list-cnt.json
+ * Returns array of YYYYMMDD date strings.
+ */
+export async function listTvpcDataDays(
+  ipAddress: string,
+  username: string,
+  password: string,
+  timeout: number = 10000,
+  conn?: CameraConnectionInfo
+): Promise<string[]> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const dispatcher = getCameraDispatcher(conn);
+
+  try {
+    const url = buildCameraUrl(ipAddress, "/local/tvpc/.api?list-cnt.json", conn);
+    const response = await authFetch(url, username, password, {
+      signal: controller.signal,
+      dispatcher,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const json = await response.json() as any;
+    const days = Array.isArray(json) ? json : json?.days || json?.dates || [];
+    return days.filter((d: any) => typeof d === "string" && /^\d{8}$/.test(d));
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === "AbortError") {
+      throw new Error(`TVPC list-cnt timeout after ${timeout}ms`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Backfill analytics hourly summaries from TVPC historical export.
+ *
+ * Fetches pre-aggregated hourly data from the TVPC app and inserts into
+ * analytics_hourly_summary. Uses onConflictDoNothing for idempotency.
+ *
+ * @returns Number of rows inserted
+ */
+export async function backfillFromTvpcHistory(
+  cameraId: string,
+  ipAddress: string,
+  username: string,
+  password: string,
+  conn?: CameraConnectionInfo
+): Promise<number> {
+  // Check if already backfilled
+  const [camera] = await db.select().from(cameras).where(eq(cameras.id, cameraId));
+  if (!camera) return 0;
+
+  const caps = camera.capabilities as CameraCapabilities | null;
+  if (caps?.analytics?.tvpcHistoryBackfilled) return 0;
+
+  try {
+    // Step 1: Check data availability
+    const days = await listTvpcDataDays(ipAddress, username, password, 10000, conn);
+    if (days.length === 0) {
+      console.log(`[TVPC Backfill] No historical data available on ${ipAddress}`);
+      return 0;
+    }
+
+    console.log(`[TVPC Backfill] ${ipAddress}: ${days.length} days of data available, fetching hourly export...`);
+
+    // Step 2: Fetch all hourly data in one bulk request
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const dispatcher = getCameraDispatcher(conn);
+
+    const url = buildCameraUrl(ipAddress, "/local/tvpc/.api?export-json&date=all&res=1h", conn);
+    const response = await authFetch(url, username, password, {
+      signal: controller.signal,
+      dispatcher,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const json = await response.json() as any;
+    const entries = Array.isArray(json) ? json : json?.data || json?.entries || [];
+
+    if (entries.length === 0) {
+      console.log(`[TVPC Backfill] ${ipAddress}: export returned no entries`);
+      return 0;
+    }
+
+    // Step 3: Convert entries to hourly summary rows
+    const rows: Array<{
+      cameraId: string;
+      hourStart: Date;
+      eventType: string;
+      sumValue: number;
+      maxValue: number;
+      minValue: number;
+      sampleCount: number;
+      metadata: Record<string, any>;
+    }> = [];
+
+    for (const entry of entries) {
+      // Parse timestamp: could be ISO string, epoch, or "YYYYMMDD" + "HH" fields
+      let hourStart: Date | null = null;
+
+      if (entry.timestamp) {
+        hourStart = new Date(entry.timestamp);
+      } else if (entry.date && entry.hour !== undefined) {
+        // date = "20250115", hour = 14
+        const dateStr = String(entry.date);
+        if (dateStr.length === 8) {
+          const y = parseInt(dateStr.slice(0, 4));
+          const m = parseInt(dateStr.slice(4, 6)) - 1;
+          const d = parseInt(dateStr.slice(6, 8));
+          const h = parseInt(entry.hour) || 0;
+          hourStart = new Date(y, m, d, h, 0, 0);
+        }
+      }
+
+      if (!hourStart || isNaN(hourStart.getTime())) continue;
+
+      // Round down to hour boundary
+      hourStart.setMinutes(0, 0, 0);
+
+      const inCount = parseInt(entry.in || entry.total_in || "0") || 0;
+      const outCount = parseInt(entry.out || entry.total_out || "0") || 0;
+      const occupancy = parseInt(entry.occupancy || "0") || (inCount - outCount);
+
+      if (inCount > 0 || outCount > 0) {
+        rows.push({
+          cameraId,
+          hourStart,
+          eventType: "people_in",
+          sumValue: inCount,
+          maxValue: inCount,
+          minValue: inCount,
+          sampleCount: 1,
+          metadata: { source: "tvpc_backfill" },
+        });
+        rows.push({
+          cameraId,
+          hourStart,
+          eventType: "people_out",
+          sumValue: outCount,
+          maxValue: outCount,
+          minValue: outCount,
+          sampleCount: 1,
+          metadata: { source: "tvpc_backfill" },
+        });
+      }
+
+      rows.push({
+        cameraId,
+        hourStart,
+        eventType: "occupancy",
+        sumValue: Math.max(0, occupancy),
+        maxValue: Math.max(0, occupancy),
+        minValue: Math.max(0, occupancy),
+        sampleCount: 1,
+        metadata: { source: "tvpc_backfill" },
+      });
+    }
+
+    if (rows.length === 0) {
+      console.log(`[TVPC Backfill] ${ipAddress}: no valid hourly entries parsed`);
+      return 0;
+    }
+
+    // Step 4: Insert in chunks of 100 with conflict resolution
+    let inserted = 0;
+    for (let i = 0; i < rows.length; i += 100) {
+      const chunk = rows.slice(i, i + 100);
+      const result = await db.insert(analyticsHourlySummary)
+        .values(chunk)
+        .onConflictDoNothing();
+      inserted += (result as any).changes ?? chunk.length;
+    }
+
+    // Step 5: Mark TVPC history as backfilled
+    const updatedCaps: CameraCapabilities = {
+      ...caps,
+      analytics: {
+        ...caps?.analytics,
+        motionDetection: caps?.analytics?.motionDetection ?? false,
+        tampering: caps?.analytics?.tampering ?? false,
+        objectDetection: caps?.analytics?.objectDetection ?? false,
+        peopleCount: caps?.analytics?.peopleCount ?? false,
+        tvpcHistoryBackfilled: true,
+      },
+    };
+
+    await db.update(cameras)
+      .set({ capabilities: updatedCaps as any, updatedAt: new Date() })
+      .where(eq(cameras.id, cameraId));
+
+    console.log(`[TVPC Backfill] ✓ ${ipAddress}: imported ${inserted} hourly rows from ${entries.length} entries`);
+    return inserted;
+  } catch (error: any) {
+    console.warn(`[TVPC Backfill] ⚠ Failed for ${ipAddress}: ${error.message}`);
     return 0;
   }
 }

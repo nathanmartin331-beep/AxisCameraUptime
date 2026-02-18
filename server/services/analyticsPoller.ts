@@ -162,6 +162,137 @@ async function queryOccupancy(
 }
 
 /**
+ * Query AXIS TVPC live-sum endpoint for people in/out counts.
+ * Endpoint: GET /local/tvpc/.api?live-sum.json
+ */
+async function queryTvpcLiveSum(
+  ipAddress: string,
+  username: string,
+  password: string,
+  timeout: number = 5000,
+  conn?: CameraConnectionInfo
+): Promise<PeopleCountData> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const dispatcher = getCameraDispatcher(conn);
+
+  try {
+    const url = buildCameraUrl(ipAddress, "/local/tvpc/.api?live-sum.json", conn);
+    const response = await authFetch(url, username, password, {
+      signal: controller.signal,
+      dispatcher,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const json = await response.json() as any;
+    const inCount = parseInt(json.in || "0") || 0;
+    const outCount = parseInt(json.out || "0") || 0;
+    return {
+      in: inCount,
+      out: outCount,
+      occupancy: inCount - outCount,
+    };
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === "AbortError") {
+      throw new Error(`TVPC live-sum timeout after ${timeout}ms`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Query AXIS TVPC live-occupancy endpoint.
+ * Endpoint: GET /local/tvpc/.api?live-occupancy.json
+ */
+async function queryTvpcLiveOccupancy(
+  ipAddress: string,
+  username: string,
+  password: string,
+  timeout: number = 5000,
+  conn?: CameraConnectionInfo
+): Promise<number> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const dispatcher = getCameraDispatcher(conn);
+
+  try {
+    const url = buildCameraUrl(ipAddress, "/local/tvpc/.api?live-occupancy.json", conn);
+    const response = await authFetch(url, username, password, {
+      signal: controller.signal,
+      dispatcher,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const json = await response.json() as any;
+    return parseInt(json.occupancy || json.count || "0") || 0;
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === "AbortError") {
+      throw new Error(`TVPC live-occupancy timeout after ${timeout}ms`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Query AXIS TVPC occupancy export for today's average dwell time.
+ * Endpoint: GET /local/tvpc/.api?occupancy-export-json&date=YYYYMMDD&res=1m
+ * Returns average dwell time in seconds, or null if unavailable.
+ */
+async function queryTvpcDwellTime(
+  ipAddress: string,
+  username: string,
+  password: string,
+  timeout: number = 8000,
+  conn?: CameraConnectionInfo
+): Promise<number | null> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const dispatcher = getCameraDispatcher(conn);
+
+  try {
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const url = buildCameraUrl(ipAddress, `/local/tvpc/.api?occupancy-export-json&date=${today}&res=1m`, conn);
+    const response = await authFetch(url, username, password, {
+      signal: controller.signal,
+      dispatcher,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const json = await response.json() as any;
+    const entries = Array.isArray(json) ? json : json?.data;
+    if (!Array.isArray(entries) || entries.length === 0) return null;
+
+    // Extract average dwell/duration from entries that have it
+    const dwellValues: number[] = [];
+    for (const entry of entries) {
+      const dwell = entry.avg_dwell || entry.averageDwellTime || entry.avgTime;
+      if (typeof dwell === "number" && dwell > 0) {
+        dwellValues.push(dwell);
+      }
+    }
+
+    if (dwellValues.length === 0) return null;
+    return Math.round(dwellValues.reduce((a, b) => a + b, 0) / dwellValues.length);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Parse AOA accumulated counts response into analytics events.
  */
 function parseAoaAccumulatedCounts(
@@ -1423,6 +1554,8 @@ export interface AnalyticsProbeResult {
   acapInstalled: string[];
   objectAnalyticsScenarios: Array<{ name: string; type: string }>;
   objectAnalyticsApiPath?: string; // Working API path discovered during probe
+  tvpcAvailable?: boolean;         // AXIS TVPC app detected
+  tvpcCounterConfig?: { serial?: string; name?: string }; // TVPC counter identity
 }
 
 export async function probeAnalyticsCapabilities(
@@ -1526,6 +1659,32 @@ export async function probeAnalyticsCapabilities(
     }
   }
 
+  // Step 2b: Probe TVPC (Total/Visitor People Counter) app
+  try {
+    const tvpcUrl = buildCameraUrl(ipAddress, "/local/tvpc/.api?params.json", conn);
+    const tvpcController = new AbortController();
+    const tvpcTimeout = setTimeout(() => tvpcController.abort(), 5000);
+    const tvpcDispatcher = getCameraDispatcher(conn);
+    const tvpcResp = await authFetch(tvpcUrl, username, password, {
+      signal: tvpcController.signal,
+      dispatcher: tvpcDispatcher,
+    });
+    clearTimeout(tvpcTimeout);
+
+    if (tvpcResp.ok) {
+      const tvpcJson = await tvpcResp.json() as any;
+      results.tvpcAvailable = true;
+      results.tvpcCounterConfig = {
+        serial: tvpcJson.serial || tvpcJson.serialNumber,
+        name: tvpcJson.name || tvpcJson.counterName,
+      };
+      results.peopleCount = true; // TVPC implies people counting
+      console.log(`[Analytics] TVPC detected on ${ipAddress}: serial=${results.tvpcCounterConfig.serial || "unknown"}, name=${results.tvpcCounterConfig.name || "unknown"}`);
+    }
+  } catch {
+    // Not a TVPC camera, continue silently
+  }
+
   // Step 3: Probe remaining ACAP endpoints in parallel for anything not yet detected
   const [pcAvail, occAvail, lgAvail, fgAvail, mgAvail] = await Promise.all([
     !results.peopleCount ? probeEndpoint(ipAddress, username, password, "/local/peoplecounter/query.cgi", 5000, conn) : Promise.resolve(true),
@@ -1549,6 +1708,7 @@ export async function probeAnalyticsCapabilities(
     results.loiteringGuard && "LoiteringGuard",
     results.fenceGuard && "FenceGuard",
     results.motionGuard && "MotionGuard",
+    results.tvpcAvailable && "TVPC",
   ].filter(Boolean);
 
   console.log(`[Analytics] Probe complete for ${ipAddress}: ${detected.join(", ") || "no analytics detected"}`);
@@ -1570,9 +1730,42 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
   const pcEnabled = caps?.analytics?.peopleCount && enabled?.peopleCount !== false;
   const occEnabled = caps?.analytics?.occupancyEstimation && enabled?.occupancyEstimation !== false;
   const oaEnabled = caps?.analytics?.objectAnalytics && enabled?.objectAnalytics !== false;
+  const tvpcEnabled = caps?.analytics?.tvpcAvailable && enabled?.tvpc !== false;
 
-  // Try People Counter ACAP first
-  if (pcEnabled) {
+  // Priority 1: Try TVPC (Total/Visitor People Counter) first — richer data
+  if (tvpcEnabled && pcEnabled) {
+    try {
+      const data = await queryTvpcLiveSum(camera.ipAddress, camera.username, password, 5000, conn);
+      events.push(
+        { eventType: "people_in", value: data.in, metadata: { source: "tvpc" } },
+        { eventType: "people_out", value: data.out, metadata: { source: "tvpc" } },
+      );
+
+      // Try dedicated occupancy endpoint (more accurate than computed in-out)
+      let occupancy = data.occupancy;
+      try {
+        occupancy = await queryTvpcLiveOccupancy(camera.ipAddress, camera.username, password, 5000, conn);
+      } catch {
+        // Fall back to computed occupancy from live-sum
+      }
+      events.push({ eventType: "occupancy", value: occupancy, metadata: { source: "tvpc" } });
+
+      // Best-effort dwell time — never fails the poll
+      try {
+        const dwell = await queryTvpcDwellTime(camera.ipAddress, camera.username, password, 8000, conn);
+        if (dwell !== null) {
+          events.push({ eventType: "avg_dwell_time", value: dwell, metadata: { source: "tvpc" } });
+        }
+      } catch {
+        // Dwell time unavailable, not critical
+      }
+    } catch {
+      // TVPC failed — fall through to legacy People Counter path below
+    }
+  }
+
+  // Priority 2: Legacy People Counter ACAP (if TVPC didn't produce data)
+  if (events.length === 0 && pcEnabled) {
     try {
       const data = await queryPeopleCounter(camera.ipAddress, camera.username, password, 5000, conn);
       events.push(
@@ -1591,7 +1784,7 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
         }
       }
     }
-  } else if (occEnabled) {
+  } else if (events.length === 0 && occEnabled) {
     // Only occupancy estimator available and enabled
     try {
       const occ = await queryOccupancy(camera.ipAddress, camera.username, password, 5000, conn);
@@ -1601,9 +1794,7 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
     }
   }
 
-  // Try Object Analytics (AOA) if enabled AND a working API path was discovered during probe.
-  // Without a stored path, the probe found no working endpoint (all 404), so skip to avoid
-  // spamming 404 requests every polling cycle.
+  // Priority 3: Object Analytics (AOA) — supplement with additional scenario data
   const storedAoaPath = caps?.analytics?.objectAnalyticsApiPath;
   const storedScenarios = caps?.analytics?.objectAnalyticsScenarios;
   if (oaEnabled && storedAoaPath) {
@@ -1612,7 +1803,7 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
     };
 
     if (events.length === 0) {
-      // Only query AOA if we didn't already get data from People Counter/Occupancy
+      // Only query AOA if we didn't already get data from People Counter/Occupancy/TVPC
       try {
         const aoaEvents = await fetchAoa();
         events.push(...aoaEvents);
@@ -1661,10 +1852,12 @@ function getAnalyticsCameraList(allCameras: any[]): any[] {
     const hasWorkingOa = caps?.analytics?.objectAnalytics === true &&
                          !!caps?.analytics?.objectAnalyticsApiPath &&
                          enabled?.objectAnalytics !== false;
+    const hasTvpc = caps?.analytics?.tvpcAvailable === true && enabled?.tvpc !== false;
     return (
       (caps?.analytics?.peopleCount === true && enabled?.peopleCount !== false) ||
       (caps?.analytics?.occupancyEstimation === true && enabled?.occupancyEstimation !== false) ||
-      hasWorkingOa
+      hasWorkingOa ||
+      hasTvpc
     );
   });
 }

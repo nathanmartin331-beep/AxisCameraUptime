@@ -104,6 +104,9 @@ export interface CameraCapabilities {
       id?: number;                  // Scenario ID from AOA configuration
       objectClassifications?: string[]; // Object classes: "Human", "Vehicle", etc.
     }>;
+    tvpcAvailable?: boolean;           // AXIS TVPC (Total/Visitor People Counter) app detected
+    tvpcHistoryBackfilled?: boolean;   // TVPC hourly history has been imported
+    tvpcCounterConfig?: { serial?: string; name?: string }; // TVPC counter identity
   };
 
   // User-enabled analytics (what to actively poll)
@@ -115,6 +118,7 @@ export interface CameraCapabilities {
     loiteringGuard?: boolean;
     fenceGuard?: boolean;
     motionGuard?: boolean;
+    tvpc?: boolean;
   };
 
   // System

@@ -1648,7 +1648,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (typeof daysResult === "object") return sendError(res, 400, daysResult.error);
       const days = daysResult;
 
-      const VALID_EVENT_TYPES = ["occupancy", "people_in", "people_out", "line_crossing"];
+      const VALID_EVENT_TYPES = ["occupancy", "people_in", "people_out", "line_crossing", "avg_dwell_time"];
       const eventType = (req.query.eventType as string) || "occupancy";
       if (!VALID_EVENT_TYPES.includes(eventType)) {
         return sendError(res, 400, `Invalid eventType. Must be one of: ${VALID_EVENT_TYPES.join(", ")}`);
@@ -1684,7 +1684,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!cameraId) return sendError(res, 400, "Invalid camera ID");
 
       const days = Math.min(parseInt(req.query.days as string) || 30, 90);
-      const VALID_EVENT_TYPES = ["occupancy", "people_in", "people_out", "line_crossing"];
+      const VALID_EVENT_TYPES = ["occupancy", "people_in", "people_out", "line_crossing", "avg_dwell_time"];
       const eventType = (req.query.eventType as string) || "people_in";
       if (!VALID_EVENT_TYPES.includes(eventType)) {
         return sendError(res, 400, `Invalid eventType. Must be one of: ${VALID_EVENT_TYPES.join(", ")}`);
@@ -1756,7 +1756,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (typeof daysResult === "object") return sendError(res, 400, daysResult.error);
       const days = daysResult;
 
-      const VALID_EVENT_TYPES = ["occupancy", "people_in", "people_out", "line_crossing"];
+      const VALID_EVENT_TYPES = ["occupancy", "people_in", "people_out", "line_crossing", "avg_dwell_time"];
       const eventType = (req.query.eventType as string) || "occupancy";
       if (!VALID_EVENT_TYPES.includes(eventType)) {
         return sendError(res, 400, `Invalid eventType. Must be one of: ${VALID_EVENT_TYPES.join(", ")}`);

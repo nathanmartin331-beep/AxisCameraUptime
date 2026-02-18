@@ -9,7 +9,7 @@ import { detectionCache } from "./services/detectionCache";
 import { eq } from "drizzle-orm";
 import { authFetch } from "./services/digestAuth";
 import { buildCameraUrl, getCameraDispatcher, getConnectionInfo, type CameraConnectionInfo } from "./services/cameraUrl";
-import { backfillFromUptimeSeconds, backfillFromSystemLog } from "./services/historyBackfill";
+import { backfillFromUptimeSeconds, backfillFromSystemLog, backfillFromTvpcHistory } from "./services/historyBackfill";
 import { probeAnalyticsCapabilities } from "./services/analyticsPoller";
 import type { InsertUptimeEvent } from "@shared/schema";
 
@@ -592,7 +592,8 @@ async function pollSingleCamera(camera: any, conn: CameraConnectionInfo): Promis
         ).then(async (analyticsProbe) => {
           const hasAny = analyticsProbe.peopleCount || analyticsProbe.occupancyEstimation ||
             analyticsProbe.lineCrossing || analyticsProbe.objectAnalytics ||
-            analyticsProbe.loiteringGuard || analyticsProbe.fenceGuard || analyticsProbe.motionGuard;
+            analyticsProbe.loiteringGuard || analyticsProbe.fenceGuard || analyticsProbe.motionGuard ||
+            analyticsProbe.tvpcAvailable;
           if (hasAny) {
             await storage.updateCameraCapabilities(camera.id, {
               analytics: {
@@ -607,8 +608,27 @@ async function pollSingleCamera(camera: any, conn: CameraConnectionInfo): Promis
                 acapInstalled: analyticsProbe.acapInstalled,
                 objectAnalyticsScenarios: analyticsProbe.objectAnalyticsScenarios,
                 objectAnalyticsApiPath: analyticsProbe.objectAnalyticsApiPath,
+                tvpcAvailable: analyticsProbe.tvpcAvailable || false,
+                tvpcCounterConfig: analyticsProbe.tvpcCounterConfig,
               },
             }, true);
+
+            // TVPC history backfill (fire-and-forget, same pattern as uptime backfill)
+            if (analyticsProbe.tvpcAvailable) {
+              backfillFromTvpcHistory(
+                camera.id,
+                camera.ipAddress,
+                camera.username,
+                decryptedPassword,
+                getConnectionInfo(camera)
+              ).then((count) => {
+                if (count > 0) {
+                  console.log(`[Monitor] TVPC backfill complete for ${camera.name}: ${count} hourly rows imported`);
+                }
+              }).catch((err: any) => {
+                console.warn(`[Monitor] TVPC backfill failed for ${camera.name}: ${err.message}`);
+              });
+            }
           }
         }).catch((probeErr: any) => {
           console.warn(`[Monitor] Analytics probe failed for ${camera.name}: ${probeErr.message}`);
