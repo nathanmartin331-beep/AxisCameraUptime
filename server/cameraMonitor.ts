@@ -680,6 +680,28 @@ async function pollSingleCamera(camera: any, conn: CameraConnectionInfo): Promis
     }
   }
 
+  // Lifecycle lookup for cameras that already have a model but missing lifecycle data.
+  // The block above only runs for cameras without a model (first detection).
+  // This catches all existing cameras that were detected before the lifecycle feature was added.
+  if (camera.model && !camera.capabilities?.lifecycle) {
+    lookupAxisEolWithFetch(camera.model).then(async (eolData) => {
+      if (eolData) {
+        await storage.updateCameraCapabilities(camera.id, {
+          lifecycle: {
+            status: eolData.status,
+            statusLabel: eolData.statusLabel,
+            discontinuedDate: eolData.discontinuedDate || null,
+            endOfHardwareSupport: eolData.endOfHardwareSupport || null,
+            endOfSoftwareSupport: eolData.endOfSoftwareSupport || null,
+            replacementModel: eolData.replacementModel || null,
+            lastChecked: new Date().toISOString(),
+          },
+        }, true);
+        console.log(`[Monitor] Lifecycle for ${camera.name} (${camera.model}): ${eolData.statusLabel}`);
+      }
+    }).catch(() => { /* silent */ });
+  }
+
   // Detect reboot by comparing boot IDs
   const rebooted =
     camera.currentBootId && camera.currentBootId !== result.bootId;
