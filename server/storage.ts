@@ -696,39 +696,78 @@ export class DatabaseStorage implements IStorage {
     // Actual number of days being calculated
     const monitoredDays = Math.max(1, Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)));
 
+    // Read from all 3 data tiers to get complete uptime picture.
+    // The aggregation service deletes raw events after 6h (→ hourly summaries)
+    // and hourly summaries after 48h (→ daily summaries). We must read all tiers.
+    const startTs = Math.floor(startDate.getTime() / 1000);
+    const endTs = Math.floor(endDate.getTime() / 1000);
+
+    // Tier 3: Daily summaries (oldest data, 48h+ ago)
+    const dailyRows = sqlite.prepare(`
+      SELECT online_count, offline_count, total_checks
+      FROM uptime_daily_summary
+      WHERE camera_id = ? AND day_start >= ? AND day_start <= ?
+    `).all(cameraId, startTs, endTs) as Array<{ online_count: number; offline_count: number; total_checks: number }>;
+
+    // Tier 2: Hourly summaries (6h–48h ago, not yet rolled into daily)
+    const hourlyRows = sqlite.prepare(`
+      SELECT online_count, offline_count, total_checks
+      FROM uptime_hourly_summary
+      WHERE camera_id = ? AND hour_start >= ? AND hour_start <= ?
+    `).all(cameraId, startTs, endTs) as Array<{ online_count: number; offline_count: number; total_checks: number }>;
+
+    // Tier 1: Raw events (last ~6h, not yet aggregated)
     const events = await this.getUptimeEventsInRange(
       cameraId,
       startDate,
       endDate
     );
 
-    const priorEvent = await this.getLatestEventBefore(cameraId, startDate);
+    // Sum up online/total counts from summary tiers
+    let totalOnline = 0;
+    let totalChecks = 0;
 
-    // Determine the prior status. If no event exists before the window
-    // but the camera's last known boot time predates the window start,
-    // the camera was online throughout (its boot event was purged by retention).
-    let priorStatus = priorEvent?.status;
-    if (!priorStatus && camera?.lastBootAt) {
-      const bootTime = new Date(camera.lastBootAt);
-      if (bootTime < startDate) {
-        priorStatus = "online";
+    for (const row of dailyRows) {
+      totalOnline += row.online_count;
+      totalChecks += row.total_checks;
+    }
+    for (const row of hourlyRows) {
+      totalOnline += row.online_count;
+      totalChecks += row.total_checks;
+    }
+
+    // Count raw events (not yet aggregated)
+    for (const event of events) {
+      totalChecks++;
+      if (event.status === "online") {
+        totalOnline++;
       }
     }
 
-    // Use validated pure function for calculation
-    const { calculateUptimeFromEvents } = await import('./uptimeCalculator.js');
+    let percentage: number;
 
-    const eventList = events.map(e => ({
-      timestamp: new Date(e.timestamp),
-      status: e.status
-    }));
+    if (totalChecks > 0) {
+      // We have aggregated data — use check-count-based calculation
+      percentage = (totalOnline / totalChecks) * 100;
+    } else {
+      // No data in any tier — fall back to event-based calculation
+      // (handles edge case of brand-new cameras with no aggregation yet)
+      const priorEvent = await this.getLatestEventBefore(cameraId, startDate);
+      let priorStatus = priorEvent?.status;
+      if (!priorStatus && camera?.lastBootAt) {
+        const bootTime = new Date(camera.lastBootAt);
+        if (bootTime < startDate) {
+          priorStatus = "online";
+        }
+      }
 
-    const percentage = calculateUptimeFromEvents(
-      eventList,
-      startDate,
-      endDate,
-      priorStatus
-    );
+      const { calculateUptimeFromEvents } = await import('./uptimeCalculator.js');
+      const eventList = events.map(e => ({
+        timestamp: new Date(e.timestamp),
+        status: e.status
+      }));
+      percentage = calculateUptimeFromEvents(eventList, startDate, endDate, priorStatus);
+    }
 
     const result = { percentage, monitoredDays };
 

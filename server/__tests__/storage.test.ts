@@ -11,6 +11,13 @@ vi.mock('../db', () => ({
     update: vi.fn(),
     delete: vi.fn(),
   },
+  sqlite: {
+    prepare: vi.fn(() => ({
+      all: vi.fn(() => []),
+      run: vi.fn(() => ({ changes: 0 })),
+      get: vi.fn(() => undefined),
+    })),
+  },
 }));
 
 // Mock the uptime calculator
@@ -843,86 +850,71 @@ describe('DatabaseStorage', () => {
     });
 
     describe('calculateUptimePercentage', () => {
-      it('should calculate uptime for all online events', async () => {
-        const mockEvents: UptimeEvent[] = [
-          {
-            id: 'event-1',
-            cameraId: 'camera-1',
-            timestamp: new Date(),
-            status: 'online',
-            videoStatus: null,
-            uptimeSeconds: null,
-            bootId: null,
-            responseTimeMs: null,
-            errorMessage: null,
-          },
-        ];
-
-        const mockSelectQuery = {
+      // Helper: create a thenable mock query that supports both chaining and direct await.
+      // Drizzle query builders are thenable — await db.select().from().where() returns rows.
+      function makeMockQuery(resolveValue: any) {
+        const query: any = {
           from: vi.fn().mockReturnThis(),
           where: vi.fn().mockReturnThis(),
-          orderBy: vi.fn().mockResolvedValue(mockEvents),
-          limit: vi.fn().mockResolvedValue([]),
+          orderBy: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockReturnThis(),
+          then: vi.fn((resolve: any) => resolve(resolveValue)),
         };
-        vi.mocked(db.select).mockReturnValue(mockSelectQuery as any);
+        // Make chained methods also resolve to the same value when awaited
+        for (const key of ['from', 'where', 'orderBy', 'limit']) {
+          query[key].mockImplementation((..._args: any[]) => query);
+        }
+        return query;
+      }
+
+      it('should calculate uptime for all online events', async () => {
+        // getCameraById returns undefined (no camera found → uses windowStart)
+        // getUptimeEventsInRange returns 1 online event
+        // getLatestEventBefore returns undefined
+        let callCount = 0;
+        vi.mocked(db.select).mockImplementation(() => {
+          callCount++;
+          if (callCount === 1) return makeMockQuery([]) as any; // getCameraById
+          if (callCount === 2) return makeMockQuery([{ // getUptimeEventsInRange
+            id: 'event-1', cameraId: 'camera-1', timestamp: new Date(),
+            status: 'online', videoStatus: null, uptimeSeconds: null,
+            bootId: null, responseTimeMs: null, errorMessage: null,
+          }]) as any;
+          return makeMockQuery([]) as any; // getLatestEventBefore
+        });
 
         const result = await storage.calculateUptimePercentage('camera-1', 7);
 
-        expect(result).toBe(100);
+        expect(result.percentage).toBe(100);
+        expect(result.monitoredDays).toBeGreaterThanOrEqual(1);
       });
 
       it('should calculate mixed uptime', async () => {
-        const mockEvents: UptimeEvent[] = [
-          {
-            id: 'event-1',
-            cameraId: 'camera-1',
-            timestamp: new Date(),
-            status: 'online',
-            videoStatus: null,
-            uptimeSeconds: null,
-            bootId: null,
-            responseTimeMs: null,
-            errorMessage: null,
-          },
-          {
-            id: 'event-2',
-            cameraId: 'camera-1',
-            timestamp: new Date(),
-            status: 'offline',
-            videoStatus: null,
-            uptimeSeconds: null,
-            bootId: null,
-            responseTimeMs: null,
-            errorMessage: null,
-          },
-        ];
+        let callCount = 0;
+        vi.mocked(db.select).mockImplementation(() => {
+          callCount++;
+          if (callCount === 1) return makeMockQuery([]) as any; // getCameraById
+          if (callCount === 2) return makeMockQuery([ // getUptimeEventsInRange
+            { id: 'e1', cameraId: 'camera-mixed', timestamp: new Date(), status: 'online',
+              videoStatus: null, uptimeSeconds: null, bootId: null, responseTimeMs: null, errorMessage: null },
+            { id: 'e2', cameraId: 'camera-mixed', timestamp: new Date(), status: 'offline',
+              videoStatus: null, uptimeSeconds: null, bootId: null, responseTimeMs: null, errorMessage: null },
+          ]) as any;
+          return makeMockQuery([]) as any;
+        });
 
-        const mockSelectQuery = {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          orderBy: vi.fn().mockResolvedValue(mockEvents),
-          limit: vi.fn().mockResolvedValue([]),
-        };
-        vi.mocked(db.select).mockReturnValue(mockSelectQuery as any);
+        const result = await storage.calculateUptimePercentage('camera-mixed', 7);
 
-        const result = await storage.calculateUptimePercentage('camera-1', 7);
-
-        expect(result).toBe(50);
+        expect(result.percentage).toBe(50);
       });
 
       it('should handle 0 days input', async () => {
-        const mockSelectQuery = {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          orderBy: vi.fn().mockResolvedValue([]),
-          limit: vi.fn().mockResolvedValue([]),
-        };
-        vi.mocked(db.select).mockReturnValue(mockSelectQuery as any);
+        vi.mocked(db.select).mockImplementation(() => makeMockQuery([]) as any);
 
         const result = await storage.calculateUptimePercentage('camera-1', 0);
 
-        expect(result).toBeGreaterThanOrEqual(0);
-        expect(result).toBeLessThanOrEqual(100);
+        expect(result.percentage).toBeGreaterThanOrEqual(0);
+        expect(result.percentage).toBeLessThanOrEqual(100);
       });
     });
   });
