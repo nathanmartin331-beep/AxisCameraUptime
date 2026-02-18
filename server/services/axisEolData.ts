@@ -610,9 +610,15 @@ export async function fetchAxisEolFromWeb(
 
     const html = await response.text();
 
-    // Check if this product is discontinued
-    // Axis uses a "support-discontinued-panel" class for EOL products
-    if (!html.includes("discontinued") && !html.includes("Discontinued")) {
+    // Check if this product is actually discontinued.
+    // Axis uses "support-discontinued" CSS classes on EOL product pages.
+    // We must check for those specific markers — the generic word "discontinued"
+    // appears in navigation links on ALL Axis pages.
+    const isDiscontinued =
+      html.includes("support-discontinued") ||
+      /product\s+(?:is\s+)?discontinued/i.test(html) ||
+      /This\s+product\s+has\s+been\s+discontinued/i.test(html);
+    if (!isDiscontinued) {
       return null; // Product is still active — no EOL data
     }
 
@@ -621,11 +627,12 @@ export async function fetchAxisEolFromWeb(
     };
 
     // Extract hardware support end date
-    // Pattern: "Hardware support ends" or "End of hardware support" followed by a date
+    // Actual Axis HTML: "Hardware support and RMA service offered until 2030-09-30."
     const hwPatterns = [
-      /(?:hardware\s+(?:warranty|support)\s+(?:ends?|expir(?:es?|y))[:\s]*)([\w\s,]+\d{4})/i,
-      /(?:end\s+of\s+hardware\s+support)[:\s]*([\w\s,]+\d{4})/i,
-      /(?:RMA\s+support\s+(?:until|ends?|expir(?:es?|y)))[:\s]*([\w\s,]+\d{4})/i,
+      /Hardware support.*?(?:until|offered until|ends?)\s+(\d{4}-\d{2}-\d{2})/i,
+      /RMA service.*?(?:until|offered until|ends?)\s+(\d{4}-\d{2}-\d{2})/i,
+      /(?:end\s+of\s+hardware\s+support)[:\s]*(\d{4}-\d{2}-\d{2})/i,
+      /hardware.*?support.*?(\d{4}-\d{2}-\d{2})/i,
     ];
     for (const pat of hwPatterns) {
       const match = html.match(pat);
@@ -636,9 +643,12 @@ export async function fetchAxisEolFromWeb(
     }
 
     // Extract software/OS support end date
+    // Actual Axis HTML: "AXIS OS support until 2029-12-31."
     const swPatterns = [
-      /(?:(?:AXIS\s+OS|firmware|software)\s+support\s+(?:ends?|expir(?:es?|y))[:\s]*)([\w\s,]+\d{4})/i,
-      /(?:end\s+of\s+(?:AXIS\s+OS|firmware|software)\s+support)[:\s]*([\w\s,]+\d{4})/i,
+      /AXIS\s+OS\s+support\s+(?:until|ends?)\s+(\d{4}-\d{2}-\d{2})/i,
+      /firmware\s+support\s+(?:until|ends?)\s+(\d{4}-\d{2}-\d{2})/i,
+      /(?:end\s+of\s+(?:AXIS\s+OS|firmware|software)\s+support)[:\s]*(\d{4}-\d{2}-\d{2})/i,
+      /(?:AXIS.OS|firmware|software).*?support.*?(\d{4}-\d{2}-\d{2})/i,
     ];
     for (const pat of swPatterns) {
       const match = html.match(pat);
@@ -649,9 +659,10 @@ export async function fetchAxisEolFromWeb(
     }
 
     // Extract discontinuation date
+    // Axis pages don't always show this directly; derive from HW support - 6 years if needed
     const discPatterns = [
-      /(?:discontinu(?:ed|ation)\s+(?:date|on)?)[:\s]*([\w\s,]+\d{4})/i,
-      /(?:product\s+discontinued)[:\s]*([\w\s,]+\d{4})/i,
+      /discontinu(?:ed|ation)\s+(?:date|on)?[:\s]*(\d{4}-\d{2}-\d{2})/i,
+      /product\s+discontinued[:\s]*(\d{4}-\d{2}-\d{2})/i,
     ];
     for (const pat of discPatterns) {
       const match = html.match(pat);
@@ -660,19 +671,33 @@ export async function fetchAxisEolFromWeb(
         if (parsed) { result.discontinuedDate = parsed; break; }
       }
     }
+    // Derive discontinuation date from HW support date (HW = discontinuation + 6 years)
+    if (!result.discontinuedDate && result.endOfHardwareSupport) {
+      const hwDate = new Date(result.endOfHardwareSupport);
+      hwDate.setFullYear(hwDate.getFullYear() - 6);
+      result.discontinuedDate = hwDate.toISOString().slice(0, 10);
+    }
 
     // Extract replacement product
-    const replPatterns = [
-      /(?:replacement|replaced\s+by|successor)[:\s]*(?:<[^>]+>)*\s*(?:AXIS\s+)?([\w-]+(?:\s+Mk\s+\w+)?)/i,
-      /(?:recommend(?:ed)?)[:\s]*(?:<[^>]+>)*\s*(?:AXIS\s+)?([\w-]+(?:\s+Mk\s+\w+)?)/i,
-    ];
-    for (const pat of replPatterns) {
-      const match = html.match(pat);
-      if (match) {
-        const repl = match[1].trim();
-        if (repl && repl.length > 2 && repl !== "support") {
-          result.replacementModel = repl;
-          break;
+    // Actual Axis HTML: class="support-discontinued__replacement-item" with link text
+    const replMatch = html.match(/support-discontinued__replacement-item[^>]*>.*?(?:AXIS\s+)?([\w][\w\d]+-[\w\d]+(?:\s+Mk\s+\w+)?)/is);
+    if (replMatch) {
+      result.replacementModel = replMatch[1].trim();
+    }
+    // Fallback: look for "replaced by" / "replacement" text
+    if (!result.replacementModel) {
+      const replPatterns = [
+        /(?:replaced?\s+(?:by|with)|successor)[:\s]*(?:<[^>]+>)*\s*(?:AXIS\s+)?([\w][\w\d]+-[\w\d]+(?:\s+Mk\s+\w+)?)/i,
+        /(?:recommend(?:ed)?.*?(?:AXIS\s+))([\w][\w\d]+-[\w\d]+(?:\s+Mk\s+\w+)?)/i,
+      ];
+      for (const pat of replPatterns) {
+        const match = html.match(pat);
+        if (match) {
+          const repl = match[1].trim();
+          if (repl && repl.length > 2) {
+            result.replacementModel = repl;
+            break;
+          }
         }
       }
     }
