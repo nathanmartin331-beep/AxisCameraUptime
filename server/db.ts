@@ -21,5 +21,15 @@ sqlite.pragma('foreign_keys = ON');
 sqlite.pragma('temp_store = MEMORY');
 sqlite.pragma('mmap_size = 268435456');        // 256MB memory-mapped I/O
 
+// Auto-migrate: add missing columns that were added to schema after initial table creation
+function ensureColumn(table: string, column: string, type: string) {
+  const cols = sqlite.pragma(`table_info(${table})`) as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === column)) {
+    sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+}
+ensureColumn('analytics_daily_summary', 'metadata', 'TEXT');
+ensureColumn('analytics_hourly_summary', 'metadata', 'TEXT');
+
 export const db = drizzle(sqlite, { schema });
 export { sqlite };
