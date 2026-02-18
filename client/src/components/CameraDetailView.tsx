@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import StatusIndicator, { CameraStatus } from "./StatusIndicator";
 import { Switch } from "@/components/ui/switch";
-import { Edit, Trash2, ArrowLeft, RefreshCw, Move, Mic, Camera as CameraIcon, Info, BarChart3 } from "lucide-react";
+import { Edit, Trash2, ArrowLeft, RefreshCw, Move, Mic, Camera as CameraIcon, Info, BarChart3, AlertTriangle, CheckCircle, Clock } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -39,7 +39,7 @@ interface CameraDetails {
     bootId: string;
   }>;
   model?: string;
-  series?: 'P' | 'Q' | 'M' | 'F';
+  series?: 'P' | 'Q' | 'M' | 'F' | 'A' | 'C' | 'D' | 'I' | 'T' | 'W';
   fullName?: string;
   firmwareVersion?: string;
   hasPTZ?: boolean;
@@ -60,6 +60,15 @@ interface CameraDetails {
   sslFingerprint?: string;
   sslFingerprintFirstSeen?: string;
   sslFingerprintLastVerified?: string;
+  lifecycle?: {
+    status?: string;
+    statusLabel?: string;
+    discontinuedDate?: string;
+    endOfHardwareSupport?: string;
+    endOfSoftwareSupport?: string;
+    replacementModel?: string;
+    lastChecked?: string;
+  };
 }
 
 interface CameraDetailViewProps {
@@ -167,10 +176,16 @@ export default function CameraDetailView({
                             ? "border-green-500 text-green-700 bg-green-50"
                             : camera.series === 'M'
                             ? "border-purple-500 text-purple-700 bg-purple-50"
+                            : camera.series === 'C'
+                            ? "border-teal-500 text-teal-700 bg-teal-50"
+                            : camera.series === 'A'
+                            ? "border-indigo-500 text-indigo-700 bg-indigo-50"
+                            : camera.series === 'D'
+                            ? "border-cyan-500 text-cyan-700 bg-cyan-50"
                             : "border-orange-500 text-orange-700 bg-orange-50"
                         }
                       >
-                        {camera.series} Series
+                        {camera.series === 'C' ? 'Speaker' : camera.series === 'A' ? 'Intercom' : camera.series === 'D' ? 'Radar' : `${camera.series} Series`}
                       </Badge>
                     )}
                   </>
@@ -220,6 +235,63 @@ export default function CameraDetailView({
                 <span className="text-sm text-muted-foreground">Build Date</span>
                 <span className="text-sm">{camera.capabilities.system.buildDate}</span>
               </div>
+            )}
+            {/* Product Lifecycle / EOL Status — shown for ALL detected devices */}
+            {camera.lifecycle?.status && (
+              <>
+                <div className="border-t pt-3 mt-3">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-muted-foreground">Lifecycle Status</span>
+                    <Badge
+                      variant="outline"
+                      className={
+                        camera.lifecycle.status === "end-of-support"
+                          ? "border-red-500 text-red-700 bg-red-50"
+                          : camera.lifecycle.status === "eol-supported"
+                          ? "border-yellow-500 text-yellow-700 bg-yellow-50"
+                          : "border-green-500 text-green-700 bg-green-50"
+                      }
+                    >
+                      {camera.lifecycle.status === "end-of-support" ? (
+                        <AlertTriangle className="mr-1 h-3 w-3" />
+                      ) : camera.lifecycle.status === "eol-supported" ? (
+                        <Clock className="mr-1 h-3 w-3" />
+                      ) : (
+                        <CheckCircle className="mr-1 h-3 w-3" />
+                      )}
+                      {camera.lifecycle.statusLabel}
+                    </Badge>
+                  </div>
+                </div>
+                {camera.lifecycle.discontinuedDate && (
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Discontinued</span>
+                    <span className="text-sm">{new Date(camera.lifecycle.discontinuedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                  </div>
+                )}
+                {camera.lifecycle.endOfHardwareSupport && (
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">HW Support Ends</span>
+                    <span className={`text-sm ${new Date(camera.lifecycle.endOfHardwareSupport) < new Date() ? "text-red-600 font-medium" : ""}`}>
+                      {new Date(camera.lifecycle.endOfHardwareSupport).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </span>
+                  </div>
+                )}
+                {camera.lifecycle.endOfSoftwareSupport && (
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">SW Support Ends</span>
+                    <span className={`text-sm ${new Date(camera.lifecycle.endOfSoftwareSupport) < new Date() ? "text-red-600 font-medium" : ""}`}>
+                      {new Date(camera.lifecycle.endOfSoftwareSupport).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </span>
+                  </div>
+                )}
+                {camera.lifecycle.replacementModel && (
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Replacement</span>
+                    <span className="text-sm font-medium">AXIS {camera.lifecycle.replacementModel}</span>
+                  </div>
+                )}
+              </>
             )}
             {camera.detectedAt && (
               <div className="flex justify-between">

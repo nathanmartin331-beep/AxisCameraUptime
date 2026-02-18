@@ -584,6 +584,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Update camera
       await storage.updateCameraModel(cameraId, result);
 
+      // Fire-and-forget: look up lifecycle data for this model
+      if (result.model) {
+        const { lookupAxisEolWithFetch } = await import("./services/axisEolData");
+        lookupAxisEolWithFetch(result.model).then(async (eolData) => {
+          if (eolData) {
+            await storage.updateCameraCapabilities(cameraId, {
+              lifecycle: {
+                status: eolData.status,
+                statusLabel: eolData.statusLabel,
+                discontinuedDate: eolData.discontinuedDate || null,
+                endOfHardwareSupport: eolData.endOfHardwareSupport || null,
+                endOfSoftwareSupport: eolData.endOfSoftwareSupport || null,
+                replacementModel: eolData.replacementModel || null,
+                lastChecked: new Date().toISOString(),
+              },
+            }, true);
+          }
+        }).catch(() => { /* silent */ });
+      }
+
       res.json({
         success: true,
         model: result.model,
@@ -597,6 +617,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: error.message || "Failed to detect camera model",
         error: error.message || "Failed to detect camera model",
       });
+    }
+  });
+
+  // GET /api/cameras/:id/lifecycle - Get EOL/EOS lifecycle data for a camera
+  app.get("/api/cameras/:id/lifecycle", requireAuth, async (req: any, res) => {
+    try {
+      const cameraId = validateId(req.params.id);
+      if (!cameraId) return sendError(res, 400, "Invalid camera ID");
+
+      const camera = await storage.getCameraById(cameraId);
+      if (!camera) return sendError(res, 404, "Camera not found");
+      if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
+
+      // Return cached lifecycle data if available and recent (< 7 days old)
+      const cached = (camera.capabilities as any)?.lifecycle;
+      if (cached?.lastChecked) {
+        const age = Date.now() - new Date(cached.lastChecked).getTime();
+        if (age < 7 * 24 * 60 * 60 * 1000) {
+          return res.json(cached);
+        }
+      }
+
+      // Fetch fresh data
+      const { lookupAxisEolWithFetch } = await import("./services/axisEolData");
+      const eolData = camera.model
+        ? await lookupAxisEolWithFetch(camera.model)
+        : null;
+
+      const lifecycle = {
+        status: eolData?.status || "active",
+        statusLabel: eolData?.statusLabel || (camera.model ? "Active" : "Unknown Model"),
+        discontinuedDate: eolData?.discontinuedDate || null,
+        endOfHardwareSupport: eolData?.endOfHardwareSupport || null,
+        endOfSoftwareSupport: eolData?.endOfSoftwareSupport || null,
+        replacementModel: eolData?.replacementModel || null,
+        lastChecked: new Date().toISOString(),
+      };
+
+      // Cache in capabilities
+      await storage.updateCameraCapabilities(cameraId, { lifecycle }, true);
+      res.json(lifecycle);
+    } catch (error) {
+      console.error("Error fetching lifecycle data:", error);
+      sendError(res, 500, "Failed to fetch lifecycle data");
     }
   });
 

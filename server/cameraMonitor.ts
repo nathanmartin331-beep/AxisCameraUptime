@@ -11,6 +11,7 @@ import { authFetch } from "./services/digestAuth";
 import { buildCameraUrl, getCameraDispatcher, getConnectionInfo, captureSslFingerprint, type CameraConnectionInfo } from "./services/cameraUrl";
 import { backfillFromUptimeSeconds, backfillFromSystemLog, backfillFromTvpcHistory } from "./services/historyBackfill";
 import { probeAnalyticsCapabilities } from "./services/analyticsPoller";
+import { lookupAxisEolWithFetch } from "./services/axisEolData";
 import type { InsertUptimeEvent } from "@shared/schema";
 
 // Configurable concurrency for HTTP polling (default 25 parallel requests)
@@ -558,6 +559,26 @@ async function pollSingleCamera(camera: any, conn: CameraConnectionInfo): Promis
         camera.numberOfViews = cached.numberOfViews;
 
         console.log(`[Monitor] Using cached model for ${camera.name}: ${cached.model} (${cached.series}-series)`);
+
+        // Lifecycle lookup for cached models too (fire-and-forget)
+        if (!camera.capabilities?.lifecycle) {
+          lookupAxisEolWithFetch(cached.model).then(async (eolData) => {
+            if (eolData) {
+              await storage.updateCameraCapabilities(camera.id, {
+                lifecycle: {
+                  status: eolData.status,
+                  statusLabel: eolData.statusLabel,
+                  discontinuedDate: eolData.discontinuedDate || null,
+                  endOfHardwareSupport: eolData.endOfHardwareSupport || null,
+                  endOfSoftwareSupport: eolData.endOfSoftwareSupport || null,
+                  replacementModel: eolData.replacementModel || null,
+                  lastChecked: new Date().toISOString(),
+                },
+              }, true);
+              console.log(`[Monitor] Lifecycle for ${camera.name} (${cached.model}): ${eolData.statusLabel}`);
+            }
+          }).catch(() => { /* silent */ });
+        }
       } catch (err: any) {
         console.warn(`[Monitor] Failed to update cached model for ${camera.name}: ${err.message}`);
       }
@@ -582,6 +603,26 @@ async function pollSingleCamera(camera: any, conn: CameraConnectionInfo): Promis
         camera.numberOfViews = detection.numberOfViews;
 
         console.log(`[Monitor] Detected model for ${camera.name}: ${detection.model} (${detection.series}-series)`);
+
+        // Lifecycle lookup (fire-and-forget) — runs for all detected models
+        lookupAxisEolWithFetch(detection.model).then(async (eolData) => {
+          if (eolData) {
+            await storage.updateCameraCapabilities(camera.id, {
+              lifecycle: {
+                status: eolData.status,
+                statusLabel: eolData.statusLabel,
+                discontinuedDate: eolData.discontinuedDate || null,
+                endOfHardwareSupport: eolData.endOfHardwareSupport || null,
+                endOfSoftwareSupport: eolData.endOfSoftwareSupport || null,
+                replacementModel: eolData.replacementModel || null,
+                lastChecked: new Date().toISOString(),
+              },
+            }, true);
+            console.log(`[Monitor] Lifecycle for ${camera.name} (${detection.model}): ${eolData.statusLabel}`);
+          }
+        }).catch((err: any) => {
+          console.warn(`[Monitor] Lifecycle lookup failed for ${camera.name}: ${err.message}`);
+        });
 
         // Analytics probe (fire-and-forget — not needed before video check)
         probeAnalyticsCapabilities(
