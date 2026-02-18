@@ -1,4 +1,4 @@
-dsp -c# Axis Camera Uptime Monitor
+# Axis Camera Uptime Monitor
 
 > A comprehensive monitoring and reporting system for Axis network cameras with real-time uptime tracking, reliability metrics, and intelligent alerting.
 
@@ -16,7 +16,6 @@ dsp -c# Axis Camera Uptime Monitor
 - [Usage](#-usage)
 - [Project Structure](#-project-structure)
 - [API Documentation](#-api-documentation)
-- [Advanced Features](#-advanced-features)
 - [Development](#-development)
 - [Contributing](#-contributing)
 - [License](#-license)
@@ -73,8 +72,6 @@ dsp -c# Axis Camera Uptime Monitor
 - **Testing**: Vitest 4.0 with UI
 - **Type Checking**: TypeScript 5.6
 - **Code Quality**: ESLint + Prettier
-- **AI Quality Engineering**: 19-agent QE fleet with sublinear optimization
-- **AI Development**: Hive Mind system with collective intelligence
 
 ## 🚀 Quick Start
 
@@ -86,7 +83,7 @@ dsp -c# Axis Camera Uptime Monitor
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/AxisCameraUptime.git
+   git clone https://github.com/nathanmartin331-beep/AxisCameraUptime.git
    cd AxisCameraUptime
    ```
 
@@ -336,7 +333,7 @@ Retrieve all cameras.
 ]
 ```
 
-#### POST `/api/cameras`
+#### POST `/api/cameras` (Admin only)
 Add a new camera to monitoring.
 
 **Request Body**:
@@ -376,10 +373,10 @@ Get detailed information about a specific camera.
 }
 ```
 
-#### PUT `/api/cameras/:id`
+#### PUT `/api/cameras/:id` (Admin only)
 Update camera configuration.
 
-#### DELETE `/api/cameras/:id`
+#### DELETE `/api/cameras/:id` (Admin only)
 Remove camera from monitoring.
 
 ### Camera Status
@@ -446,7 +443,7 @@ Generate uptime report.
 
 ### Network Scanning
 
-#### POST `/api/network/scan`
+#### POST `/api/network/scan` (Admin only)
 Scan network for Axis cameras.
 
 **Request Body**:
@@ -472,69 +469,6 @@ Scan network for Axis cameras.
   "duration": 45000
 }
 ```
-
-## 🤖 Advanced Features
-
-### Hive Mind AI System
-
-Your project includes a **Hive Mind** - a hierarchical swarm of AI agents that work together with collective intelligence and distributed memory.
-
-**Architecture**:
-- 👑 Queen Coordinator - Strategic command & control
-- 🧠 Collective Intelligence - Consensus-based decisions
-- 💾 Memory Manager - Distributed memory operations
-- 🐝 8 Worker Agents - Task execution (auto-scaling)
-- 🔍 3 Scout Agents - Code exploration & intelligence
-
-**Quick Start**:
-```bash
-# Initialize Hive Mind
-npx claude-flow@alpha hive-mind init
-
-# Spawn swarm for a task
-npx claude-flow@alpha hive-mind spawn "Add authentication to camera endpoints" --auto-spawn
-
-# Monitor swarm status
-npx claude-flow@alpha hive-mind status
-```
-
-**Documentation**: See `docs/hive-mind/` for complete guide.
-
-### Agentic QE Fleet
-
-Comprehensive AI-powered quality engineering with 19 specialized agents:
-
-**Core Agents**:
-- `qe-test-generator` - AI-powered test generation
-- `qe-test-executor` - Parallel test execution
-- `qe-coverage-analyzer` - O(log n) coverage analysis
-- `qe-quality-gate` - Intelligent quality gates
-- `qe-security-scanner` - Multi-layer security scanning
-- `qe-performance-tester` - Load testing & benchmarking
-
-**Quick Start**:
-```bash
-# Generate tests
-aqe test auth --coverage 90
-
-# Analyze coverage
-aqe coverage
-
-# Run quality gate
-aqe quality
-
-# Check fleet status
-aqe status
-```
-
-**Features**:
-- ✅ Sublinear test optimization (70% time reduction)
-- ✅ Real-time streaming progress
-- ✅ Multi-model routing (70-81% cost savings)
-- ✅ 34 specialized QE skills
-- ✅ Q-learning for continuous improvement
-
-**Documentation**: See `.agentic-qe/` and `CLAUDE.md` for complete guide.
 
 ## 🔧 Development
 
@@ -661,18 +595,6 @@ Contributions are welcome! Please follow these steps:
 - Follow the existing code style
 - Use meaningful commit messages
 
-### Using AI Agents for Development
-
-This project supports AI-assisted development:
-
-```bash
-# Use Hive Mind for complex features
-npx claude-flow@alpha hive-mind spawn "Your feature description" --auto-spawn
-
-# Use QE Fleet for quality assurance
-aqe test your-module --coverage 90
-```
-
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
@@ -686,12 +608,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/AxisCameraUptime/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/AxisCameraUptime/discussions)
-- **Email**: support@example.com
-
----
-
-**Made with ❤️ by Your Team**
-
-*Monitor your cameras, not your worries.*
+- **Issues**: [GitHub Issues](https://github.com/nathanmartin331-beep/AxisCameraUptime/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/nathanmartin331-beep/AxisCameraUptime/discussions)
