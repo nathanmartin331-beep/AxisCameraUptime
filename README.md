@@ -37,7 +37,6 @@
 - **Product Lifecycle Tracking** - EOL/EOS status from Axis Communications
 - **Customizable Dashboard** - Drag-and-drop widget arrangement with grid layout
 - **Camera Groups** - Organize cameras into logical groups
-- **Dark Mode** - Full dark mode support with theme persistence
 - **User Management** - Role-based access control with Admin and Viewer roles
 - **Session Management** - Secure local authentication with Passport.js
 
