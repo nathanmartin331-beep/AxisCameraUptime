@@ -584,31 +584,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Update camera
       await storage.updateCameraModel(cameraId, result);
 
-      // Fire-and-forget: look up lifecycle data for this model
+      // Look up lifecycle data for this model (awaited so it's in the response)
+      let lifecycle = null;
       if (result.model) {
         const { lookupAxisEolWithFetch } = await import("./services/axisEolData");
-        lookupAxisEolWithFetch(result.model).then(async (eolData) => {
+        try {
+          const eolData = await lookupAxisEolWithFetch(result.model);
           if (eolData) {
-            await storage.updateCameraCapabilities(cameraId, {
-              lifecycle: {
-                status: eolData.status,
-                statusLabel: eolData.statusLabel,
-                discontinuedDate: eolData.discontinuedDate || null,
-                endOfHardwareSupport: eolData.endOfHardwareSupport || null,
-                endOfSoftwareSupport: eolData.endOfSoftwareSupport || null,
-                replacementModel: eolData.replacementModel || null,
-                lastChecked: new Date().toISOString(),
-              },
-            }, true);
+            lifecycle = {
+              status: eolData.status,
+              statusLabel: eolData.statusLabel,
+              discontinuedDate: eolData.discontinuedDate || null,
+              endOfHardwareSupport: eolData.endOfHardwareSupport || null,
+              endOfSoftwareSupport: eolData.endOfSoftwareSupport || null,
+              replacementModel: eolData.replacementModel || null,
+              lastChecked: new Date().toISOString(),
+            };
+            await storage.updateCameraCapabilities(cameraId, { lifecycle }, true);
           }
-        }).catch(() => { /* silent */ });
+        } catch { /* silent — lifecycle is best-effort */ }
       }
 
       res.json({
         success: true,
         model: result.model,
         series: result.series,
-        capabilities: result.capabilities,
+        capabilities: { ...result.capabilities, lifecycle },
       });
     } catch (error: any) {
       console.error("Model detection error:", error);
