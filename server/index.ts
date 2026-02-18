@@ -15,6 +15,9 @@ import { sqlite } from "./db";
 const app = express();
 const BetterSqlite3Store = SqliteStore(session);
 
+// Detect whether HTTPS is enabled (certs provided) to set secure cookies
+const httpsEnabled = !!(process.env.SSL_CERT_PATH && process.env.SSL_KEY_PATH);
+
 // Session configuration with SQLite-based storage (replaces file-store to fix
 // Windows EPERM errors caused by file-locking during atomic renames)
 app.use(
@@ -32,7 +35,7 @@ app.use(
     cookie: {
       maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: httpsEnabled || process.env.NODE_ENV === "production",
       sameSite: "lax",
     },
   })
@@ -50,6 +53,18 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ extended: false }));
+
+// Security headers
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  if (httpsEnabled) {
+    // HSTS: tell browsers to always use HTTPS (1 year, include subdomains)
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+  next();
+});
 
 // Initialize Passport
 app.use(passport.initialize());
@@ -121,7 +136,7 @@ app.use((req, res, next) => {
     port,
     host: "0.0.0.0",
   }, async () => {
-    log(`serving on port ${port}`);
+    log(`serving on ${httpsEnabled ? "https" : "http"}://0.0.0.0:${port}`);
 
     // Ensure default user exists for auto-login
     await ensureDefaultUser();

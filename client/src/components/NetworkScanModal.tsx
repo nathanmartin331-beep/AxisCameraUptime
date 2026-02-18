@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Wifi, Loader2, Plus } from "lucide-react";
+import { Wifi, Loader2, Plus, Lock, Unlock } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -35,6 +35,7 @@ interface DiscoveredDevice {
   firmware?: string;
   series?: string;
   discoveryMethod?: string;
+  detectedProtocol?: string;
   alreadyAdded?: boolean;
 }
 
@@ -140,6 +141,7 @@ export default function NetworkScanModal({
                       <TableHead>IP Address</TableHead>
                       <TableHead>Model</TableHead>
                       <TableHead>Serial</TableHead>
+                      <TableHead>Protocol</TableHead>
                       <TableHead>Discovery</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -171,6 +173,19 @@ export default function NetworkScanModal({
                           <code className="text-sm font-mono text-muted-foreground">
                             {device.serial || "—"}
                           </code>
+                        </TableCell>
+                        <TableCell>
+                          {device.detectedProtocol === "https" ? (
+                            <Badge variant="outline" className="gap-0.5 text-xs border-green-500 text-green-700 bg-green-50">
+                              <Lock className="w-3 h-3" />
+                              HTTPS
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="gap-0.5 text-xs border-amber-400 text-amber-600 bg-amber-50">
+                              <Unlock className="w-3 h-3" />
+                              HTTP
+                            </Badge>
+                          )}
                         </TableCell>
                         <TableCell>
                           <Badge variant={device.alreadyAdded ? "secondary" : "outline"} className="text-xs">

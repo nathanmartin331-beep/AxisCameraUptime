@@ -181,6 +181,11 @@ export const cameras = sqliteTable(
     detectedAt: integer("detected_at", { mode: "timestamp" }),
     detectionMethod: text("detection_method"), // "auto" | "manual" | "import"
 
+    // SSL/TLS certificate pinning (TOFU — Trust On First Use)
+    sslFingerprint: text("ssl_fingerprint"),                     // SHA-256 of server cert (hex)
+    sslFingerprintFirstSeen: integer("ssl_fingerprint_first_seen", { mode: "timestamp" }),
+    sslFingerprintLastVerified: integer("ssl_fingerprint_last_verified", { mode: "timestamp" }),
+
     // Historical uptime backfill tracking
     lastBootAt: integer("last_boot_at", { mode: "timestamp" }),
     historyBackfilled: integer("history_backfilled", { mode: "boolean" }).default(false),

@@ -57,6 +57,9 @@ interface CameraDetails {
     };
   };
   detectedAt?: string;
+  sslFingerprint?: string;
+  sslFingerprintFirstSeen?: string;
+  sslFingerprintLastVerified?: string;
 }
 
 interface CameraDetailViewProps {
@@ -479,6 +482,29 @@ export default function CameraDetailView({
                 )}
               </span>
             </div>
+            {camera.sslFingerprint && (
+              <TooltipProvider>
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">SSL Fingerprint</span>
+                  <Tooltip>
+                    <TooltipTrigger>
+                      <code className="text-xs font-mono text-muted-foreground">
+                        {camera.sslFingerprint.substring(0, 16)}...
+                      </code>
+                    </TooltipTrigger>
+                    <TooltipContent side="left" className="max-w-xs">
+                      <p className="text-xs font-mono break-all">{camera.sslFingerprint}</p>
+                      {camera.sslFingerprintFirstSeen && (
+                        <p className="text-xs mt-1">Pinned: {new Date(camera.sslFingerprintFirstSeen).toLocaleDateString()}</p>
+                      )}
+                      {camera.sslFingerprintLastVerified && (
+                        <p className="text-xs">Verified: {new Date(camera.sslFingerprintLastVerified).toLocaleDateString()}</p>
+                      )}
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              </TooltipProvider>
+            )}
             <div className="flex justify-between">
               <span className="text-sm text-muted-foreground">Added Date</span>
               <span className="text-sm">{camera.addedDate}</span>

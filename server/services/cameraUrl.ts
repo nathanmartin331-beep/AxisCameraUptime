@@ -10,6 +10,9 @@
  */
 
 import { Agent } from "undici";
+import { connect as tlsConnect } from "tls";
+import { createHash } from "crypto";
+import { readFileSync, existsSync } from "fs";
 
 export interface CameraConnectionInfo {
   protocol?: string;       // "http" | "https" (default: "http")
@@ -37,6 +40,15 @@ export function buildCameraUrl(
   return `${protocol}://${ipAddress}${portSuffix}${endpoint}`;
 }
 
+// Optional custom CA certificate for enterprise deployments.
+// Set CAMERA_CA_PATH to a PEM file to trust an internal CA for camera HTTPS connections.
+let customCaCert: Buffer | undefined;
+const caCertPath = process.env.CAMERA_CA_PATH;
+if (caCertPath && existsSync(caCertPath)) {
+  customCaCert = readFileSync(caCertPath);
+  console.log(`[TLS] Loaded custom CA certificate from ${caCertPath}`);
+}
+
 // Cache HTTPS agents by config to avoid creating new ones per request.
 // Key: "verify=true" or "verify=false"
 const agentCache = new Map<string, Agent>();
@@ -61,11 +73,14 @@ export function getCameraDispatcher(
 
   let agent = agentCache.get(key);
   if (!agent) {
-    agent = new Agent({
-      connect: {
-        rejectUnauthorized: verify,
-      },
-    });
+    const connectOpts: Record<string, any> = {
+      rejectUnauthorized: verify,
+    };
+    // Inject custom CA if available (enterprise internal CAs)
+    if (customCaCert) {
+      connectOpts.ca = customCaCert;
+    }
+    agent = new Agent({ connect: connectOpts });
     agentCache.set(key, agent);
   }
   return agent;
@@ -85,4 +100,57 @@ export function getConnectionInfo(camera: {
     port: camera.port || (camera.protocol === "https" ? 443 : 80),
     verifySslCert: camera.verifySslCert ?? false,
   };
+}
+
+/**
+ * Capture the SHA-256 fingerprint of a camera's TLS certificate.
+ * Used for TOFU (Trust On First Use) certificate pinning.
+ *
+ * Connects to the camera's TLS port, grabs the peer certificate,
+ * and returns the SHA-256 hash as a lowercase hex string.
+ * Returns null if the connection fails or the camera uses HTTP.
+ */
+export async function captureSslFingerprint(
+  ipAddress: string,
+  port: number = 443,
+  timeoutMs: number = 5000
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const socket = tlsConnect(
+      {
+        host: ipAddress,
+        port,
+        rejectUnauthorized: false, // Accept self-signed to read cert
+        timeout: timeoutMs,
+      },
+      () => {
+        try {
+          const cert = socket.getPeerCertificate(false);
+          if (cert && cert.raw) {
+            const fingerprint = createHash("sha256")
+              .update(cert.raw)
+              .digest("hex");
+            socket.destroy();
+            resolve(fingerprint);
+          } else {
+            socket.destroy();
+            resolve(null);
+          }
+        } catch {
+          socket.destroy();
+          resolve(null);
+        }
+      }
+    );
+
+    socket.on("error", () => {
+      socket.destroy();
+      resolve(null);
+    });
+
+    socket.on("timeout", () => {
+      socket.destroy();
+      resolve(null);
+    });
+  });
 }

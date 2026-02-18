@@ -8,7 +8,7 @@ import { detectCameraModel } from "./services/cameraDetection";
 import { detectionCache } from "./services/detectionCache";
 import { eq } from "drizzle-orm";
 import { authFetch } from "./services/digestAuth";
-import { buildCameraUrl, getCameraDispatcher, getConnectionInfo, type CameraConnectionInfo } from "./services/cameraUrl";
+import { buildCameraUrl, getCameraDispatcher, getConnectionInfo, captureSslFingerprint, type CameraConnectionInfo } from "./services/cameraUrl";
 import { backfillFromUptimeSeconds, backfillFromSystemLog, backfillFromTvpcHistory } from "./services/historyBackfill";
 import { probeAnalyticsCapabilities } from "./services/analyticsPoller";
 import type { InsertUptimeEvent } from "@shared/schema";
@@ -698,6 +698,57 @@ async function pollSingleCamera(camera: any, conn: CameraConnectionInfo): Promis
       }
     }).catch((err) => {
       console.warn(`[Monitor] Uptime backfill failed for ${camera.name}: ${err.message}`);
+    });
+  }
+
+  // TOFU SSL fingerprint capture/verification (HTTPS cameras only, fire-and-forget)
+  if (conn.protocol === "https") {
+    const port = conn.port || 443;
+    captureSslFingerprint(camera.ipAddress, port).then(async (fingerprint) => {
+      if (!fingerprint) return;
+      const now = new Date();
+
+      if (!camera.sslFingerprint) {
+        // First connection — trust on first use
+        await db.update(cameras)
+          .set({
+            sslFingerprint: fingerprint,
+            sslFingerprintFirstSeen: now,
+            sslFingerprintLastVerified: now,
+            updatedAt: now,
+          })
+          .where(eq(cameras.id, camera.id));
+        console.log(`[Monitor] TOFU: pinned SSL cert for ${camera.name} (${fingerprint.substring(0, 16)}...)`);
+      } else if (camera.sslFingerprint === fingerprint) {
+        // Same cert — update last verified timestamp
+        await db.update(cameras)
+          .set({ sslFingerprintLastVerified: now, updatedAt: now })
+          .where(eq(cameras.id, camera.id));
+      } else {
+        // Fingerprint changed — check if camera rebooted (cert regenerated)
+        const rebooted = camera.currentBootId && camera.currentBootId !== result.bootId;
+        if (rebooted) {
+          // Accept new cert after reboot (Axis cameras may regenerate self-signed certs)
+          await db.update(cameras)
+            .set({
+              sslFingerprint: fingerprint,
+              sslFingerprintFirstSeen: now,
+              sslFingerprintLastVerified: now,
+              updatedAt: now,
+            })
+            .where(eq(cameras.id, camera.id));
+          console.log(`[Monitor] TOFU: cert changed after reboot for ${camera.name}, re-pinned (${fingerprint.substring(0, 16)}...)`);
+        } else {
+          // Cert changed without reboot — potential MITM, log warning
+          console.warn(
+            `[Monitor] TOFU WARNING: SSL cert changed for ${camera.name} (${camera.ipAddress}) without reboot! ` +
+            `Old: ${camera.sslFingerprint.substring(0, 16)}... New: ${fingerprint.substring(0, 16)}...`
+          );
+        }
+      }
+    }).catch((err: any) => {
+      // Non-fatal — fingerprint capture is best-effort
+      console.debug(`[Monitor] TOFU fingerprint capture failed for ${camera.name}: ${err.message}`);
     });
   }
 

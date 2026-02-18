@@ -1,5 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
+import { createServer as createHttpsServer } from "https";
+import { readFileSync, existsSync } from "fs";
 import { storage } from "./storage";
 import { sqlite } from "./db";
 import { requireAuth } from "./auth";
@@ -1921,7 +1923,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  const httpServer = createServer(app);
+  // Create HTTPS server if SSL certificate and key are provided via environment variables.
+  // Set SSL_CERT_PATH and SSL_KEY_PATH to enable native HTTPS for the web UI.
+  // Falls back to plain HTTP if not configured.
+  const sslCertPath = process.env.SSL_CERT_PATH;
+  const sslKeyPath = process.env.SSL_KEY_PATH;
 
-  return httpServer;
+  if (sslCertPath && sslKeyPath && existsSync(sslCertPath) && existsSync(sslKeyPath)) {
+    const httpsOptions: { key: Buffer; cert: Buffer; ca?: Buffer } = {
+      key: readFileSync(sslKeyPath),
+      cert: readFileSync(sslCertPath),
+    };
+    // Optional CA chain for intermediate certificates
+    const sslCaPath = process.env.SSL_CA_PATH;
+    if (sslCaPath && existsSync(sslCaPath)) {
+      httpsOptions.ca = readFileSync(sslCaPath);
+    }
+    console.log("[Server] HTTPS enabled — serving with TLS");
+    return createHttpsServer(httpsOptions, app);
+  }
+
+  return createServer(app);
 }

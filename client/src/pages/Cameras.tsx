@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useQuery } from "@tanstack/react-query";
-import { Plus, Search, Trash2, Eye, Upload, MapPin, Pencil } from "lucide-react";
+import { Plus, Search, Trash2, Eye, Upload, MapPin, Pencil, Lock, Unlock } from "lucide-react";
 import { Link } from "wouter";
 import AddCameraModal, { CameraFormData } from "@/components/AddCameraModal";
 import CSVImportModal from "@/components/CSVImportModal";
@@ -28,6 +28,7 @@ interface Camera {
   location?: string;
   notes?: string | null;
   lastSeenAt: string | null;
+  protocol?: string;
 }
 
 export default function Cameras() {
@@ -306,9 +307,22 @@ export default function Cameras() {
                       <h3 className="font-medium" data-testid={`text-camera-name-${camera.id}`}>
                         {camera.name}
                       </h3>
-                      <p className="text-sm text-muted-foreground" data-testid={`text-camera-ip-${camera.id}`}>
-                        {camera.ipAddress}
-                      </p>
+                      <div className="flex items-center gap-1.5" data-testid={`text-camera-ip-${camera.id}`}>
+                        <p className="text-sm text-muted-foreground">
+                          {camera.ipAddress}
+                        </p>
+                        {camera.protocol === "https" ? (
+                          <Badge variant="outline" className="gap-0.5 px-1.5 py-0 text-[10px] border-green-500 text-green-700 bg-green-50">
+                            <Lock className="w-2.5 h-2.5" />
+                            HTTPS
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="gap-0.5 px-1.5 py-0 text-[10px] border-amber-400 text-amber-600 bg-amber-50">
+                            <Unlock className="w-2.5 h-2.5" />
+                            HTTP
+                          </Badge>
+                        )}
+                      </div>
                       {camera.location && (
                         <div className="flex items-center gap-1 mt-1">
                           <MapPin className="w-3 h-3 text-muted-foreground" />

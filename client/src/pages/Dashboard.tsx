@@ -116,7 +116,8 @@ function transformCamera(apiCamera: ApiCamera, uptimeMap: Map<string, { uptime: 
     hasAudio: apiCamera.hasAudio,
     numberOfViews: apiCamera.numberOfViews,
     capabilities: apiCamera.capabilities,
-    detectedAt: apiCamera.detectedAt || undefined
+    detectedAt: apiCamera.detectedAt || undefined,
+    protocol: (apiCamera as any).protocol || "http",
   };
 }
 

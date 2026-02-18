@@ -9,7 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import StatusIndicator, { CameraStatus } from "./StatusIndicator";
-import { MoreVertical, Eye, CheckCircle2, AlertTriangle, XCircle, Move, Mic, Camera as CameraIcon, Loader2, BarChart3 } from "lucide-react";
+import { MoreVertical, Eye, CheckCircle2, AlertTriangle, XCircle, Move, Mic, Camera as CameraIcon, Loader2, BarChart3, Lock, Unlock } from "lucide-react";
 import { 
   Tooltip,
   TooltipContent,
@@ -43,6 +43,7 @@ export interface Camera {
   numberOfViews?: number;
   capabilities?: Record<string, any>;
   detectedAt?: string;
+  protocol?: string;
 }
 
 interface CameraTableProps {
@@ -232,7 +233,39 @@ export default function CameraTable({
                   </TooltipProvider>
                 </TableCell>
                 <TableCell>
-                  <code className="text-sm font-mono">{camera.ipAddress}</code>
+                  <div className="flex items-center gap-1.5">
+                    <code className="text-sm font-mono">{camera.ipAddress}</code>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger>
+                          {camera.protocol === "https" ? (
+                            <Badge
+                              variant="outline"
+                              className="gap-0.5 px-1.5 py-0 text-[10px] border-green-500 text-green-700 bg-green-50"
+                            >
+                              <Lock className="w-2.5 h-2.5" />
+                              HTTPS
+                            </Badge>
+                          ) : (
+                            <Badge
+                              variant="outline"
+                              className="gap-0.5 px-1.5 py-0 text-[10px] border-amber-400 text-amber-600 bg-amber-50"
+                            >
+                              <Unlock className="w-2.5 h-2.5" />
+                              HTTP
+                            </Badge>
+                          )}
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="text-xs">
+                            {camera.protocol === "https"
+                              ? "Encrypted connection (TLS/SSL)"
+                              : "Unencrypted connection — consider upgrading to HTTPS"}
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
                 </TableCell>
                 <TableCell>{camera.location}</TableCell>
                 <TableCell>

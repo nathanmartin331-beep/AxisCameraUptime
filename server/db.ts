@@ -30,6 +30,9 @@ function ensureColumn(table: string, column: string, type: string) {
 }
 ensureColumn('analytics_daily_summary', 'metadata', 'TEXT');
 ensureColumn('analytics_hourly_summary', 'metadata', 'TEXT');
+ensureColumn('cameras', 'ssl_fingerprint', 'TEXT');
+ensureColumn('cameras', 'ssl_fingerprint_first_seen', 'INTEGER');
+ensureColumn('cameras', 'ssl_fingerprint_last_verified', 'INTEGER');
 
 export const db = drizzle(sqlite, { schema });
 export { sqlite };

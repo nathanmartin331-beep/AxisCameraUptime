@@ -532,6 +532,9 @@ export default function CameraDetail() {
     protocol: (camera as any).protocol ?? undefined,
     port: (camera as any).port ?? undefined,
     verifySslCert: (camera as any).verifySslCert ?? undefined,
+    sslFingerprint: (camera as any).sslFingerprint ?? undefined,
+    sslFingerprintFirstSeen: (camera as any).sslFingerprintFirstSeen ?? undefined,
+    sslFingerprintLastVerified: (camera as any).sslFingerprintLastVerified ?? undefined,
   };
 
   const chartData = transformEventsToChartData();
