@@ -5,8 +5,9 @@ server/public
 vite.config.ts.*
 *.tar.gz
 
-# Claude Flow generated files
-.claude/settings.local.json
+# Claude config and generated files
+.claude/
+
 .mcp.json
 claude-flow.config.json
 .swarm/
