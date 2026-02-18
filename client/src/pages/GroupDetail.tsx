@@ -15,6 +15,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   AreaChart,
   Area,
@@ -84,11 +85,19 @@ interface AllCamera {
   ipAddress: string;
 }
 
-function formatTrendTimestamp(timestamp: string): string {
+function formatTrendTimestamp(timestamp: string, days: number): string {
   const date = new Date(timestamp);
-  return date.toLocaleTimeString("en-US", {
+  if (days <= 1) {
+    return date.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+  }
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
     hour: "numeric",
-    minute: "2-digit",
     hour12: true,
   });
 }
@@ -99,6 +108,7 @@ export default function GroupDetail() {
   const { toast } = useToast();
   const [manageOpen, setManageOpen] = useState(false);
   const [selectedCameraIds, setSelectedCameraIds] = useState<Set<string>>(new Set());
+  const [trendDays, setTrendDays] = useState(7);
 
   // Fetch group details
   const {
@@ -129,9 +139,9 @@ export default function GroupDetail() {
 
   // Fetch analytics summary
   const { data: analytics, isLoading: analyticsLoading } = useQuery<AnalyticsData>({
-    queryKey: ["/api/groups", groupId, "analytics"],
+    queryKey: ["/api/groups", groupId, "analytics", trendDays],
     queryFn: async () => {
-      const res = await fetch(`/api/groups/${groupId}/analytics?days=1`, { credentials: "include" });
+      const res = await fetch(`/api/groups/${groupId}/analytics?days=${trendDays}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed");
       return res.json();
     },
@@ -140,9 +150,9 @@ export default function GroupDetail() {
 
   // Fetch trend data
   const { data: trend, isLoading: trendLoading } = useQuery<TrendData>({
-    queryKey: ["/api/groups", groupId, "trend"],
+    queryKey: ["/api/groups", groupId, "trend", trendDays],
     queryFn: async () => {
-      const res = await fetch(`/api/groups/${groupId}/analytics/trend?eventType=occupancy&days=1`, { credentials: "include" });
+      const res = await fetch(`/api/groups/${groupId}/analytics/trend?eventType=occupancy&days=${trendDays}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed");
       return res.json();
     },
@@ -279,7 +289,7 @@ export default function GroupDetail() {
   const memberCount = group.members.length;
 
   const chartData = (trend?.trend ?? []).map((point) => ({
-    time: formatTrendTimestamp(point.timestamp),
+    time: formatTrendTimestamp(point.timestamp, trendDays),
     occupancy: point.value,
   }));
 
@@ -432,8 +442,15 @@ export default function GroupDetail() {
 
       {/* Occupancy Trend Chart */}
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <CardTitle>Occupancy Trend</CardTitle>
+          <Tabs value={String(trendDays)} onValueChange={(v) => setTrendDays(parseInt(v))}>
+            <TabsList className="h-8">
+              <TabsTrigger value="1" className="text-xs px-2 h-6">24h</TabsTrigger>
+              <TabsTrigger value="7" className="text-xs px-2 h-6">7d</TabsTrigger>
+              <TabsTrigger value="30" className="text-xs px-2 h-6">30d</TabsTrigger>
+            </TabsList>
+          </Tabs>
         </CardHeader>
         <CardContent>
           {trendLoading ? (
