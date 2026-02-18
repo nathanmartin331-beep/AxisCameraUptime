@@ -33,6 +33,7 @@ export const users = sqliteTable("users", {
   password: text("password").notNull(),
   firstName: text("first_name"),
   lastName: text("last_name"),
+  role: text("role").default("viewer").notNull(),
   createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
   updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
@@ -40,6 +41,7 @@ export const users = sqliteTable("users", {
 export const insertUserSchema = createInsertSchema(users, {
   email: z.string().email("Invalid email address"),
   password: z.string().min(8, "Password must be at least 8 characters"),
+  role: z.enum(["admin", "viewer"]).optional().default("viewer"),
 }).omit({
   id: true,
   createdAt: true,

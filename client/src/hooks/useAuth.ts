@@ -34,5 +34,6 @@ export function useAuth() {
     user,
     isLoading,
     isAuthenticated: !!user,
+    role: (user as any)?.role as string | undefined,
   };
 }

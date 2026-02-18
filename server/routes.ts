@@ -4,7 +4,7 @@ import { createServer as createHttpsServer } from "https";
 import { readFileSync, existsSync } from "fs";
 import { storage } from "./storage";
 import { sqlite } from "./db";
-import { requireAuth } from "./auth";
+import { requireAuth, requireAdmin } from "./auth";
 import { encryptPassword } from "./encryption";
 import { checkAllCameras } from "./cameraMonitor";
 import { insertCameraSchema, type Camera } from "@shared/schema";
@@ -154,7 +154,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/cameras", requireAuth, async (req: any, res) => {
+  app.post("/api/cameras", requireAdmin, async (req: any, res) => {
     try {
       const userId = getUserId(req);
 
@@ -194,7 +194,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch("/api/cameras/:id", requireAuth, async (req: any, res) => {
+  app.patch("/api/cameras/:id", requireAdmin, async (req: any, res) => {
     try {
       const cameraId = validateId(req.params.id);
       if (!cameraId) return sendError(res, 400, "Invalid camera ID");
@@ -250,7 +250,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/cameras/:id", requireAuth, async (req: any, res) => {
+  app.delete("/api/cameras/:id", requireAdmin, async (req: any, res) => {
     try {
       const cameraId = validateId(req.params.id);
       if (!cameraId) return sendError(res, 400, "Invalid camera ID");
@@ -552,7 +552,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Model Management Endpoints
 
   // POST /api/cameras/:id/detect-model - Manually trigger model detection
-  app.post("/api/cameras/:id/detect-model", requireAuth, async (req: any, res) => {
+  app.post("/api/cameras/:id/detect-model", requireAdmin, async (req: any, res) => {
     try {
       const userId = getUserId(req);
       const cameraId = validateId(req.params.id);
@@ -666,7 +666,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // POST /api/cameras/:id/probe-analytics - Probe for installed analytics ACAPs
-  app.post("/api/cameras/:id/probe-analytics", requireAuth, async (req: any, res) => {
+  app.post("/api/cameras/:id/probe-analytics", requireAdmin, async (req: any, res) => {
     try {
       const userId = getUserId(req);
       const cameraId = validateId(req.params.id);
@@ -710,7 +710,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // PATCH /api/cameras/:id/analytics-config - Enable/disable analytics polling
-  app.patch("/api/cameras/:id/analytics-config", requireAuth, async (req: any, res) => {
+  app.patch("/api/cameras/:id/analytics-config", requireAdmin, async (req: any, res) => {
     try {
       const userId = getUserId(req);
       const cameraId = validateId(req.params.id);
@@ -841,7 +841,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Network scanning routes
-  app.post("/api/scan/subnet", requireAuth, async (req: any, res) => {
+  app.post("/api/scan/subnet", requireAdmin, async (req: any, res) => {
     try {
       if (!req.body || typeof req.body !== "object") {
         return sendError(res, 400, "Request body is required");
@@ -883,7 +883,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Network scan with CIDR notation (for frontend NetworkScan page)
-  app.post("/api/cameras/scan", requireAuth, async (req: any, res) => {
+  app.post("/api/cameras/scan", requireAdmin, async (req: any, res) => {
     try {
       const scanRequestSchema = z.object({
         subnet: z.string().min(1, "Subnet is required"),
@@ -978,7 +978,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Unified camera discovery (Bonjour + SSDP + HTTP scan)
-  app.post("/api/cameras/discover", requireAuth, async (req: any, res) => {
+  app.post("/api/cameras/discover", requireAdmin, async (req: any, res) => {
     try {
       const discoverSchema = z.object({
         subnet: z.string().optional(),
@@ -1046,7 +1046,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Bulk add cameras from discovery results
-  app.post("/api/cameras/bulk-add", requireAuth, async (req: any, res) => {
+  app.post("/api/cameras/bulk-add", requireAdmin, async (req: any, res) => {
     try {
       const bulkAddSchema = z.object({
         cameras: z.array(z.object({
@@ -1234,7 +1234,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // CSV import route
-  app.post("/api/cameras/import", requireAuth, async (req: any, res) => {
+  app.post("/api/cameras/import", requireAdmin, async (req: any, res) => {
     try {
       if (!req.body || typeof req.body !== "object") {
         return sendError(res, 400, "Request body is required");
@@ -1541,7 +1541,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create group
-  app.post("/api/groups", requireAuth, async (req: any, res) => {
+  app.post("/api/groups", requireAdmin, async (req: any, res) => {
     try {
       const userId = getUserId(req);
       const createGroupSchema = z.object({
@@ -1583,7 +1583,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update group
-  app.patch("/api/groups/:id", requireAuth, async (req: any, res) => {
+  app.patch("/api/groups/:id", requireAdmin, async (req: any, res) => {
     try {
       const groupId = validateId(req.params.id);
       if (!groupId) return sendError(res, 400, "Invalid group ID");
@@ -1619,7 +1619,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Delete group
-  app.delete("/api/groups/:id", requireAuth, async (req: any, res) => {
+  app.delete("/api/groups/:id", requireAdmin, async (req: any, res) => {
     try {
       const groupId = validateId(req.params.id);
       if (!groupId) return sendError(res, 400, "Invalid group ID");
@@ -1637,7 +1637,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Add cameras to group
-  app.post("/api/groups/:id/members", requireAuth, async (req: any, res) => {
+  app.post("/api/groups/:id/members", requireAdmin, async (req: any, res) => {
     try {
       const groupId = validateId(req.params.id);
       if (!groupId) return sendError(res, 400, "Invalid group ID");
@@ -1684,7 +1684,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Remove camera from group
-  app.delete("/api/groups/:id/members/:cameraId", requireAuth, async (req: any, res) => {
+  app.delete("/api/groups/:id/members/:cameraId", requireAdmin, async (req: any, res) => {
     try {
       const groupId = validateId(req.params.id);
       if (!groupId) return sendError(res, 400, "Invalid group ID");
@@ -1931,8 +1931,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // PATCH /api/settings - update user settings
-  app.patch("/api/settings", requireAuth, async (req: any, res) => {
+  // PATCH /api/settings - update user settings (admin only)
+  app.patch("/api/settings", requireAdmin, async (req: any, res) => {
     try {
       const userId = getUserId(req);
 
@@ -1966,7 +1966,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ===== Admin Routes =====
 
   // POST /api/admin/cleanup - delete old uptime events based on user's retention setting
-  app.post("/api/admin/cleanup", requireAuth, async (req: any, res) => {
+  app.post("/api/admin/cleanup", requireAdmin, async (req: any, res) => {
     try {
       const userId = getUserId(req);
       const settings = await storage.getUserSettings(userId);

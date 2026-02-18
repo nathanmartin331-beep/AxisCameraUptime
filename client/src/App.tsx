@@ -16,6 +16,7 @@ import Settings from "@/pages/Settings";
 import CustomizableDashboard from "@/pages/CustomizableDashboard";
 import Groups from "@/pages/Groups";
 import GroupDetail from "@/pages/GroupDetail";
+import Users from "@/pages/Users";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
@@ -32,6 +33,7 @@ function Router() {
       <Route path="/custom-dashboard" component={CustomizableDashboard} />
       <Route path="/groups" component={Groups} />
       <Route path="/groups/:id" component={GroupDetail} />
+      <Route path="/users" component={Users} />
       <Route component={NotFound} />
     </Switch>
   );

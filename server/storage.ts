@@ -229,6 +229,10 @@ export interface IStorage {
     perCamera: Array<{ id: string; name: string; in: number; out: number; occupancy: number }>;
   }>;
 
+  // User management operations
+  getAllUsers(): Promise<SafeUser[]>;
+  deleteUser(id: string): Promise<void>;
+
   // User settings operations
   getUserSettings(userId: string): Promise<UserSettings>;
   updateUserSettings(userId: string, settings: Partial<Pick<UserSettings, 'pollingInterval' | 'dataRetentionDays' | 'emailNotifications'>>): Promise<UserSettings>;
@@ -1121,6 +1125,16 @@ export class DatabaseStorage implements IStorage {
       currentOccupancy: occupancyData.total,
       perCamera,
     };
+  }
+
+  // User management operations
+  async getAllUsers(): Promise<SafeUser[]> {
+    const allUsers = await db.select().from(users).orderBy(users.createdAt);
+    return allUsers.map(sanitizeUser);
+  }
+
+  async deleteUser(id: string): Promise<void> {
+    await db.delete(users).where(eq(users.id, id));
   }
 
   // User settings operations

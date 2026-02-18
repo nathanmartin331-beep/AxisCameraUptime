@@ -36,6 +36,7 @@ export async function ensureDefaultUser() {
         firstName: DEFAULT_USER.firstName,
         lastName: DEFAULT_USER.lastName,
         password: hashedPassword,
+        role: "admin",
       });
 
       if (process.env.NODE_ENV === 'development') {
@@ -45,6 +46,10 @@ export async function ensureDefaultUser() {
       } else {
         console.log("[Setup] Default admin user created successfully");
       }
+    } else if (existingUser.role !== "admin") {
+      // Upgrade existing default user to admin if they don't have the role yet
+      await storage.updateUser(existingUser.id, { role: "admin" });
+      console.log("[Setup] Default user upgraded to admin role");
     }
   } catch (error) {
     console.error("[Setup] Error creating default user:", error);

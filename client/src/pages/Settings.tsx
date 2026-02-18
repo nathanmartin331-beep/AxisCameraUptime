@@ -5,12 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/hooks/useAuth";
-import { Bell, Clock, Database, User, Lock, AlertTriangle, Loader2 } from "lucide-react";
+import { Bell, Clock, Database, User, Lock, AlertTriangle, Loader2, Save } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { Badge } from "@/components/ui/badge";
 
 interface UserSettingsData {
   id: string;
@@ -28,6 +29,11 @@ export default function Settings() {
   const [dataRetention, setDataRetention] = useState("90");
   const [isSaving, setIsSaving] = useState(false);
   const [isCleaningUp, setIsCleaningUp] = useState(false);
+
+  // Profile editing state
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
 
   // Password change state
   const [currentPassword, setCurrentPassword] = useState("");
@@ -48,6 +54,37 @@ export default function Settings() {
       setDataRetention(String(settings.dataRetentionDays ?? 90));
     }
   }, [settings]);
+
+  // Sync profile fields when user data loads
+  useEffect(() => {
+    if (user) {
+      setFirstName((user as any)?.firstName || "");
+      setLastName((user as any)?.lastName || "");
+    }
+  }, [user]);
+
+  const handleSaveProfile = async () => {
+    setIsSavingProfile(true);
+    try {
+      const data: Record<string, string> = {};
+      if (firstName) data.firstName = firstName;
+      if (lastName) data.lastName = lastName;
+      await apiRequest("PATCH", "/api/auth/me", data);
+      await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+      toast({
+        title: "Profile Updated",
+        description: "Your profile has been saved",
+      });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Failed to Update Profile",
+        description: error.message || "Please try again",
+      });
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
 
   const handleSaveSettings = async () => {
     setIsSaving(true);
@@ -160,9 +197,16 @@ export default function Settings() {
 
         <Card>
           <CardHeader>
-            <div className="flex items-center gap-2">
-              <User className="w-5 h-5" />
-              <CardTitle>Account Information</CardTitle>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <User className="w-5 h-5" />
+                <CardTitle>Account Information</CardTitle>
+              </div>
+              {(user as any)?.role && (
+                <Badge variant={(user as any).role === "admin" ? "default" : "secondary"}>
+                  {(user as any).role === "admin" ? "Admin" : "Viewer"}
+                </Badge>
+              )}
             </div>
             <CardDescription>Your account details</CardDescription>
           </CardHeader>
@@ -181,8 +225,8 @@ export default function Settings() {
                 <Label htmlFor="firstName">First Name</Label>
                 <Input
                   id="firstName"
-                  value={(user as any)?.firstName || ""}
-                  disabled
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
                   data-testid="input-first-name"
                 />
               </div>
@@ -190,12 +234,25 @@ export default function Settings() {
                 <Label htmlFor="lastName">Last Name</Label>
                 <Input
                   id="lastName"
-                  value={(user as any)?.lastName || ""}
-                  disabled
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
                   data-testid="input-last-name"
                 />
               </div>
             </div>
+            <Button
+              onClick={handleSaveProfile}
+              disabled={isSavingProfile}
+              size="sm"
+              data-testid="button-save-profile"
+            >
+              {isSavingProfile ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Save className="w-4 h-4 mr-2" />
+              )}
+              {isSavingProfile ? "Saving..." : "Save Profile"}
+            </Button>
           </CardContent>
         </Card>
 

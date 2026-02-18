@@ -10,10 +10,19 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
-import { Home, Camera, Wifi, FileText, Settings, LogOut, LayoutDashboard, FolderOpen } from "lucide-react";
+import { Home, Camera, Wifi, FileText, Settings, LogOut, LayoutDashboard, FolderOpen, Users } from "lucide-react";
 import { Link, useLocation } from "wouter";
+import { useAuth } from "@/hooks/useAuth";
+import { queryClient } from "@/lib/queryClient";
 
-const menuItems = [
+interface MenuItem {
+  title: string;
+  url: string;
+  icon: React.ComponentType<{ className?: string }>;
+  adminOnly?: boolean;
+}
+
+const menuItems: MenuItem[] = [
   {
     title: "Dashboard",
     url: "/",
@@ -45,6 +54,12 @@ const menuItems = [
     icon: FileText,
   },
   {
+    title: "Users",
+    url: "/users",
+    icon: Users,
+    adminOnly: true,
+  },
+  {
     title: "Settings",
     url: "/settings",
     icon: Settings,
@@ -53,6 +68,18 @@ const menuItems = [
 
 export function AppSidebar() {
   const [location] = useLocation();
+  const { user } = useAuth();
+  const userRole = (user as any)?.role;
+
+  const visibleItems = menuItems.filter(
+    (item) => !item.adminOnly || userRole === "admin"
+  );
+
+  const handleLogout = async () => {
+    await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+    window.location.href = "/";
+  };
 
   return (
     <Sidebar>
@@ -72,7 +99,7 @@ export function AppSidebar() {
           <SidebarGroupLabel>Navigation</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {menuItems.map((item) => (
+              {visibleItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton
                     asChild
@@ -93,7 +120,7 @@ export function AppSidebar() {
       <SidebarFooter className="border-t p-4">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton data-testid="button-logout">
+            <SidebarMenuButton onClick={handleLogout} data-testid="button-logout">
               <LogOut className="h-4 w-4" />
               <span>Logout</span>
             </SidebarMenuButton>
