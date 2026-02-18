@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { sqlite } from "./db";
 import { requireAuth } from "./auth";
 import { encryptPassword } from "./encryption";
 import { checkAllCameras } from "./cameraMonitor";
@@ -1768,11 +1769,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const endDate = new Date();
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - days);
+      const startTs = Math.floor(startDate.getTime() / 1000);
+      const endTs = Math.floor(endDate.getTime() / 1000);
 
-      // Get members and aggregate their events
+      // Get members and aggregate their events from all 3 data tiers
+      // (raw events are purged after 6h, hourly summaries after 48h)
       const members = await storage.getGroupMembers(groupId);
+      const memberIds = members.map((m) => m.id);
       const allEvents: Array<{ timestamp: Date; value: number; cameraId: string }> = [];
 
+      // Tier 1: Daily summaries (data older than 48h)
+      if (memberIds.length > 0) {
+        const placeholders = memberIds.map(() => "?").join(",");
+        const dailyRows = sqlite.prepare(`
+          SELECT camera_id, day_start, max_value
+          FROM analytics_daily_summary
+          WHERE camera_id IN (${placeholders}) AND event_type = ? AND day_start >= ? AND day_start <= ?
+        `).all(...memberIds, eventType, startTs, endTs) as Array<{ camera_id: string; day_start: number; max_value: number }>;
+        for (const row of dailyRows) {
+          allEvents.push({ timestamp: new Date(row.day_start * 1000), value: row.max_value ?? 0, cameraId: row.camera_id });
+        }
+
+        // Tier 2: Hourly summaries (data 6h–48h old)
+        const hourlyRows = sqlite.prepare(`
+          SELECT camera_id, hour_start, max_value
+          FROM analytics_hourly_summary
+          WHERE camera_id IN (${placeholders}) AND event_type = ? AND hour_start >= ? AND hour_start <= ?
+        `).all(...memberIds, eventType, startTs, endTs) as Array<{ camera_id: string; hour_start: number; max_value: number }>;
+        for (const row of hourlyRows) {
+          allEvents.push({ timestamp: new Date(row.hour_start * 1000), value: row.max_value ?? 0, cameraId: row.camera_id });
+        }
+      }
+
+      // Tier 3: Raw events (recent data < 6h, not yet rolled up)
       for (const member of members) {
         const events = await storage.getAnalyticsEvents(member.id, eventType, startDate, endDate);
         for (const e of events) {
@@ -1786,7 +1815,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Bucket into hourly intervals
       const buckets: Record<string, number> = {};
       if (eventType === "occupancy") {
-        // For occupancy (point-in-time value), take the latest reading per camera per bucket,
+        // For occupancy, take the latest reading per camera per bucket,
         // then sum across cameras to get group total per bucket
         const perCameraBuckets: Record<string, Record<string, number>> = {};
         for (const event of allEvents) {
@@ -1794,7 +1823,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           hour.setMinutes(0, 0, 0);
           const key = hour.toISOString();
           if (!perCameraBuckets[key]) perCameraBuckets[key] = {};
-          // Overwrite with latest value per camera (events are sorted by timestamp asc)
           perCameraBuckets[key][event.cameraId] = event.value;
         }
         for (const [key, cameraValues] of Object.entries(perCameraBuckets)) {
