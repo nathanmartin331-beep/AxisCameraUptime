@@ -242,25 +242,32 @@ export default function CameraDetailView({
                 <div className="border-t pt-3 mt-3">
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-muted-foreground">Lifecycle Status</span>
-                    <Badge
-                      variant="outline"
-                      className={
-                        camera.lifecycle.status === "end-of-support"
-                          ? "border-red-500 text-red-700 bg-red-50"
-                          : camera.lifecycle.status === "eol-supported"
-                          ? "border-yellow-500 text-yellow-700 bg-yellow-50"
-                          : "border-green-500 text-green-700 bg-green-50"
-                      }
-                    >
-                      {camera.lifecycle.status === "end-of-support" ? (
-                        <AlertTriangle className="mr-1 h-3 w-3" />
-                      ) : camera.lifecycle.status === "eol-supported" ? (
-                        <Clock className="mr-1 h-3 w-3" />
-                      ) : (
-                        <CheckCircle className="mr-1 h-3 w-3" />
+                    <div className="flex items-center gap-2">
+                      {camera.lifecycle.discontinuedDate && (
+                        <span className="text-sm text-muted-foreground">
+                          EOL {new Date(camera.lifecycle.discontinuedDate).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+                        </span>
                       )}
-                      {camera.lifecycle.statusLabel}
-                    </Badge>
+                      <Badge
+                        variant="outline"
+                        className={
+                          camera.lifecycle.status === "end-of-support"
+                            ? "border-red-500 text-red-700 bg-red-50"
+                            : camera.lifecycle.status === "eol-supported"
+                            ? "border-yellow-500 text-yellow-700 bg-yellow-50"
+                            : "border-green-500 text-green-700 bg-green-50"
+                        }
+                      >
+                        {camera.lifecycle.status === "end-of-support" ? (
+                          <AlertTriangle className="mr-1 h-3 w-3" />
+                        ) : camera.lifecycle.status === "eol-supported" ? (
+                          <Clock className="mr-1 h-3 w-3" />
+                        ) : (
+                          <CheckCircle className="mr-1 h-3 w-3" />
+                        )}
+                        {camera.lifecycle.statusLabel}
+                      </Badge>
+                    </div>
                   </div>
                 </div>
                 {camera.lifecycle.discontinuedDate && (
