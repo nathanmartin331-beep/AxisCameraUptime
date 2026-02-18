@@ -1,6 +1,6 @@
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
-import FileStore from "session-file-store";
+import SqliteStore from "better-sqlite3-session-store";
 import passport from "./auth";
 import authRoutes from "./authRoutes";
 import { registerRoutes } from "./routes";
@@ -10,17 +10,21 @@ import { startAnalyticsPolling } from "./services/analyticsPoller";
 import { startDataRetentionService } from "./services/dataRetention";
 import { startDataAggregationService } from "./services/dataAggregation";
 import { ensureDefaultUser } from "./defaultUser";
+import { sqlite } from "./db";
 
 const app = express();
-const SessionFileStore = FileStore(session);
+const BetterSqlite3Store = SqliteStore(session);
 
-// Session configuration with file-based storage
+// Session configuration with SQLite-based storage (replaces file-store to fix
+// Windows EPERM errors caused by file-locking during atomic renames)
 app.use(
   session({
-    store: new SessionFileStore({
-      path: "./sessions",
-      ttl: 30 * 24 * 60 * 60, // 30 days in seconds
-      retries: 0,
+    store: new BetterSqlite3Store({
+      client: sqlite,
+      expired: {
+        clear: true,
+        intervalMs: 15 * 60 * 1000, // Clean expired sessions every 15 min
+      },
     }),
     secret: process.env.SESSION_SECRET || "your-secret-key-change-in-production",
     resave: false,
