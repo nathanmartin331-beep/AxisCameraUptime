@@ -197,11 +197,26 @@ export function createWidgetInstance(type: string, position?: { x: number; y: nu
 
 // Default layout for new users (with unique instance IDs)
 export const DEFAULT_LAYOUT = [
+  // Row 0: Full-width camera status bar
   { id: 'camera-status-1', type: 'camera-status', x: 0, y: 0, w: 12, h: 2 },
+  // Row 2: Core metric cards
   { id: 'network-uptime-1', type: 'network-uptime', x: 0, y: 2, w: 3, h: 2 },
   { id: 'mttr-card-1', type: 'mttr-card', x: 3, y: 2, w: 3, h: 2 },
   { id: 'mtbf-card-1', type: 'mtbf-card', x: 6, y: 2, w: 3, h: 2 },
   { id: 'total-incidents-1', type: 'total-incidents', x: 9, y: 2, w: 3, h: 2 },
-  { id: 'incident-leaderboard-1', type: 'incident-leaderboard', x: 0, y: 4, w: 6, h: 4 },
-  { id: 'site-rankings-1', type: 'site-rankings', x: 6, y: 4, w: 6, h: 4 },
+  // Row 4: Secondary metric cards
+  { id: 'sla-compliance-1', type: 'sla-compliance', x: 0, y: 4, w: 4, h: 2 },
+  { id: 'video-health-1', type: 'video-health', x: 4, y: 4, w: 4, h: 2 },
+  { id: 'group-occupancy-1', type: 'group-occupancy', x: 8, y: 4, w: 4, h: 2 },
+  // Row 6: Site lists
+  { id: 'incident-leaderboard-1', type: 'incident-leaderboard', x: 0, y: 6, w: 6, h: 4 },
+  { id: 'site-rankings-1', type: 'site-rankings', x: 6, y: 6, w: 6, h: 4 },
+  // Row 10: Active incidents + MTTR trend
+  { id: 'active-incidents-1', type: 'active-incidents', x: 0, y: 10, w: 6, h: 3 },
+  { id: 'mttr-trend-1', type: 'mttr-trend', x: 6, y: 10, w: 6, h: 3 },
+  // Row 13: Charts + analytics
+  { id: 'uptime-distribution-1', type: 'uptime-distribution', x: 0, y: 13, w: 6, h: 3 },
+  { id: 'people-flow-1', type: 'people-flow', x: 6, y: 13, w: 6, h: 3 },
+  // Row 16: Group overview
+  { id: 'group-overview-1', type: 'group-overview', x: 0, y: 16, w: 6, h: 3 },
 ];

@@ -5,7 +5,7 @@ import "react-resizable/css/styles.css";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
-import { Plus, Settings, Loader2 } from "lucide-react";
+import { Plus, Settings, Loader2, RotateCcw } from "lucide-react";
 import { WidgetRenderer } from "@/components/widgets/WidgetRenderer";
 import { DEFAULT_LAYOUT, WIDGET_CATALOG, createWidgetInstance } from "@/components/widgets/WidgetCatalog";
 import {
@@ -134,6 +134,11 @@ export default function CustomizableDashboard() {
     saveLayoutMutation.mutate(updatedWidgets);
   };
 
+  const handleResetLayout = () => {
+    setWidgets(DEFAULT_LAYOUT);
+    saveLayoutMutation.mutate(DEFAULT_LAYOUT);
+  };
+
   // Convert widgets to react-grid-layout format
   const layout = widgets.map((widget) => ({
     i: widget.id,
@@ -165,13 +170,18 @@ export default function CustomizableDashboard() {
           <p className="text-muted-foreground">Drag widgets to rearrange, resize as needed</p>
         </div>
         
-        <Dialog open={isAddWidgetOpen} onOpenChange={setIsAddWidgetOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-widget">
-              <Plus className="h-4 w-4 mr-2" />
-              Add Widget
-            </Button>
-          </DialogTrigger>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={handleResetLayout} data-testid="button-reset-layout">
+            <RotateCcw className="h-4 w-4 mr-2" />
+            Reset Layout
+          </Button>
+          <Dialog open={isAddWidgetOpen} onOpenChange={setIsAddWidgetOpen}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-widget">
+                <Plus className="h-4 w-4 mr-2" />
+                Add Widget
+              </Button>
+            </DialogTrigger>
           <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle data-testid="title-widget-catalog">Widget Catalog</DialogTitle>
@@ -208,6 +218,7 @@ export default function CustomizableDashboard() {
             </div>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       <ResponsiveGridLayout
