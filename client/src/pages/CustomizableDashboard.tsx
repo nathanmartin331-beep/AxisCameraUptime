@@ -234,16 +234,16 @@ export default function CustomizableDashboard() {
         containerPadding={[0, 0]}
       >
         {widgets.map((widget) => (
-          <div key={widget.id} className="relative" data-testid={`widget-${widget.id}`}>
+          <div key={widget.id} className="relative group" data-testid={`widget-${widget.id}`}>
             <div className="h-full w-full">
               <WidgetRenderer type={widget.type} config={widget} />
             </div>
-            
-            {/* Remove button (visible on hover) */}
+
+            {/* Remove button (visible on widget hover) */}
             <Button
               size="icon"
               variant="destructive"
-              className="absolute top-2 right-2 h-6 w-6 opacity-0 hover:opacity-100 transition-opacity z-10"
+              className="absolute top-2 right-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity z-10"
               onClick={(e) => {
                 e.stopPropagation();
                 handleRemoveWidget(widget.id);
