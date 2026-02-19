@@ -77,16 +77,17 @@ export interface NetworkMetrics {
   onlineCameras: number;
   offlineCameras: number;
   warningCameras: number;
-  
+
   // Network-wide averages
   averageUptime: number;
   averageMttr: number | null;
   averageMtbf: number | null;
-  
+
   // Network totals
   totalIncidents: number;
+  activeIncidents: number;
   totalSlaBreaches: number;
-  
+
   // Performance
   averageRecoverySuccessRate: number;
 }
@@ -398,6 +399,7 @@ export async function calculateNetworkMetrics(
       averageMttr: null,
       averageMtbf: null,
       totalIncidents: 0,
+      activeIncidents: 0,
       totalSlaBreaches: 0,
       averageRecoverySuccessRate: 0,
     };
@@ -416,6 +418,7 @@ export async function calculateNetworkMetrics(
     : null;
   
   const totalIncidents = cameraMetrics.reduce((sum, m) => sum + m.totalIncidents, 0);
+  const activeIncidents = cameraMetrics.filter(m => m.currentIncident !== null).length;
   const totalSlaBreaches = cameraMetrics.reduce((sum, m) => sum + m.slaBreaches15min, 0);
   
   const averageRecoverySuccessRate = cameraMetrics.reduce((sum, m) => sum + m.recoverySuccessRate, 0) / cameraMetrics.length;
@@ -429,6 +432,7 @@ export async function calculateNetworkMetrics(
     averageMttr,
     averageMtbf,
     totalIncidents,
+    activeIncidents,
     totalSlaBreaches,
     averageRecoverySuccessRate,
   };

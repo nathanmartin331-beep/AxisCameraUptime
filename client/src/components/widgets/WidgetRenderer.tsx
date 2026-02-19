@@ -5,6 +5,14 @@ import { TotalIncidentsWidget } from "./TotalIncidentsWidget";
 import { GroupOccupancyWidget } from "./GroupOccupancyWidget";
 import { PeopleFlowWidget } from "./PeopleFlowWidget";
 import { GroupOverviewWidget } from "./GroupOverviewWidget";
+import { SLAComplianceWidget } from "./SLAComplianceWidget";
+import { VideoHealthWidget } from "./VideoHealthWidget";
+import { IncidentLeaderboardWidget } from "./IncidentLeaderboardWidget";
+import { SiteRankingsWidget } from "./SiteRankingsWidget";
+import { ActiveIncidentsWidget } from "./ActiveIncidentsWidget";
+import { CameraStatusWidget } from "./CameraStatusWidget";
+import { MTTRTrendWidget } from "./MTTRTrendWidget";
+import { UptimeDistributionWidget } from "./UptimeDistributionWidget";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertCircle } from "lucide-react";
 
@@ -40,25 +48,28 @@ export function WidgetRenderer({ type, config }: WidgetRendererProps) {
       return <GroupOverviewWidget />;
 
     case 'sla-compliance':
+      return <SLAComplianceWidget timeWindow={timeWindow} />;
+
     case 'video-health':
+      return <VideoHealthWidget />;
+
     case 'incident-leaderboard':
+      return <IncidentLeaderboardWidget timeWindow={timeWindow} />;
+
     case 'site-rankings':
+      return <SiteRankingsWidget timeWindow={timeWindow} />;
+
     case 'active-incidents':
+      return <ActiveIncidentsWidget />;
+
     case 'camera-status':
+      return <CameraStatusWidget />;
+
     case 'mttr-trend':
+      return <MTTRTrendWidget timeWindow={timeWindow} />;
+
     case 'uptime-distribution':
-      return (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-medium">Coming Soon</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-muted-foreground">
-              {type.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())} widget
-            </p>
-          </CardContent>
-        </Card>
-      );
+      return <UptimeDistributionWidget />;
 
     default:
       return (
