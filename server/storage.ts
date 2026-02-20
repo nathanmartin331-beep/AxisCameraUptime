@@ -219,6 +219,7 @@ export interface IStorage {
   createAnalyticsEventBatch(events: InsertAnalyticsEvent[]): Promise<void>;
   getAnalyticsEvents(cameraId: string, eventType: string, startDate: Date, endDate: Date): Promise<AnalyticsEvent[]>;
   getLatestAnalyticsEvent(cameraId: string, eventType: string): Promise<AnalyticsEvent | undefined>;
+  getLatestAnalyticsEventsByScenario(cameraId: string, eventType: string): Promise<AnalyticsEvent[]>;
   getAnalyticsDailyTotals(cameraId: string, eventType: string, days: number): Promise<Array<{ date: string; total: number; metadata?: Record<string, any> }>>;
   getLatestAnalyticsPerCamera(cameraIds: string[], eventTypes: string[]): Promise<Map<string, Map<string, { value: number; metadata?: Record<string, any> }>>>;
   getGroupCurrentOccupancy(groupId: string): Promise<{ total: number; cameras: Array<{ id: string; name: string; occupancy: number }> }>;
@@ -943,6 +944,43 @@ export class DatabaseStorage implements IStorage {
     return event;
   }
 
+  /**
+   * Get ALL latest analytics events at the most recent timestamp for a camera+eventType.
+   * Returns one entry per scenario when multiple scenarios produce the same eventType.
+   * Used for individual camera views where per-scenario granularity is needed.
+   */
+  async getLatestAnalyticsEventsByScenario(
+    cameraId: string,
+    eventType: string
+  ): Promise<AnalyticsEvent[]> {
+    // First find the latest timestamp for this camera+eventType
+    const [latest] = await db
+      .select()
+      .from(analyticsEvents)
+      .where(
+        and(
+          eq(analyticsEvents.cameraId, cameraId),
+          eq(analyticsEvents.eventType, eventType)
+        )
+      )
+      .orderBy(desc(analyticsEvents.timestamp))
+      .limit(1);
+
+    if (!latest) return [];
+
+    // Return all events at that timestamp (one per scenario)
+    return await db
+      .select()
+      .from(analyticsEvents)
+      .where(
+        and(
+          eq(analyticsEvents.cameraId, cameraId),
+          eq(analyticsEvents.eventType, eventType),
+          eq(analyticsEvents.timestamp, latest.timestamp)
+        )
+      );
+  }
+
   async getAnalyticsDailyTotals(
     cameraId: string,
     eventType: string,
@@ -989,28 +1027,43 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    // 3. Fetch from raw events table (recent data < 6h, not yet rolled up)
-    const events = await db
+    // 3. Fetch from raw events table (recent data < 6h, not yet rolled up).
+    // Group by timestamp first and SUM values — multiple scenarios can produce
+    // the same eventType at the same timestamp. Then take the MAX summed value
+    // per day (cumulative counters grow through the day).
+    const rawEvents = await db
       .select()
       .from(analyticsEvents)
       .where(
         and(
           eq(analyticsEvents.cameraId, cameraId),
           eq(analyticsEvents.eventType, eventType),
-          gte(analyticsEvents.timestamp, startDate),
-          lte(analyticsEvents.timestamp, endDate)
+          gte(analyticsEvents.timestamp, new Date(startTs * 1000)),
+          lte(analyticsEvents.timestamp, new Date(endTs * 1000))
         )
       )
       .orderBy(analyticsEvents.timestamp);
 
-    for (const evt of events) {
-      const d = new Date(evt.timestamp);
-      const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      const existing = dailyMap.get(dateKey);
-      if (!existing || evt.value > existing.total) {
-        dailyMap.set(dateKey, { total: evt.value, metadata: evt.metadata ?? undefined });
+    // Sum values at each timestamp (handles multi-scenario data)
+    const perTimestamp = new Map<number, { sum: number; metadata?: Record<string, any> }>();
+    for (const evt of rawEvents) {
+      const ts = evt.timestamp.getTime();
+      const existing = perTimestamp.get(ts);
+      if (existing) {
+        existing.sum += evt.value;
+      } else {
+        perTimestamp.set(ts, { sum: evt.value, metadata: evt.metadata ?? undefined });
       }
     }
+
+    perTimestamp.forEach((data, ts) => {
+      const d = new Date(ts);
+      const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const existing = dailyMap.get(dateKey);
+      if (!existing || data.sum > existing.total) {
+        dailyMap.set(dateKey, { total: data.sum, metadata: data.metadata });
+      }
+    });
 
     return Array.from(dailyMap.entries())
       .map(([date, data]) => ({ date, ...data }))
@@ -1029,12 +1082,15 @@ export class DatabaseStorage implements IStorage {
     const result = new Map<string, Map<string, { value: number; metadata?: Record<string, any> }>>();
     if (cameraIds.length === 0 || eventTypes.length === 0) return result;
 
-    // Use raw SQL for the GROUP BY with window function to get latest row per camera+type
+    // Use raw SQL to get the SUM of values at the latest timestamp per camera+type.
+    // Multiple scenarios can produce the same event_type at the same timestamp
+    // (e.g., two crossline scenarios both producing line_crossing). Summing
+    // ensures the total across all scenarios is returned.
     const placeholders = cameraIds.map(() => "?").join(",");
     const typePlaceholders = eventTypes.map(() => "?").join(",");
 
     const rows = sqlite.prepare(`
-      SELECT camera_id, event_type, value, metadata
+      SELECT camera_id, event_type, SUM(value) as value, metadata
       FROM analytics_events ae
       WHERE camera_id IN (${placeholders})
         AND event_type IN (${typePlaceholders})
@@ -1043,6 +1099,7 @@ export class DatabaseStorage implements IStorage {
           FROM analytics_events ae2
           WHERE ae2.camera_id = ae.camera_id AND ae2.event_type = ae.event_type
         )
+      GROUP BY camera_id, event_type
     `).all(...cameraIds, ...eventTypes) as Array<{
       camera_id: string;
       event_type: string;
@@ -1071,11 +1128,13 @@ export class DatabaseStorage implements IStorage {
     const members = await this.getGroupMembers(groupId);
     const cameraOccupancies = await Promise.all(
       members.map(async (camera) => {
-        const latest = await this.getLatestAnalyticsEvent(camera.id, "occupancy");
+        // Sum across all scenarios for this camera (group view aggregates)
+        const scenarioEvents = await this.getLatestAnalyticsEventsByScenario(camera.id, "occupancy");
+        const occupancy = scenarioEvents.reduce((sum, e) => sum + e.value, 0);
         return {
           id: camera.id,
           name: camera.name,
-          occupancy: latest?.value ?? 0,
+          occupancy,
         };
       })
     );
@@ -1088,8 +1147,8 @@ export class DatabaseStorage implements IStorage {
 
   async getGroupAnalyticsSummary(
     groupId: string,
-    startDate: Date,
-    endDate: Date
+    _startDate: Date,
+    _endDate: Date
   ): Promise<{
     totalIn: number;
     totalOut: number;
@@ -1101,19 +1160,20 @@ export class DatabaseStorage implements IStorage {
 
     const perCamera = await Promise.all(
       members.map(async (camera) => {
-        // Use latest event value per camera (not sum), because
-        // getAccumulatedCounts returns cumulative totals
-        const [latestIn, latestOut] = await Promise.all([
-          this.getLatestAnalyticsEvent(camera.id, "people_in"),
-          this.getLatestAnalyticsEvent(camera.id, "people_out"),
+        // Sum across all scenarios per camera for group view.
+        // getLatestAnalyticsEventsByScenario returns all events at the latest
+        // timestamp, so each scenario's value is included in the total.
+        const [inEvents, outEvents] = await Promise.all([
+          this.getLatestAnalyticsEventsByScenario(camera.id, "people_in"),
+          this.getLatestAnalyticsEventsByScenario(camera.id, "people_out"),
         ]);
         const cameraOcc = occupancyData.cameras.find((c) => c.id === camera.id);
 
         return {
           id: camera.id,
           name: camera.name,
-          in: latestIn?.value ?? 0,
-          out: latestOut?.value ?? 0,
+          in: inEvents.reduce((sum, e) => sum + e.value, 0),
+          out: outEvents.reduce((sum, e) => sum + e.value, 0),
           occupancy: cameraOcc?.occupancy ?? 0,
         };
       })

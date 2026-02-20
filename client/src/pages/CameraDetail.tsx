@@ -34,9 +34,36 @@ interface AnalyticsEventWithMeta {
   metadata?: Record<string, any>;
 }
 
+interface ScenarioBreakdown {
+  scenario: string;
+  value: number;
+  metadata?: Record<string, any>;
+}
+
 interface AnalyticsResponse {
   latest: AnalyticsEventWithMeta | null;
+  scenarios?: ScenarioBreakdown[];
+  total?: number | null;
   events: AnalyticsEventWithMeta[];
+}
+
+// Per-scenario breakdown component — shows individual scenario values when a camera has multiple
+function ScenarioList({ scenarios }: { scenarios?: ScenarioBreakdown[] }) {
+  if (!scenarios || scenarios.length <= 1) return null;
+
+  return (
+    <div className="mt-2 pt-2 border-t border-dashed">
+      <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Per Scenario</div>
+      <div className="space-y-0.5">
+        {scenarios.map((s, i) => (
+          <div key={i} className="flex justify-between text-xs">
+            <span className="text-muted-foreground truncate mr-2">{s.scenario}</span>
+            <span className="font-medium tabular-nums">{s.value.toLocaleString()}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 // Vehicle breakdown component for displaying category counts
@@ -623,15 +650,18 @@ export default function CameraDetail() {
                     <Users className="h-4 w-4 text-muted-foreground" />
                     <span className="text-sm font-medium text-muted-foreground">Current Occupancy</span>
                   </div>
-                  <div className="text-3xl font-bold">{analyticsData.latest.value.toLocaleString()}</div>
+                  <div className="text-3xl font-bold">
+                    {(analyticsData.total ?? analyticsData.latest.value).toLocaleString()}
+                  </div>
                   <div className="text-xs text-muted-foreground mt-1">
                     {new Date(analyticsData.latest.timestamp).toLocaleTimeString()}
                   </div>
-                  {analyticsData.latest.metadata?.scenario && (
+                  {!analyticsData.scenarios && analyticsData.latest.metadata?.scenario && (
                     <div className="text-xs text-muted-foreground mt-1">
                       {analyticsData.latest.metadata.scenario}
                     </div>
                   )}
+                  <ScenarioList scenarios={analyticsData.scenarios} />
                 </div>
               )}
 
@@ -642,15 +672,18 @@ export default function CameraDetail() {
                     <ArrowDownToLine className="h-4 w-4 text-green-600" />
                     <span className="text-sm font-medium text-muted-foreground">Entering</span>
                   </div>
-                  <div className="text-3xl font-bold text-green-600">{peopleInData.latest.value.toLocaleString()}</div>
+                  <div className="text-3xl font-bold text-green-600">
+                    {(peopleInData.total ?? peopleInData.latest.value).toLocaleString()}
+                  </div>
                   <div className="text-xs text-muted-foreground mt-1">
                     {new Date(peopleInData.latest.timestamp).toLocaleTimeString()}
                   </div>
-                  {peopleInData.latest.metadata?.scenario && (
+                  {!peopleInData.scenarios && peopleInData.latest.metadata?.scenario && (
                     <div className="text-xs text-muted-foreground mt-0.5">
                       {peopleInData.latest.metadata.scenario}
                     </div>
                   )}
+                  <ScenarioList scenarios={peopleInData.scenarios} />
                   <VehicleBreakdown metadata={peopleInData.latest.metadata} />
                 </div>
               )}
@@ -662,15 +695,18 @@ export default function CameraDetail() {
                     <ArrowUpFromLine className="h-4 w-4 text-red-600" />
                     <span className="text-sm font-medium text-muted-foreground">Exiting</span>
                   </div>
-                  <div className="text-3xl font-bold text-red-600">{peopleOutData.latest.value.toLocaleString()}</div>
+                  <div className="text-3xl font-bold text-red-600">
+                    {(peopleOutData.total ?? peopleOutData.latest.value).toLocaleString()}
+                  </div>
                   <div className="text-xs text-muted-foreground mt-1">
                     {new Date(peopleOutData.latest.timestamp).toLocaleTimeString()}
                   </div>
-                  {peopleOutData.latest.metadata?.scenario && (
+                  {!peopleOutData.scenarios && peopleOutData.latest.metadata?.scenario && (
                     <div className="text-xs text-muted-foreground mt-0.5">
                       {peopleOutData.latest.metadata.scenario}
                     </div>
                   )}
+                  <ScenarioList scenarios={peopleOutData.scenarios} />
                   <VehicleBreakdown metadata={peopleOutData.latest.metadata} />
                 </div>
               )}
@@ -682,15 +718,18 @@ export default function CameraDetail() {
                     <GitBranchPlus className="h-4 w-4 text-purple-600" />
                     <span className="text-sm font-medium text-muted-foreground">Line Crossings</span>
                   </div>
-                  <div className="text-3xl font-bold text-purple-600">{lineCrossingData.latest.value.toLocaleString()}</div>
+                  <div className="text-3xl font-bold text-purple-600">
+                    {(lineCrossingData.total ?? lineCrossingData.latest.value).toLocaleString()}
+                  </div>
                   <div className="text-xs text-muted-foreground mt-1">
                     {new Date(lineCrossingData.latest.timestamp).toLocaleTimeString()}
                   </div>
-                  {lineCrossingData.latest.metadata?.scenario && (
+                  {!lineCrossingData.scenarios && lineCrossingData.latest.metadata?.scenario && (
                     <div className="text-xs text-muted-foreground mt-0.5">
                       {lineCrossingData.latest.metadata.scenario}
                     </div>
                   )}
+                  <ScenarioList scenarios={lineCrossingData.scenarios} />
                   {/* Show in/out breakdown if available */}
                   {(lineCrossingData.latest.metadata?.in > 0 || lineCrossingData.latest.metadata?.out > 0) && (
                     <div className="mt-2 pt-2 border-t border-dashed flex justify-center gap-4 text-xs">

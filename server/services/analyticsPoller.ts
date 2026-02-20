@@ -394,11 +394,13 @@ function parseAoaAccumulatedCounts(
 
         // Determine direction from scenario name. If name is generic (no direction
         // keywords), emit as line_crossing ONLY — don't guess entering/exiting.
+        // Check exit/out/leave FIRST because "exiting" contains the substring "in"
+        // which would falsely match the entering branch.
         const nameLower = name.toLowerCase();
-        if (nameLower.includes("enter") || nameLower.includes("in") && !nameLower.includes("line")) {
-          scenarioIn = total;
-        } else if (nameLower.includes("exit") || nameLower.includes("out") || nameLower.includes("leav")) {
+        if (nameLower.includes("exit") || nameLower.includes("out") || nameLower.includes("leav")) {
           scenarioOut = total;
+        } else if (nameLower.includes("enter") || (nameLower.includes("in") && !nameLower.includes("line"))) {
+          scenarioIn = total;
         } else {
           // Direction unknown — emit ONLY as line_crossing, don't fake people_in
           const categoryMeta = Object.keys(vehicleBreakdown).length > 0
@@ -1827,7 +1829,9 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
     }
   }
 
-  // Store events if any collected
+  // Store events if any collected — one row per scenario per eventType.
+  // This preserves per-scenario granularity for individual camera views.
+  // Group views aggregate (sum) across scenarios at query time.
   if (events.length > 0) {
     const now = new Date();
     await storage.createAnalyticsEventBatch(

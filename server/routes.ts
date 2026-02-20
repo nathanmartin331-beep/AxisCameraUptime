@@ -1733,10 +1733,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const events = await storage.getAnalyticsEvents(cameraId, eventType, startDate, endDate);
       const latest = await storage.getLatestAnalyticsEvent(cameraId, eventType);
 
+      // Get all scenario events at the latest timestamp so the frontend can
+      // display per-scenario breakdown instead of just one arbitrary scenario.
+      const scenarioEvents = await storage.getLatestAnalyticsEventsByScenario(cameraId, eventType);
+      const scenarios = scenarioEvents.map((e) => ({
+        scenario: (e.metadata as Record<string, any>)?.scenario || "Default",
+        value: e.value,
+        metadata: e.metadata,
+      }));
+      const total = scenarioEvents.reduce((sum, e) => sum + e.value, 0);
+
       res.json({
         cameraId,
         eventType,
         latest: latest || null,
+        // Per-scenario breakdown at the latest timestamp
+        scenarios: scenarios.length > 1 ? scenarios : undefined,
+        // Total across all scenarios (sum). When only 1 scenario, equals latest.value
+        total: scenarios.length > 1 ? total : (latest?.value ?? null),
         events,
       });
     } catch (error) {
