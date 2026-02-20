@@ -241,6 +241,20 @@ export default function CameraDetail() {
     refetchInterval: 60000,
   });
 
+  // Fetch line_crossing daily data — used when camera has no directional (people_in/out) split
+  const { data: dailyLineCrossing } = useQuery<{
+    dailyTotals: Array<{ date: string; total: number; metadata?: Record<string, any> }>;
+  }>({
+    queryKey: ["/api/cameras", cameraId, "analytics/daily", "line_crossing", trendDays],
+    queryFn: async () => {
+      const res = await fetch(`/api/cameras/${cameraId}/analytics/daily?eventType=line_crossing&days=${trendDays}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!cameraId && !!hasCrossline,
+    refetchInterval: 60000,
+  });
+
   if (cameraError) {
     if (isUnauthorizedError(cameraError as Error)) {
       toast({
@@ -759,33 +773,97 @@ export default function CameraDetail() {
       )}
 
       {/* Daily Analytics Trends Chart */}
-      {hasEnabledAnalytics && (dailyEntering?.dailyTotals?.length || dailyExiting?.dailyTotals?.length) && (() => {
-        // Merge entering + exiting into chart data by date
-        const dateMap = new Map<string, { date: string; entering: number; exiting: number; enterMeta?: Record<string, any>; exitMeta?: Record<string, any> }>();
-        for (const d of dailyEntering?.dailyTotals || []) {
-          const entry = dateMap.get(d.date) || { date: d.date, entering: 0, exiting: 0 };
-          entry.entering = d.total;
-          entry.enterMeta = d.metadata;
-          dateMap.set(d.date, entry);
+      {hasEnabledAnalytics && (dailyEntering?.dailyTotals?.length || dailyExiting?.dailyTotals?.length || dailyLineCrossing?.dailyTotals?.length) && (() => {
+        // Determine if we have directional data (people_in / people_out) or only total crossings
+        const hasDirectionalData = (dailyEntering?.dailyTotals?.length ?? 0) > 0 || (dailyExiting?.dailyTotals?.length ?? 0) > 0;
+
+        if (hasDirectionalData) {
+          // Merge entering + exiting into chart data by date
+          const dateMap = new Map<string, { date: string; entering: number; exiting: number; enterMeta?: Record<string, any>; exitMeta?: Record<string, any> }>();
+          for (const d of dailyEntering?.dailyTotals || []) {
+            const entry = dateMap.get(d.date) || { date: d.date, entering: 0, exiting: 0 };
+            entry.entering = d.total;
+            entry.enterMeta = d.metadata;
+            dateMap.set(d.date, entry);
+          }
+          for (const d of dailyExiting?.dailyTotals || []) {
+            const entry = dateMap.get(d.date) || { date: d.date, entering: 0, exiting: 0 };
+            entry.exiting = d.total;
+            entry.exitMeta = d.metadata;
+            dateMap.set(d.date, entry);
+          }
+          const chartData = Array.from(dateMap.values())
+            .sort((a, b) => a.date.localeCompare(b.date))
+            .map(d => ({
+              ...d,
+              date: new Date(d.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+            }));
+
+          if (chartData.length === 0) return null;
+
+          const latestDay = chartData[chartData.length - 1];
+          const latestMeta = (latestDay as any).enterMeta || (latestDay as any).exitMeta;
+
+          return (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <TrendingUp className="h-5 w-5" />
+                      Daily Trends
+                    </CardTitle>
+                    <CardDescription>
+                      Daily entering/exiting totals (counters reset at midnight)
+                      {latestMeta?.resetTime && (
+                        <span className="ml-1 text-xs">
+                          — reset: {new Date(latestMeta.resetTime).toLocaleString()}
+                        </span>
+                      )}
+                    </CardDescription>
+                  </div>
+                  <Tabs value={String(trendDays)} onValueChange={(v) => setTrendDays(parseInt(v))}>
+                    <TabsList className="h-8">
+                      <TabsTrigger value="7" className="text-xs px-2 h-6">7d</TabsTrigger>
+                      <TabsTrigger value="14" className="text-xs px-2 h-6">14d</TabsTrigger>
+                      <TabsTrigger value="30" className="text-xs px-2 h-6">30d</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={280}>
+                  <BarChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                    <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+                    <YAxis tick={{ fontSize: 12 }} />
+                    <Tooltip
+                      contentStyle={{ borderRadius: "8px", fontSize: "12px" }}
+                      formatter={(value: number, name: string) => [
+                        value.toLocaleString(),
+                        name === "entering" ? "Entering" : "Exiting"
+                      ]}
+                    />
+                    <Legend formatter={(value) => value === "entering" ? "Entering" : "Exiting"} />
+                    <Bar dataKey="entering" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="exiting" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          );
         }
-        for (const d of dailyExiting?.dailyTotals || []) {
-          const entry = dateMap.get(d.date) || { date: d.date, entering: 0, exiting: 0 };
-          entry.exiting = d.total;
-          entry.exitMeta = d.metadata;
-          dateMap.set(d.date, entry);
-        }
-        const chartData = Array.from(dateMap.values())
+
+        // No directional data — show total line crossings chart instead
+        const crossingData = (dailyLineCrossing?.dailyTotals || [])
           .sort((a, b) => a.date.localeCompare(b.date))
           .map(d => ({
             ...d,
+            crossings: d.total,
             date: new Date(d.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }),
           }));
 
-        if (chartData.length === 0) return null;
-
-        // Get resetTime from the latest day's metadata
-        const latestDay = chartData[chartData.length - 1];
-        const latestMeta = (latestDay as any).enterMeta || (latestDay as any).exitMeta;
+        if (crossingData.length === 0) return null;
 
         return (
           <Card>
@@ -797,12 +875,7 @@ export default function CameraDetail() {
                     Daily Trends
                   </CardTitle>
                   <CardDescription>
-                    Daily entering/exiting totals (counters reset at midnight)
-                    {latestMeta?.resetTime && (
-                      <span className="ml-1 text-xs">
-                        — reset: {new Date(latestMeta.resetTime).toLocaleString()}
-                      </span>
-                    )}
+                    Total daily line crossings (both directions combined)
                   </CardDescription>
                 </div>
                 <Tabs value={String(trendDays)} onValueChange={(v) => setTrendDays(parseInt(v))}>
@@ -816,20 +889,16 @@ export default function CameraDetail() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                <BarChart data={crossingData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
                   <XAxis dataKey="date" tick={{ fontSize: 12 }} />
                   <YAxis tick={{ fontSize: 12 }} />
                   <Tooltip
                     contentStyle={{ borderRadius: "8px", fontSize: "12px" }}
-                    formatter={(value: number, name: string) => [
-                      value.toLocaleString(),
-                      name === "entering" ? "Entering" : "Exiting"
-                    ]}
+                    formatter={(value: number) => [value.toLocaleString(), "Total Crossings"]}
                   />
-                  <Legend formatter={(value) => value === "entering" ? "Entering" : "Exiting"} />
-                  <Bar dataKey="entering" fill="#22c55e" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="exiting" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                  <Legend formatter={() => "Total Crossings"} />
+                  <Bar dataKey="crossings" fill="#a855f7" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>

@@ -374,6 +374,10 @@ function parseAoaAccumulatedCounts(
 
       // Format C: AXIS getAccumulatedCounts flat response
       // { total: N, totalHuman: N, totalCar: M, totalBus: B, totalTruck: T, totalBike: K, totalOtherVehicle: O }
+      // IMPORTANT: When only `total` is returned (no `in`/`out` split), it is the
+      // sum of BOTH directions. Never assign it as people_in or people_out based
+      // on scenario name — that causes the chart to show the bidirectional total
+      // as "entering" which is misleading. Always emit as line_crossing only.
       const vehicleBreakdown: Record<string, number> = {};
       if (scenarioIn === 0 && scenarioOut === 0 && scenario.total !== undefined) {
         const total = parseInt(scenario.total) || 0;
@@ -392,26 +396,15 @@ function parseAoaAccumulatedCounts(
         if (bikeCount > 0) vehicleBreakdown.bike = bikeCount;
         if (otherVehicleCount > 0) vehicleBreakdown.otherVehicle = otherVehicleCount;
 
-        // Determine direction from scenario name. If name is generic (no direction
-        // keywords), emit as line_crossing ONLY — don't guess entering/exiting.
-        // Check exit/out/leave FIRST because "exiting" contains the substring "in"
-        // which would falsely match the entering branch.
-        const nameLower = name.toLowerCase();
-        if (nameLower.includes("exit") || nameLower.includes("out") || nameLower.includes("leav")) {
-          scenarioOut = total;
-        } else if (nameLower.includes("enter") || (nameLower.includes("in") && !nameLower.includes("line"))) {
-          scenarioIn = total;
-        } else {
-          // Direction unknown — emit ONLY as line_crossing, don't fake people_in
-          const categoryMeta = Object.keys(vehicleBreakdown).length > 0
-            ? { ...vehicleBreakdown } : {};
-          events.push({
-            eventType: "line_crossing",
-            value: total,
-            metadata: { ...baseMeta, direction: "unknown", ...categoryMeta },
-          });
-          continue; // Skip people_in/people_out for this scenario
-        }
+        // `total` without in/out is always bidirectional — emit as line_crossing only.
+        const categoryMeta = Object.keys(vehicleBreakdown).length > 0
+          ? { ...vehicleBreakdown } : {};
+        events.push({
+          eventType: "line_crossing",
+          value: total,
+          metadata: { ...baseMeta, direction: "total", ...categoryMeta },
+        });
+        continue; // Skip people_in/people_out — no directional data available
       }
 
       const categoryMeta = Object.keys(vehicleBreakdown).length > 0
