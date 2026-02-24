@@ -866,111 +866,140 @@ async function pollSingleCamera(camera: any, conn: CameraConnectionInfo): Promis
   };
 }
 
+/**
+ * Poll a single camera with HTTP↔HTTPS auto-fallback.
+ * On success, pushes result to pendingEvents/pendingStatusUpdates arrays.
+ * On failure (both protocols), records camera as offline.
+ */
+async function pollCameraWithFallback(
+  camera: any,
+  pendingEvents: InsertUptimeEvent[],
+  pendingStatusUpdates: PollResult["statusUpdate"][]
+): Promise<void> {
+  const startTime = Date.now();
+  try {
+    const conn = getConnectionInfo(camera);
+    const result = await pollSingleCamera(camera, conn);
+    pendingStatusUpdates.push(result.statusUpdate);
+    pendingEvents.push(result.pendingEvent);
+  } catch (error: any) {
+    const conn = getConnectionInfo(camera);
+
+    // Auto-fallback: if camera is on HTTP and unreachable, try HTTPS
+    if (conn.protocol === "http") {
+      try {
+        const httpsConn: CameraConnectionInfo = { protocol: "https", port: 443, verifySslCert: false };
+        const result = await pollSingleCamera(camera, httpsConn);
+
+        if (result.pendingEvent.videoStatus === "video_ok" || result.pendingEvent.videoStatus === "not_applicable") {
+          await db.update(cameras)
+            .set({ protocol: "https", port: 443, updatedAt: new Date() })
+            .where(eq(cameras.id, camera.id));
+          console.log(`[Monitor] ${camera.name} (${camera.ipAddress}) - Auto-migrated to HTTPS`);
+          protocolCache.delete(camera.ipAddress);
+        } else {
+          console.log(`[Monitor] ${camera.name} (${camera.ipAddress}) - HTTPS reachable but video failed, keeping HTTP`);
+        }
+
+        pendingStatusUpdates.push(result.statusUpdate);
+        pendingEvents.push(result.pendingEvent);
+        return;
+      } catch {
+        // HTTPS also failed — fall through to offline
+      }
+    }
+
+    // Self-healing: if camera was auto-migrated to HTTPS but is now unreachable, try HTTP
+    if (conn.protocol === "https") {
+      try {
+        const httpConn: CameraConnectionInfo = { protocol: "http", port: 80, verifySslCert: false };
+        const result = await pollSingleCamera(camera, httpConn);
+
+        if (result.pendingEvent.videoStatus === "video_ok" || result.pendingEvent.videoStatus === "not_applicable") {
+          await db.update(cameras)
+            .set({ protocol: "http", port: 80, updatedAt: new Date() })
+            .where(eq(cameras.id, camera.id));
+          console.log(`[Monitor] ${camera.name} (${camera.ipAddress}) - Reverted to HTTP (HTTPS unreachable)`);
+          protocolCache.delete(camera.ipAddress);
+        }
+
+        pendingStatusUpdates.push(result.statusUpdate);
+        pendingEvents.push(result.pendingEvent);
+        return;
+      } catch {
+        // HTTP also failed — fall through to offline
+      }
+    }
+
+    // Camera is offline or unreachable on both protocols
+    pendingStatusUpdates.push({ id: camera.id, status: "offline", videoStatus: "unknown" });
+    pendingEvents.push({
+      cameraId: camera.id,
+      timestamp: new Date(),
+      status: "offline",
+      videoStatus: "unknown",
+      errorMessage: error.message,
+      responseTimeMs: Date.now() - startTime,
+    });
+    console.log(`[Monitor] ${camera.name} (${camera.ipAddress}) - Offline: ${error.message}`);
+  }
+}
+
+/**
+ * Broadcast SSE notifications for any status changes detected in this polling cycle.
+ */
+function broadcastStatusChanges(
+  camerasPolled: any[],
+  previousStatuses: Map<string, string>,
+  pendingStatusUpdates: PollResult["statusUpdate"][]
+) {
+  for (const update of pendingStatusUpdates) {
+    const oldStatus = previousStatuses.get(update.id) || "unknown";
+    const newStatus = update.status;
+    if (oldStatus !== newStatus) {
+      const cam = camerasPolled.find(c => c.id === update.id);
+      statusBroadcaster.broadcast({
+        cameraId: update.id,
+        cameraName: cam?.name || update.id,
+        oldStatus,
+        newStatus,
+        timestamp: new Date().toISOString(),
+        message: `${cam?.name || update.id} changed from ${oldStatus} to ${newStatus}`,
+      });
+    }
+  }
+}
+
 async function checkAllCameras() {
   console.log("[Monitor] Starting camera polling cycle...");
 
   try {
-    // Get all cameras from database
     const allCameras = await db.select().from(cameras);
     console.log(`[Monitor] Checking ${allCameras.length} cameras (concurrency: ${POLL_CONCURRENCY})`);
 
-    // Collect results for batched DB writes
+    // Capture previous statuses for status change detection
+    const previousStatuses = new Map<string, string>();
+    for (const cam of allCameras) {
+      previousStatuses.set(cam.id, cam.currentStatus || "unknown");
+    }
+
     const pendingEvents: InsertUptimeEvent[] = [];
     const pendingStatusUpdates: PollResult["statusUpdate"][] = [];
 
-    // Use p-limit to cap concurrent HTTP requests
     const promises = allCameras.map((camera) =>
-      limit(async () => {
-        const startTime = Date.now();
-        try {
-          const conn = getConnectionInfo(camera);
-          const result = await pollSingleCamera(camera, conn);
-
-          pendingStatusUpdates.push(result.statusUpdate);
-          pendingEvents.push(result.pendingEvent);
-        } catch (error: any) {
-          // Auto-fallback: if camera is on HTTP and unreachable, try HTTPS
-          // Handles AXIS OS 13+ upgrades that disable HTTP port 80
-          const conn = getConnectionInfo(camera);
-          if (conn.protocol === "http") {
-            try {
-              const httpsConn: CameraConnectionInfo = { protocol: "https", port: 443, verifySslCert: false };
-              const result = await pollSingleCamera(camera, httpsConn);
-
-              // Only auto-migrate if video also works over HTTPS.
-              // Some cameras respond to systemready on HTTPS but fail video.
-              if (result.pendingEvent.videoStatus === "video_ok" || result.pendingEvent.videoStatus === "not_applicable") {
-                await db.update(cameras)
-                  .set({ protocol: "https", port: 443, updatedAt: new Date() })
-                  .where(eq(cameras.id, camera.id));
-                console.log(`[Monitor] ${camera.name} (${camera.ipAddress}) - Auto-migrated to HTTPS (HTTP unreachable)`);
-                protocolCache.delete(camera.ipAddress);
-              } else {
-                console.log(`[Monitor] ${camera.name} (${camera.ipAddress}) - HTTPS reachable but video failed, keeping HTTP`);
-              }
-
-              pendingStatusUpdates.push(result.statusUpdate);
-              pendingEvents.push(result.pendingEvent);
-              return; // Success via HTTPS — skip offline recording
-            } catch {
-              // HTTPS also failed — fall through to offline
-            }
-          }
-
-          // Self-healing: if camera was auto-migrated to HTTPS but is now unreachable, try HTTP
-          if (conn.protocol === "https") {
-            try {
-              const httpConn: CameraConnectionInfo = { protocol: "http", port: 80, verifySslCert: false };
-              const result = await pollSingleCamera(camera, httpConn);
-
-              if (result.pendingEvent.videoStatus === "video_ok" || result.pendingEvent.videoStatus === "not_applicable") {
-                await db.update(cameras)
-                  .set({ protocol: "http", port: 80, updatedAt: new Date() })
-                  .where(eq(cameras.id, camera.id));
-                console.log(`[Monitor] ${camera.name} (${camera.ipAddress}) - Reverted to HTTP (HTTPS unreachable)`);
-                protocolCache.delete(camera.ipAddress);
-              }
-
-              pendingStatusUpdates.push(result.statusUpdate);
-              pendingEvents.push(result.pendingEvent);
-              return;
-            } catch {
-              // HTTP also failed — fall through to offline
-            }
-          }
-
-          // Camera is offline or unreachable on both protocols
-          pendingStatusUpdates.push({
-            id: camera.id,
-            status: "offline",
-            videoStatus: "unknown",
-          });
-
-          pendingEvents.push({
-            cameraId: camera.id,
-            timestamp: new Date(),
-            status: "offline",
-            videoStatus: "unknown",
-            errorMessage: error.message,
-            responseTimeMs: Date.now() - startTime,
-          });
-
-          console.log(
-            `[Monitor] ${camera.name} (${camera.ipAddress}) - Offline: ${error.message}`
-          );
-        }
-      })
+      limit(() => pollCameraWithFallback(camera, pendingEvents, pendingStatusUpdates))
     );
 
     await Promise.all(promises);
 
-    // Batch write all status updates and uptime events
     if (pendingStatusUpdates.length > 0) {
       await storage.batchUpdateCameraStatuses(pendingStatusUpdates);
     }
     if (pendingEvents.length > 0) {
       await storage.createUptimeEventBatch(pendingEvents);
     }
+
+    broadcastStatusChanges(allCameras, previousStatuses, pendingStatusUpdates);
 
     console.log(`[Monitor] Polling cycle complete (${pendingEvents.length} events batched)`);
   } catch (error) {
@@ -989,7 +1018,6 @@ const COHORT_STAGGER_MS = 60_000; // 60 seconds between cohorts
 async function checkCameraCohort(cohortIndex: number) {
   try {
     const allCameras = await db.select().from(cameras);
-    // Assign cameras to cohorts deterministically using a simple hash of the ID
     const cohortCameras = allCameras.filter((cam) => {
       let hash = 0;
       for (let i = 0; i < cam.id.length; i++) {
@@ -1002,7 +1030,6 @@ async function checkCameraCohort(cohortIndex: number) {
 
     console.log(`[Monitor] Cohort ${cohortIndex}/${NUM_COHORTS - 1}: checking ${cohortCameras.length} cameras (concurrency: ${POLL_CONCURRENCY})`);
 
-    // Capture previous statuses for status change detection
     const previousStatuses = new Map<string, string>();
     for (const cam of cohortCameras) {
       previousStatuses.set(cam.id, cam.currentStatus || "unknown");
@@ -1012,68 +1039,7 @@ async function checkCameraCohort(cohortIndex: number) {
     const pendingStatusUpdates: PollResult["statusUpdate"][] = [];
 
     const promises = cohortCameras.map((camera) =>
-      limit(async () => {
-        const startTime = Date.now();
-        try {
-          const conn = getConnectionInfo(camera);
-          const result = await pollSingleCamera(camera, conn);
-
-          pendingStatusUpdates.push(result.statusUpdate);
-          pendingEvents.push(result.pendingEvent);
-        } catch (error: any) {
-          // Auto-fallback: if camera is on HTTP and unreachable, try HTTPS
-          const conn = getConnectionInfo(camera);
-          if (conn.protocol === "http") {
-            try {
-              const httpsConn: CameraConnectionInfo = { protocol: "https", port: 443, verifySslCert: false };
-              const result = await pollSingleCamera(camera, httpsConn);
-
-              // Only auto-migrate if video also works over HTTPS
-              if (result.pendingEvent.videoStatus === "video_ok" || result.pendingEvent.videoStatus === "not_applicable") {
-                await db.update(cameras)
-                  .set({ protocol: "https", port: 443, updatedAt: new Date() })
-                  .where(eq(cameras.id, camera.id));
-                console.log(`[Monitor] ${camera.name} (${camera.ipAddress}) - Auto-migrated to HTTPS`);
-                protocolCache.delete(camera.ipAddress);
-              } else {
-                console.log(`[Monitor] ${camera.name} (${camera.ipAddress}) - HTTPS reachable but video failed, keeping HTTP`);
-              }
-
-              pendingStatusUpdates.push(result.statusUpdate);
-              pendingEvents.push(result.pendingEvent);
-              return;
-            } catch {
-              // HTTPS also failed
-            }
-          }
-
-          // Self-healing: if camera was auto-migrated to HTTPS but is now unreachable, try HTTP
-          if (conn.protocol === "https") {
-            try {
-              const httpConn: CameraConnectionInfo = { protocol: "http", port: 80, verifySslCert: false };
-              const result = await pollSingleCamera(camera, httpConn);
-
-              if (result.pendingEvent.videoStatus === "video_ok" || result.pendingEvent.videoStatus === "not_applicable") {
-                await db.update(cameras)
-                  .set({ protocol: "http", port: 80, updatedAt: new Date() })
-                  .where(eq(cameras.id, camera.id));
-                console.log(`[Monitor] ${camera.name} (${camera.ipAddress}) - Reverted to HTTP (HTTPS unreachable)`);
-                protocolCache.delete(camera.ipAddress);
-              }
-
-              pendingStatusUpdates.push(result.statusUpdate);
-              pendingEvents.push(result.pendingEvent);
-              return;
-            } catch {
-              // HTTP also failed
-            }
-          }
-
-          pendingStatusUpdates.push({ id: camera.id, status: "offline", videoStatus: "unknown" });
-          pendingEvents.push({ cameraId: camera.id, timestamp: new Date(), status: "offline", videoStatus: "unknown", errorMessage: error.message, responseTimeMs: Date.now() - startTime });
-          console.log(`[Monitor] ${camera.name} (${camera.ipAddress}) - Offline: ${error.message}`);
-        }
-      })
+      limit(() => pollCameraWithFallback(camera, pendingEvents, pendingStatusUpdates))
     );
 
     await Promise.all(promises);
@@ -1081,22 +1047,7 @@ async function checkCameraCohort(cohortIndex: number) {
     if (pendingStatusUpdates.length > 0) await storage.batchUpdateCameraStatuses(pendingStatusUpdates);
     if (pendingEvents.length > 0) await storage.createUptimeEventBatch(pendingEvents);
 
-    // Broadcast status changes
-    for (const update of pendingStatusUpdates) {
-      const oldStatus = previousStatuses.get(update.id) || "unknown";
-      const newStatus = update.status;
-      if (oldStatus !== newStatus) {
-        const cam = cohortCameras.find(c => c.id === update.id);
-        statusBroadcaster.broadcast({
-          cameraId: update.id,
-          cameraName: cam?.name || update.id,
-          oldStatus,
-          newStatus,
-          timestamp: new Date().toISOString(),
-          message: `${cam?.name || update.id} changed from ${oldStatus} to ${newStatus}`,
-        });
-      }
-    }
+    broadcastStatusChanges(cohortCameras, previousStatuses, pendingStatusUpdates);
 
     console.log(`[Monitor] Cohort ${cohortIndex} complete (${pendingEvents.length} events)`);
   } catch (error) {

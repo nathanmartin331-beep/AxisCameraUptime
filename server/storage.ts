@@ -783,6 +783,93 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
+  /**
+   * Batch calculate uptime percentages for multiple cameras in 3 queries
+   * instead of 3*N queries. Uses the same 3-tier aggregation approach
+   * (daily summaries, hourly summaries, raw events) but with GROUP BY.
+   */
+  async calculateBatchUptimePercentage(
+    cameraIds: string[],
+    days: number
+  ): Promise<Map<string, { percentage: number; monitoredDays: number }>> {
+    const results = new Map<string, { percentage: number; monitoredDays: number }>();
+    if (cameraIds.length === 0) return results;
+
+    // Check cache first, collect uncached IDs
+    const uncachedIds: string[] = [];
+    for (const id of cameraIds) {
+      const cacheKey = `${id}:${days}`;
+      const cached = uptimeCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        results.set(id, cached.value);
+      } else {
+        uncachedIds.push(id);
+      }
+    }
+
+    if (uncachedIds.length === 0) return results;
+
+    const endDate = new Date();
+    const windowStart = new Date();
+    windowStart.setDate(windowStart.getDate() - days);
+    const startTs = Math.floor(windowStart.getTime() / 1000);
+    const endTs = Math.floor(endDate.getTime() / 1000);
+
+    // Build placeholders for IN clause
+    const placeholders = uncachedIds.map(() => '?').join(',');
+
+    // Tier 3: Daily summaries (batch)
+    const dailyRows = sqlite.prepare(`
+      SELECT camera_id, SUM(online_count) as online_count, SUM(total_checks) as total_checks
+      FROM uptime_daily_summary
+      WHERE camera_id IN (${placeholders}) AND day_start >= ? AND day_start <= ?
+      GROUP BY camera_id
+    `).all(...uncachedIds, startTs, endTs) as Array<{ camera_id: string; online_count: number; total_checks: number }>;
+
+    // Tier 2: Hourly summaries (batch)
+    const hourlyRows = sqlite.prepare(`
+      SELECT camera_id, SUM(online_count) as online_count, SUM(total_checks) as total_checks
+      FROM uptime_hourly_summary
+      WHERE camera_id IN (${placeholders}) AND hour_start >= ? AND hour_start <= ?
+      GROUP BY camera_id
+    `).all(...uncachedIds, startTs, endTs) as Array<{ camera_id: string; online_count: number; total_checks: number }>;
+
+    // Tier 1: Raw events count (batch)
+    const rawRows = sqlite.prepare(`
+      SELECT camera_id,
+        SUM(CASE WHEN status = 'online' THEN 1 ELSE 0 END) as online_count,
+        COUNT(*) as total_checks
+      FROM uptime_events
+      WHERE camera_id IN (${placeholders}) AND timestamp >= ? AND timestamp <= ?
+      GROUP BY camera_id
+    `).all(...uncachedIds, windowStart.toISOString(), endDate.toISOString()) as Array<{ camera_id: string; online_count: number; total_checks: number }>;
+
+    // Aggregate per-camera
+    const dailyMap = new Map(dailyRows.map(r => [r.camera_id, r]));
+    const hourlyMap = new Map(hourlyRows.map(r => [r.camera_id, r]));
+    const rawMap = new Map(rawRows.map(r => [r.camera_id, r]));
+
+    for (const id of uncachedIds) {
+      const daily = dailyMap.get(id);
+      const hourly = hourlyMap.get(id);
+      const raw = rawMap.get(id);
+
+      let totalOnline = (daily?.online_count ?? 0) + (hourly?.online_count ?? 0) + (raw?.online_count ?? 0);
+      let totalChecks = (daily?.total_checks ?? 0) + (hourly?.total_checks ?? 0) + (raw?.total_checks ?? 0);
+
+      const percentage = totalChecks > 0 ? (totalOnline / totalChecks) * 100 : 0;
+      const monitoredDays = days;
+
+      const value = { percentage, monitoredDays };
+      results.set(id, value);
+
+      // Cache the result
+      uptimeCache.set(`${id}:${days}`, { value, expiresAt: Date.now() + UPTIME_CACHE_TTL_MS });
+    }
+
+    return results;
+  }
+
   // Dashboard layout methods
   async getDashboardLayout(userId: string) {
     const result = await db

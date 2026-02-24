@@ -133,12 +133,12 @@ router.get("/api/cameras/export/uptime", requireAuth, async (req: any, res) => {
     const userId = getUserId(req);
     const cameras = await storage.getCamerasByUserId(userId);
 
-    const cameraData = await Promise.all(
-      cameras.map(async (camera) => {
-        const { percentage } = await storage.calculateUptimePercentage(camera.id, 30);
-        return { name: camera.name, ipAddress: camera.ipAddress, uptime: percentage };
-      })
-    );
+    const uptimeMap = await storage.calculateBatchUptimePercentage(cameras.map(c => c.id), 30);
+    const cameraData = cameras.map(camera => ({
+      name: camera.name,
+      ipAddress: camera.ipAddress,
+      uptime: uptimeMap.get(camera.id)?.percentage ?? 0,
+    }));
 
     const { generateUptimeReportCSV } = await import("../csvUtils");
     const csv = generateUptimeReportCSV(cameraData);

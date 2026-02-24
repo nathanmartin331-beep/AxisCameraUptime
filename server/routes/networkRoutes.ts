@@ -7,11 +7,30 @@ import { buildCameraUrl, getCameraDispatcher, getConnectionInfo } from "../servi
 import type { Camera } from "@shared/schema";
 import { z } from "zod";
 import { validateId, sendError, getUserId } from "./shared";
+import rateLimit from "express-rate-limit";
 
 const router = Router();
 
+// Rate limiter for network scan endpoints (expensive operations)
+const scanLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 10, // 10 scans per 5 minutes
+  message: { message: "Too many scan requests, please try again in a few minutes" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Rate limiter for bulk add (prevents rapid camera creation)
+const bulkAddLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 20, // 20 bulk-add requests per 5 minutes
+  message: { message: "Too many bulk-add requests, please try again in a few minutes" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // Subnet scan
-router.post("/api/scan/subnet", requireAdmin, async (req: any, res) => {
+router.post("/api/scan/subnet", scanLimiter, requireAdmin, async (req: any, res) => {
   try {
     if (!req.body || typeof req.body !== "object") {
       return sendError(res, 400, "Request body is required");
@@ -46,7 +65,7 @@ router.post("/api/scan/subnet", requireAdmin, async (req: any, res) => {
 });
 
 // CIDR scan
-router.post("/api/cameras/scan", requireAdmin, async (req: any, res) => {
+router.post("/api/cameras/scan", scanLimiter, requireAdmin, async (req: any, res) => {
   try {
     const scanRequestSchema = z.object({
       subnet: z.string().min(1, "Subnet is required"),
@@ -133,7 +152,7 @@ router.get("/api/network/interfaces", requireAuth, async (req: any, res) => {
 });
 
 // Unified camera discovery
-router.post("/api/cameras/discover", requireAdmin, async (req: any, res) => {
+router.post("/api/cameras/discover", scanLimiter, requireAdmin, async (req: any, res) => {
   try {
     const discoverSchema = z.object({
       subnet: z.string().optional(),
@@ -185,7 +204,7 @@ router.post("/api/cameras/discover", requireAdmin, async (req: any, res) => {
 });
 
 // Bulk add cameras
-router.post("/api/cameras/bulk-add", requireAdmin, async (req: any, res) => {
+router.post("/api/cameras/bulk-add", bulkAddLimiter, requireAdmin, async (req: any, res) => {
   try {
     const bulkAddSchema = z.object({
       cameras: z.array(z.object({

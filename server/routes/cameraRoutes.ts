@@ -10,8 +10,18 @@ import {
   validateId, validateDays, sendError, getUserId,
   dashboardCache, createCameraSchema, ALLOWED_CAMERA_UPDATE_FIELDS,
 } from "./shared";
+import rateLimit from "express-rate-limit";
 
 const router = Router();
+
+// Rate limiter for camera write operations
+const cameraWriteLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 30, // 30 write ops per minute
+  message: { message: "Too many requests, please slow down" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Camera CRUD routes
 router.get("/api/cameras", requireAuth, async (req: any, res) => {
@@ -55,7 +65,7 @@ router.get("/api/cameras/:id", requireAuth, async (req: any, res) => {
   }
 });
 
-router.post("/api/cameras", requireAdmin, async (req: any, res) => {
+router.post("/api/cameras", cameraWriteLimiter, requireAdmin, async (req: any, res) => {
   try {
     const userId = getUserId(req);
     if (!req.body || typeof req.body !== "object") {
@@ -86,7 +96,7 @@ router.post("/api/cameras", requireAdmin, async (req: any, res) => {
   }
 });
 
-router.patch("/api/cameras/:id", requireAdmin, async (req: any, res) => {
+router.patch("/api/cameras/:id", cameraWriteLimiter, requireAdmin, async (req: any, res) => {
   try {
     const cameraId = validateId(req.params.id);
     if (!cameraId) return sendError(res, 400, "Invalid camera ID");
@@ -127,7 +137,7 @@ router.patch("/api/cameras/:id", requireAdmin, async (req: any, res) => {
   }
 });
 
-router.delete("/api/cameras/:id", requireAdmin, async (req: any, res) => {
+router.delete("/api/cameras/:id", cameraWriteLimiter, requireAdmin, async (req: any, res) => {
   try {
     const cameraId = validateId(req.params.id);
     if (!cameraId) return sendError(res, 400, "Invalid camera ID");
@@ -176,17 +186,13 @@ router.get("/api/cameras/uptime/batch", requireAuth, async (req: any, res) => {
     if (typeof daysResult === "object") return sendError(res, 400, daysResult.error);
 
     const cameras = await storage.getCamerasByUserId(userId);
-    const uptimeData = await Promise.all(
-      cameras.map(async (camera) => {
-        const { percentage, monitoredDays } = await storage.calculateUptimePercentage(camera.id, daysResult);
-        return {
-          cameraId: camera.id,
-          uptime: percentage,
-          monitoredDays,
-          monitoredSince: camera.createdAt,
-        };
-      })
-    );
+    const uptimeMap = await storage.calculateBatchUptimePercentage(cameras.map(c => c.id), daysResult);
+    const uptimeData = cameras.map(camera => ({
+      cameraId: camera.id,
+      uptime: uptimeMap.get(camera.id)?.percentage ?? 0,
+      monitoredDays: uptimeMap.get(camera.id)?.monitoredDays ?? daysResult,
+      monitoredSince: camera.createdAt,
+    }));
     res.json(uptimeData);
   } catch (error) {
     console.error("Error fetching batch uptime:", error);

@@ -36,17 +36,26 @@ router.get("/api/dashboard/summary", requireAuth, async (req: any, res) => {
     const speakerOffline = speakers.filter(c => c.currentStatus === "offline").length;
 
     let avgUptime = 0;
-    if (videoCameras.length > 0) {
-      const uptimePromises = videoCameras.map(c => storage.calculateUptimePercentage(c.id, 30));
-      const uptimeResults = await Promise.all(uptimePromises);
-      avgUptime = uptimeResults.reduce((a, b) => a + b.percentage, 0) / videoCameras.length;
-    }
-
     let speakerAvgUptime = 0;
-    if (speakerTotal > 0) {
-      const speakerUptimePromises = speakers.map(c => storage.calculateUptimePercentage(c.id, 30));
-      const speakerUptimeResults = await Promise.all(speakerUptimePromises);
-      speakerAvgUptime = speakerUptimeResults.reduce((a, b) => a + b.percentage, 0) / speakerTotal;
+    if (cameras.length > 0) {
+      const allIds = cameras.map(c => c.id);
+      const uptimeMap = await storage.calculateBatchUptimePercentage(allIds, 30);
+
+      if (videoCameras.length > 0) {
+        let videoTotal = 0;
+        for (const c of videoCameras) {
+          videoTotal += uptimeMap.get(c.id)?.percentage ?? 0;
+        }
+        avgUptime = videoTotal / videoCameras.length;
+      }
+
+      if (speakerTotal > 0) {
+        let speakerTotal2 = 0;
+        for (const c of speakers) {
+          speakerTotal2 += uptimeMap.get(c.id)?.percentage ?? 0;
+        }
+        speakerAvgUptime = speakerTotal2 / speakerTotal;
+      }
     }
 
     let totalPeopleIn = 0;
