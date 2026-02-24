@@ -1024,16 +1024,43 @@ export default function CameraDetail() {
           );
         }
 
-        // No directional data — show total line crossings chart instead
-        const crossingData = (dailyLineCrossing?.dailyTotals || [])
-          .sort((a, b) => a.date.localeCompare(b.date))
+        // No directional data — show line crossings chart (with per-scenario bars if available)
+        const lcScenarios = dailyLineCrossing?.scenarioTotals;
+        const lcScenarioNames = lcScenarios
+          ? Object.keys(lcScenarios).filter(s => s !== "default")
+          : [];
+        const showLcPerScenario = lcScenarioNames.length > 1;
+
+        const crossingDateMap = new Map<string, Record<string, any>>();
+        if (showLcPerScenario) {
+          for (const name of lcScenarioNames) {
+            for (const d of lcScenarios![name] || []) {
+              const entry = crossingDateMap.get(d.date) || { date: d.date };
+              entry[name] = d.total;
+              crossingDateMap.set(d.date, entry);
+            }
+          }
+        } else {
+          for (const d of dailyLineCrossing?.dailyTotals || []) {
+            crossingDateMap.set(d.date, { date: d.date, crossings: d.total });
+          }
+        }
+
+        const crossingData = Array.from(crossingDateMap.values())
+          .sort((a, b) => (a.date as string).localeCompare(b.date as string))
           .map(d => ({
             ...d,
-            crossings: d.total,
             date: new Date(d.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }),
           }));
 
         if (crossingData.length === 0) return null;
+
+        const lcLegendLabels: Record<string, string> = {};
+        if (showLcPerScenario) {
+          lcScenarioNames.forEach(name => { lcLegendLabels[name] = name; });
+        } else {
+          lcLegendLabels.crossings = "Total Crossings";
+        }
 
         return (
           <Card>
@@ -1045,7 +1072,7 @@ export default function CameraDetail() {
                     Daily Trends
                   </CardTitle>
                   <CardDescription>
-                    Total daily line crossings (both directions combined)
+                    Daily line crossings{showLcPerScenario ? " (per scenario)" : ""}
                   </CardDescription>
                 </div>
                 <Tabs value={String(trendDays)} onValueChange={(v) => setTrendDays(parseInt(v))}>
@@ -1065,10 +1092,19 @@ export default function CameraDetail() {
                   <YAxis tick={{ fontSize: 12 }} />
                   <Tooltip
                     contentStyle={{ borderRadius: "8px", fontSize: "12px" }}
-                    formatter={(value: number) => [value.toLocaleString(), "Total Crossings"]}
+                    formatter={(value: number, name: string) => [
+                      value.toLocaleString(),
+                      lcLegendLabels[name] || name
+                    ]}
                   />
-                  <Legend formatter={() => "Total Crossings"} />
-                  <Bar dataKey="crossings" fill="#a855f7" radius={[4, 4, 0, 0]} />
+                  <Legend formatter={(value) => lcLegendLabels[value] || value} />
+                  {showLcPerScenario ? (
+                    lcScenarioNames.map((name, i) => (
+                      <Bar key={name} dataKey={name} fill={SCENARIO_COLORS[i % SCENARIO_COLORS.length].hex} radius={[4, 4, 0, 0]} />
+                    ))
+                  ) : (
+                    <Bar dataKey="crossings" fill="#a855f7" radius={[4, 4, 0, 0]} />
+                  )}
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>

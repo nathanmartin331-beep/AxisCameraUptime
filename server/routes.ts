@@ -1894,15 +1894,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
 
       const dailyTotals = await storage.getAnalyticsDailyTotals(cameraId, eventType, days);
-      const scenarioTotals = await storage.getAnalyticsDailyTotalsByScenario(cameraId, eventType, days);
-      const scenarioNames = Object.keys(scenarioTotals);
+      let scenarioTotals: Record<string, Array<{ date: string; total: number; metadata?: Record<string, any> }>> | undefined;
+      try {
+        const raw = await storage.getAnalyticsDailyTotalsByScenario(cameraId, eventType, days);
+        const scenarioNames = Object.keys(raw);
+        if (scenarioNames.length > 1) {
+          scenarioTotals = raw;
+        }
+      } catch (err) {
+        console.error("Error fetching per-scenario daily totals (non-fatal):", err);
+      }
       res.json({
         cameraId,
         eventType,
         days,
         dailyTotals,
-        // Only include per-scenario breakdown when there are multiple scenarios
-        scenarioTotals: scenarioNames.length > 1 ? scenarioTotals : undefined,
+        scenarioTotals,
       });
     } catch (error) {
       console.error("Error fetching daily analytics:", error);

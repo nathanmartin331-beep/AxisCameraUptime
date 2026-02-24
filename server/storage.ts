@@ -997,9 +997,12 @@ export class DatabaseStorage implements IStorage {
     const dailyMap = new Map<string, { total: number; metadata?: Record<string, any> }>();
 
     // 1. Fetch from pre-aggregated daily summary table (data older than 48h)
+    // SUM across scenarios so multi-scenario cameras get correct combined totals
     const dailyRows = sqlite.prepare(`
-      SELECT day_start, max_value, metadata FROM analytics_daily_summary
+      SELECT day_start, SUM(max_value) as max_value, MAX(metadata) as metadata
+      FROM analytics_daily_summary
       WHERE camera_id = ? AND event_type = ? AND day_start >= ? AND day_start <= ?
+      GROUP BY day_start
     `).all(cameraId, eventType, startTs, endTs) as Array<{ day_start: number; max_value: number; metadata: string | null }>;
 
     for (const row of dailyRows) {
@@ -1011,9 +1014,12 @@ export class DatabaseStorage implements IStorage {
     }
 
     // 2. Fetch from hourly summary table (data 6h–48h old)
+    // SUM across scenarios per hour, then JS loop takes max hourly value per day
     const hourlyRows = sqlite.prepare(`
-      SELECT hour_start, max_value, metadata FROM analytics_hourly_summary
+      SELECT hour_start, SUM(max_value) as max_value, MAX(metadata) as metadata
+      FROM analytics_hourly_summary
       WHERE camera_id = ? AND event_type = ? AND hour_start >= ? AND hour_start <= ?
+      GROUP BY hour_start
     `).all(cameraId, eventType, startTs, endTs) as Array<{ hour_start: number; max_value: number; metadata: string | null }>;
 
     for (const row of hourlyRows) {
