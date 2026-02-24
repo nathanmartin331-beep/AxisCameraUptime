@@ -287,10 +287,20 @@ describe('DatabaseStorage', () => {
       });
 
       it('should update updatedAt timestamp', async () => {
+        const updatedUser: User = {
+          id: 'user-1',
+          email: 'test@example.com',
+          password: 'hashedPassword123',
+          firstName: 'Test',
+          lastName: 'User',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+
         const mockQuery = {
           set: vi.fn().mockReturnThis(),
           where: vi.fn().mockReturnThis(),
-          returning: vi.fn().mockResolvedValue([]),
+          returning: vi.fn().mockResolvedValue([updatedUser]),
         };
         vi.mocked(db.update).mockReturnValue(mockQuery as any);
 

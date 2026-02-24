@@ -3,14 +3,15 @@ import { calculateUptimeFromEvents } from '../uptimeCalculator.js';
 
 describe('Uptime Calculation Accuracy', () => {
   describe('Known Scenario Tests', () => {
-    it('should return 100% for camera always online (no events)', () => {
+    it('should return 0% when no events and no prior status (no monitoring data)', () => {
       const start = new Date('2025-01-01T00:00:00Z');
       const end = new Date('2025-01-02T00:00:00Z');
       const events: any[] = [];
-      
+
+      // No events + no priorEventStatus = no monitoring data, returns 0
       const uptime = calculateUptimeFromEvents(events, start, end);
-      
-      expect(uptime).toBe(100);
+
+      expect(uptime).toBe(0);
     });
 
     it('should return 100% for camera always online (prior event online, no transitions)', () => {
