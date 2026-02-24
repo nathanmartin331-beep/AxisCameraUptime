@@ -17,7 +17,7 @@ interface UptimeChartProps {
   description?: string;
 }
 
-export default function UptimeChart({ 
+export default function UptimeChart({
   cameraId = "all",
   days = 30,
   title = "Uptime Trend",
@@ -25,131 +25,24 @@ export default function UptimeChart({
 }: UptimeChartProps) {
   const [selectedDays, setSelectedDays] = useState(days);
 
-  const { data: eventData, isLoading } = useQuery<any>({
-    queryKey: cameraId === "all" 
-      ? ["/api/uptime/events", selectedDays]
-      : ["/api/cameras", cameraId, "events", selectedDays],
+  const { data: chartData, isLoading } = useQuery<{ data: UptimeDataPoint[] }>({
+    queryKey: ["/api/uptime/daily", cameraId, selectedDays],
     queryFn: async () => {
-      const url = cameraId === "all"
-        ? `/api/uptime/events?days=${selectedDays}`
-        : `/api/cameras/${cameraId}/events?days=${selectedDays}`;
-      
-      const response = await fetch(url, {
+      const params = new URLSearchParams({ days: String(selectedDays) });
+      if (cameraId !== "all") {
+        params.set("cameraId", cameraId);
+      }
+      const response = await fetch(`/api/uptime/daily?${params}`, {
         credentials: "include",
       });
-
       if (!response.ok) {
-        throw new Error(`Failed to fetch events: ${response.statusText}`);
+        throw new Error(`Failed to fetch daily uptime: ${response.statusText}`);
       }
-
       return response.json();
     },
-    enabled: true,
   });
 
-  const events = eventData?.events || [];
-  const priorEvent = eventData?.priorEvent || (eventData?.priorEvents && eventData.priorEvents[0]) || null;
-  
-  const uptimeData: UptimeDataPoint[] = generateUptimeData(events, selectedDays, priorEvent);
-
-  function generateUptimeData(events: any[], days: number, initialPriorEvent?: any): UptimeDataPoint[] {
-    const data: UptimeDataPoint[] = [];
-    const now = new Date();
-    const sortedEvents = [...events].sort((a, b) =>
-      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    );
-
-    // Find the earliest monitoring date (first event or prior event)
-    // Only show chart data from when monitoring actually started
-    const earliestEventTime = sortedEvents.length > 0
-      ? new Date(sortedEvents[0].timestamp).getTime()
-      : now.getTime();
-    const earliestPriorTime = initialPriorEvent
-      ? new Date(initialPriorEvent.timestamp).getTime()
-      : Infinity;
-    const monitoringStartTime = Math.min(earliestEventTime, earliestPriorTime);
-
-    for (let i = days - 1; i >= 0; i--) {
-      const date = new Date(now);
-      date.setDate(date.getDate() - i);
-      date.setHours(0, 0, 0, 0);
-
-      const nextDate = new Date(date);
-      nextDate.setDate(nextDate.getDate() + 1);
-
-      // Skip days entirely before monitoring started
-      if (nextDate.getTime() <= monitoringStartTime && !initialPriorEvent) {
-        continue;
-      }
-
-      const dayEvents = sortedEvents.filter(e => {
-        const eventDate = new Date(e.timestamp);
-        return eventDate >= date && eventDate < nextDate;
-      });
-
-      const priorEvent = sortedEvents.filter(e =>
-        new Date(e.timestamp).getTime() < date.getTime()
-      ).pop() || (i === days - 1 ? initialPriorEvent : undefined);
-
-      const uptime = calculateDayUptime(dayEvents, date, nextDate, priorEvent);
-
-      data.push({
-        date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-        uptime: parseFloat(uptime.toFixed(1))
-      });
-    }
-
-    return data;
-  }
-
-  function calculateDayUptime(dayEvents: any[], startDate: Date, endDate: Date, priorEvent?: any): number {
-    let totalUptime = 0;
-    const now = new Date();
-    const dayEnd = endDate.getTime() > now.getTime() ? now.getTime() : endDate.getTime();
-    const dayStart = startDate.getTime();
-
-    const sortedEvents = [...dayEvents].sort((a, b) => 
-      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    );
-
-    if (sortedEvents.length === 0 && priorEvent) {
-      if (priorEvent.status === "online") {
-        totalUptime = dayEnd - dayStart;
-      }
-    } else if (sortedEvents.length > 0) {
-      let currentStatus: string;
-      if (priorEvent) {
-        currentStatus = priorEvent.status;
-      } else {
-        currentStatus = sortedEvents[0].status === "online" ? "offline" : "online";
-      }
-      
-      let currentTime = dayStart;
-
-      for (let i = 0; i < sortedEvents.length; i++) {
-        const event = sortedEvents[i];
-        const eventTime = Math.max(new Date(event.timestamp).getTime(), dayStart);
-
-        if (currentStatus === "online") {
-          totalUptime += Math.max(0, eventTime - currentTime);
-        }
-
-        currentStatus = event.status;
-        currentTime = eventTime;
-      }
-
-      if (currentStatus === "online") {
-        totalUptime += Math.max(0, dayEnd - currentTime);
-      }
-    } else {
-      // No events and no prior event means no monitoring data for this day.
-      // Default to 0% instead of assuming 100% uptime.
-      totalUptime = 0;
-    }
-
-    const actualDuration = dayEnd - dayStart;
-    return actualDuration > 0 ? (totalUptime / actualDuration) * 100 : 0;
-  }
+  const uptimeData = chartData?.data || [];
 
   return (
     <Card data-testid="uptime-chart">
@@ -158,8 +51,8 @@ export default function UptimeChart({
         <CardDescription>{description}</CardDescription>
       </CardHeader>
       <CardContent>
-        <Tabs 
-          defaultValue={`${days}d`} 
+        <Tabs
+          defaultValue={`${days}d`}
           className="w-full"
           onValueChange={(value) => setSelectedDays(parseInt(value.replace('d', '')))}
         >
@@ -177,12 +70,12 @@ export default function UptimeChart({
                 <ResponsiveContainer width="100%" height={300}>
                   <LineChart data={uptimeData}>
                     <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                    <XAxis 
-                      dataKey="date" 
+                    <XAxis
+                      dataKey="date"
                       className="text-xs"
                       tick={{ fill: 'hsl(var(--muted-foreground))' }}
                     />
-                    <YAxis 
+                    <YAxis
                       domain={[0, 100]}
                       className="text-xs"
                       tick={{ fill: 'hsl(var(--muted-foreground))' }}
@@ -195,10 +88,10 @@ export default function UptimeChart({
                       }}
                       formatter={(value: number) => [`${value.toFixed(1)}%`, 'Uptime']}
                     />
-                    <Line 
-                      type="monotone" 
-                      dataKey="uptime" 
-                      stroke="hsl(var(--chart-1))" 
+                    <Line
+                      type="monotone"
+                      dataKey="uptime"
+                      stroke="hsl(var(--chart-1))"
                       strokeWidth={2}
                       dot={false}
                     />
