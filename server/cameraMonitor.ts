@@ -12,6 +12,7 @@ import { buildCameraUrl, getCameraDispatcher, getConnectionInfo, captureSslFinge
 import { backfillFromUptimeSeconds, backfillFromSystemLog, backfillFromTvpcHistory } from "./services/historyBackfill";
 import { probeAnalyticsCapabilities } from "./services/analyticsPoller";
 import { lookupAxisEolWithFetch } from "./services/axisEolData";
+import { statusBroadcaster } from "./services/statusBroadcaster";
 import type { InsertUptimeEvent } from "@shared/schema";
 
 // Configurable concurrency for HTTP polling (default 25 parallel requests)
@@ -1001,6 +1002,12 @@ async function checkCameraCohort(cohortIndex: number) {
 
     console.log(`[Monitor] Cohort ${cohortIndex}/${NUM_COHORTS - 1}: checking ${cohortCameras.length} cameras (concurrency: ${POLL_CONCURRENCY})`);
 
+    // Capture previous statuses for status change detection
+    const previousStatuses = new Map<string, string>();
+    for (const cam of cohortCameras) {
+      previousStatuses.set(cam.id, cam.currentStatus || "unknown");
+    }
+
     const pendingEvents: InsertUptimeEvent[] = [];
     const pendingStatusUpdates: PollResult["statusUpdate"][] = [];
 
@@ -1073,6 +1080,23 @@ async function checkCameraCohort(cohortIndex: number) {
 
     if (pendingStatusUpdates.length > 0) await storage.batchUpdateCameraStatuses(pendingStatusUpdates);
     if (pendingEvents.length > 0) await storage.createUptimeEventBatch(pendingEvents);
+
+    // Broadcast status changes
+    for (const update of pendingStatusUpdates) {
+      const oldStatus = previousStatuses.get(update.id) || "unknown";
+      const newStatus = update.status;
+      if (oldStatus !== newStatus) {
+        const cam = cohortCameras.find(c => c.id === update.id);
+        statusBroadcaster.broadcast({
+          cameraId: update.id,
+          cameraName: cam?.name || update.id,
+          oldStatus,
+          newStatus,
+          timestamp: new Date().toISOString(),
+          message: `${cam?.name || update.id} changed from ${oldStatus} to ${newStatus}`,
+        });
+      }
+    }
 
     console.log(`[Monitor] Cohort ${cohortIndex} complete (${pendingEvents.length} events)`);
   } catch (error) {

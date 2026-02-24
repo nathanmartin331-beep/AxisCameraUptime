@@ -7,6 +7,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { useAuth } from "@/hooks/useAuth";
+import { useTheme } from "@/hooks/useTheme";
+import { useStatusNotifications } from "@/hooks/useStatusNotifications";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import Dashboard from "@/pages/Dashboard";
 import CameraDetail from "@/pages/CameraDetail";
 import Cameras from "@/pages/Cameras";
@@ -19,9 +22,11 @@ import GroupDetail from "@/pages/GroupDetail";
 import Users from "@/pages/Users";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
-import { LogOut } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { LogOut, Sun, Moon, Bell } from "lucide-react";
+import { useState } from "react";
 
-function Router() {
+function AppRouter() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
@@ -39,8 +44,56 @@ function Router() {
   );
 }
 
+function NotificationBell() {
+  const { notifications, unreadCount, markAllRead } = useStatusNotifications();
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (o) markAllRead(); }}>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="sm" className="relative" data-testid="button-notifications">
+          <Bell className="h-4 w-4" />
+          {unreadCount > 0 && (
+            <span className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground text-[10px] font-bold rounded-full h-4 min-w-[16px] flex items-center justify-center px-1">
+              {unreadCount > 9 ? "9+" : unreadCount}
+            </span>
+          )}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 p-0">
+        <div className="p-3 border-b">
+          <p className="font-medium text-sm">Status Changes</p>
+        </div>
+        <div className="max-h-64 overflow-auto">
+          {notifications.length === 0 ? (
+            <div className="p-4 text-center text-sm text-muted-foreground">
+              No recent status changes
+            </div>
+          ) : (
+            notifications.slice(0, 10).map((n, i) => (
+              <div key={i} className="px-3 py-2 border-b last:border-0 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">{n.cameraName}</span>
+                  <span className={`text-xs font-medium ${n.newStatus === "online" ? "text-green-600" : n.newStatus === "offline" ? "text-red-600" : "text-amber-600"}`}>
+                    {n.newStatus}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">{n.message}</p>
+                <p className="text-[10px] text-muted-foreground">
+                  {new Date(n.timestamp).toLocaleTimeString()}
+                </p>
+              </div>
+            ))
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function AppContent() {
   const { user, isLoading, isAuthenticated } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const style = {
     "--sidebar-width": "16rem",
   };
@@ -67,7 +120,16 @@ function AppContent() {
           <div className="flex flex-col flex-1">
             <header className="flex items-center justify-between p-4 border-b">
               <SidebarTrigger data-testid="button-sidebar-toggle" />
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleTheme}
+                  data-testid="button-theme-toggle"
+                >
+                  {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                </Button>
+                <NotificationBell />
                 <span className="text-sm text-muted-foreground">
                   {(user as any)?.firstName || (user as any)?.email || "User"}
                 </span>
@@ -87,7 +149,9 @@ function AppContent() {
               </div>
             </header>
             <main className="flex-1 overflow-auto p-8">
-              <Router />
+              <ErrorBoundary>
+                <AppRouter />
+              </ErrorBoundary>
             </main>
           </div>
         </div>
@@ -101,7 +165,9 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <AppContent />
+        <ErrorBoundary>
+          <AppContent />
+        </ErrorBoundary>
       </TooltipProvider>
     </QueryClientProvider>
   );

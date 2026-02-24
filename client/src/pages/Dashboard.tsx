@@ -1,9 +1,20 @@
 import { useState, useMemo } from "react";
 import { Camera, Wifi, TrendingUp, Plus, Upload, Search as SearchIcon, AlertTriangle, Download, Filter, Users, ArrowUpDown, Volume2, Eye, EyeOff, Settings2 } from "lucide-react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { useAuthMutation } from "@/hooks/useAuthMutation";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import MetricCard from "@/components/MetricCard";
 import CameraTable, { Camera as CameraType } from "@/components/CameraTable";
 import UptimeChart from "@/components/UptimeChart";
@@ -177,69 +188,32 @@ export default function Dashboard() {
     refetchInterval: 30000,
   });
 
-  const deleteMutation = useMutation({
+  const [deleteConfirmCamera, setDeleteConfirmCamera] = useState<CameraType | null>(null);
+
+  const deleteMutation = useAuthMutation({
     mutationFn: async (cameraId: string) => {
       await apiRequest("DELETE", `/api/cameras/${cameraId}`);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/cameras"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/summary"] });
-      toast({
-        title: "Success",
-        description: "Camera deleted successfully",
-      });
+      toast({ title: "Success", description: "Camera deleted successfully" });
+      setDeleteConfirmCamera(null);
     },
-    onError: (error: Error) => {
-      if (isUnauthorizedError(error)) {
-        toast({
-          title: "Session Expired",
-          description: "Please log in again",
-          variant: "destructive",
-        });
-        setTimeout(() => {
-          window.location.href = "/api/login";
-        }, 500);
-        return;
-      }
-      toast({
-        title: "Error",
-        description: "Failed to delete camera",
-        variant: "destructive",
-      });
-    },
+    errorMessage: "Failed to delete camera",
   });
 
-  const addMutation = useMutation({
+  const addMutation = useAuthMutation({
     mutationFn: async (data: CameraFormData) => {
       await apiRequest("POST", "/api/cameras", data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/cameras"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/summary"] });
-      toast({
-        title: "Success",
-        description: "Camera added successfully",
-      });
+      toast({ title: "Success", description: "Camera added successfully" });
       setAddCameraOpen(false);
     },
-    onError: (error: Error) => {
-      if (isUnauthorizedError(error)) {
-        toast({
-          title: "Session Expired",
-          description: "Please log in again",
-          variant: "destructive",
-        });
-        setTimeout(() => {
-          window.location.href = "/api/login";
-        }, 500);
-        return;
-      }
-      toast({
-        title: "Error",
-        description: "Failed to add camera",
-        variant: "destructive",
-      });
-    },
+    errorMessage: "Failed to add camera",
   });
 
   if (camerasError && isUnauthorizedError(camerasError as Error)) {
@@ -314,18 +288,15 @@ export default function Dashboard() {
   };
 
   const handleDelete = (camera: CameraType) => {
-    if (confirm(`Are you sure you want to delete ${camera.name}?`)) {
-      deleteMutation.mutate(camera.id);
-    }
+    setDeleteConfirmCamera(camera);
   };
 
   const handleAddCamera = (data: CameraFormData) => {
     addMutation.mutate(data);
   };
 
-  const editMutation = useMutation({
+  const editMutation = useAuthMutation({
     mutationFn: async ({ id, data }: { id: string; data: CameraFormData }) => {
-      // Build the update payload, omitting empty password (keep current)
       const payload: Record<string, string> = {
         name: data.name,
         ipAddress: data.ipAddress,
@@ -333,40 +304,18 @@ export default function Dashboard() {
         location: data.location,
         notes: data.notes,
       };
-      if (data.password) {
-        payload.password = data.password;
-      }
+      if (data.password) payload.password = data.password;
       await apiRequest("PATCH", `/api/cameras/${id}`, payload);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/cameras"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/summary"] });
-      toast({
-        title: "Success",
-        description: "Camera updated successfully",
-      });
+      toast({ title: "Success", description: "Camera updated successfully" });
       setEditCameraOpen(false);
       setEditCameraId(null);
       setEditCameraData(undefined);
     },
-    onError: (error: Error) => {
-      if (isUnauthorizedError(error)) {
-        toast({
-          title: "Session Expired",
-          description: "Please log in again",
-          variant: "destructive",
-        });
-        setTimeout(() => {
-          window.location.href = "/api/login";
-        }, 500);
-        return;
-      }
-      toast({
-        title: "Error",
-        description: "Failed to update camera",
-        variant: "destructive",
-      });
-    },
+    errorMessage: "Failed to update camera",
   });
 
   const handleEdit = (camera: CameraType) => {
@@ -645,6 +594,31 @@ Cameras matching filters: ${filteredCameras.length}
 
       {visibleSections.uptimeChart && <UptimeChart cameraId="all" days={30} />}
 
+      {/* Empty state when no cameras exist */}
+      {!camerasLoading && (!cameras || cameras.length === 0) && (
+        <div className="border rounded-lg p-12 text-center space-y-4">
+          <Camera className="h-16 w-16 mx-auto text-muted-foreground/50" />
+          <div>
+            <h2 className="text-xl font-semibold">No Cameras Yet</h2>
+            <p className="text-muted-foreground mt-1">Get started by adding your first Axis camera</p>
+          </div>
+          <div className="flex justify-center gap-3">
+            <Button onClick={() => setAddCameraOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Camera
+            </Button>
+            <Button variant="outline" onClick={() => setScanOpen(true)}>
+              <Wifi className="mr-2 h-4 w-4" />
+              Scan Network
+            </Button>
+            <Button variant="outline" onClick={() => setImportOpen(true)}>
+              <Upload className="mr-2 h-4 w-4" />
+              Import CSV
+            </Button>
+          </div>
+        </div>
+      )}
+
       {visibleSections.cameraTable && <div className="space-y-4">
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -785,14 +759,83 @@ Cameras matching filters: ${filteredCameras.length}
       <NetworkScanModal
         open={scanOpen}
         onOpenChange={setScanOpen}
-        onAddCameras={(ips) => console.log("Adding cameras:", ips)}
+        onAddCameras={async (ips) => {
+          try {
+            const res = await apiRequest("POST", "/api/cameras/bulk-add", {
+              cameras: ips.map((ip) => ({
+                ipAddress: ip,
+                name: `Camera ${ip}`,
+                username: "root",
+                password: "pass",
+              })),
+            });
+            const result = await res.json();
+            queryClient.invalidateQueries({ queryKey: ["/api/cameras"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/dashboard/summary"] });
+            toast({
+              title: "Cameras Added",
+              description: `Added ${result.added} camera${result.added !== 1 ? "s" : ""}${result.skipped > 0 ? `, ${result.skipped} skipped (duplicates)` : ""}`,
+            });
+          } catch (error: any) {
+            if (isUnauthorizedError(error)) {
+              toast({ title: "Session Expired", description: "Please log in again", variant: "destructive" });
+              setTimeout(() => { window.location.href = "/api/login"; }, 500);
+              return;
+            }
+            toast({ title: "Error", description: "Failed to add cameras from scan", variant: "destructive" });
+          }
+        }}
       />
 
       <CSVImportModal
         open={importOpen}
         onOpenChange={setImportOpen}
-        onImport={(cameras) => console.log("Imported:", cameras)}
+        onImport={async (cameras) => {
+          try {
+            const csvHeader = "name,ipAddress,location,username,password";
+            const csvRows = cameras.map((c: any) =>
+              `${c.name},${c.ipAddress},${c.location || ""},${c.username},${c.password}`
+            );
+            const csvContent = [csvHeader, ...csvRows].join("\n");
+            const res = await apiRequest("POST", "/api/cameras/import", { csvContent });
+            const result = await res.json();
+            queryClient.invalidateQueries({ queryKey: ["/api/cameras"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/dashboard/summary"] });
+            toast({
+              title: "Import Complete",
+              description: result.message,
+            });
+          } catch (error: any) {
+            if (isUnauthorizedError(error)) {
+              toast({ title: "Session Expired", description: "Please log in again", variant: "destructive" });
+              setTimeout(() => { window.location.href = "/api/login"; }, 500);
+              return;
+            }
+            toast({ title: "Error", description: "Failed to import cameras", variant: "destructive" });
+          }
+        }}
       />
+
+      <AlertDialog open={!!deleteConfirmCamera} onOpenChange={(open) => { if (!open) setDeleteConfirmCamera(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Camera</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{deleteConfirmCamera?.name}"? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteConfirmCamera && deleteMutation.mutate(deleteConfirmCamera.id)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
