@@ -851,7 +851,6 @@ export default function CameraDetail() {
                           valueColor={c.text}
                           accentColor={c.hex}
                           metadata={s.metadata ?? undefined}
-                          showLineCrossingBreakdown
                           showVehicles
                         />
                       );
@@ -864,9 +863,8 @@ export default function CameraDetail() {
                       value={lineCrossingData.total ?? lineCrossingData.latest.value}
                       timestamp={lineCrossingData.latest.timestamp}
                       valueColor="text-purple-600"
-                      metadata={lineCrossingData.latest.metadata ?? undefined}
-                      showLineCrossingBreakdown
-                      showVehicles
+                      metadata={!hasMultiple ? (lineCrossingData.latest.metadata ?? undefined) : undefined}
+                      showVehicles={!hasMultiple}
                     />
                   </>
                 );
