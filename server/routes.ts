@@ -1852,13 +1852,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Get all scenario events at the latest timestamp so the frontend can
       // display per-scenario breakdown instead of just one arbitrary scenario.
+      // Deduplicate by scenario name — keep the highest value for each scenario
+      // in case multiple rows exist at the same timestamp.
       const scenarioEvents = await storage.getLatestAnalyticsEventsByScenario(cameraId, eventType);
-      const scenarios = scenarioEvents.map((e) => ({
-        scenario: (e.metadata as Record<string, any>)?.scenario || "Default",
-        value: e.value,
-        metadata: e.metadata,
-      }));
-      const total = scenarioEvents.reduce((sum, e) => sum + e.value, 0);
+      const scenarioMap = new Map<string, { scenario: string; value: number; metadata?: Record<string, any> | null }>();
+      for (const e of scenarioEvents) {
+        const name = (e.metadata as Record<string, any>)?.scenario || "Default";
+        const existing = scenarioMap.get(name);
+        if (!existing || e.value > existing.value) {
+          scenarioMap.set(name, { scenario: name, value: e.value, metadata: e.metadata });
+        }
+      }
+      const scenarios = Array.from(scenarioMap.values());
+      const total = scenarios.reduce((sum, s) => sum + s.value, 0);
 
       res.json({
         cameraId,

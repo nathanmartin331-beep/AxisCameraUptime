@@ -801,6 +801,9 @@ export default function CameraDetail() {
                           timestamp={lineCrossingData.latest!.timestamp}
                           valueColor={c.text}
                           accentColor={c.hex}
+                          metadata={s.metadata ?? undefined}
+                          showVehicles
+                          showLineCrossingBreakdown
                         />
                       );
                     })}
@@ -812,6 +815,9 @@ export default function CameraDetail() {
                       value={lineCrossingData.total ?? lineCrossingData.latest.value}
                       timestamp={lineCrossingData.latest.timestamp}
                       valueColor="text-purple-600"
+                      metadata={hasMultiple ? undefined : (scenarios?.[0]?.metadata ?? undefined)}
+                      showVehicles={!hasMultiple}
+                      showLineCrossingBreakdown={!hasMultiple}
                     />
                   </>
                 );
