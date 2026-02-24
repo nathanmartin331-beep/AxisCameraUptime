@@ -47,6 +47,25 @@ interface AnalyticsResponse {
   events: AnalyticsEventWithMeta[];
 }
 
+// Distinct colors for per-scenario cards and chart bars.
+// Each scenario gets a unique hue so they're visually distinguishable.
+const SCENARIO_COLORS = [
+  { text: "text-blue-600",    bg: "bg-blue-50",    hex: "#2563eb" },
+  { text: "text-amber-600",   bg: "bg-amber-50",   hex: "#d97706" },
+  { text: "text-teal-600",    bg: "bg-teal-50",    hex: "#0d9488" },
+  { text: "text-pink-600",    bg: "bg-pink-50",    hex: "#db2777" },
+  { text: "text-indigo-600",  bg: "bg-indigo-50",  hex: "#4f46e5" },
+  { text: "text-orange-600",  bg: "bg-orange-50",  hex: "#ea580c" },
+  { text: "text-cyan-600",    bg: "bg-cyan-50",    hex: "#0891b2" },
+  { text: "text-rose-600",    bg: "bg-rose-50",    hex: "#e11d48" },
+];
+
+// Lighter shades for secondary bars (e.g., exiting vs entering)
+const SCENARIO_COLORS_LIGHT = [
+  "#93c5fd", "#fcd34d", "#5eead4", "#f9a8d4",
+  "#a5b4fc", "#fdba74", "#67e8f9", "#fda4af",
+];
+
 // Render one analytics card (used for both per-scenario and total cards)
 function AnalyticsCard({
   icon: Icon,
@@ -59,6 +78,7 @@ function AnalyticsCard({
   metadata,
   showVehicles,
   showLineCrossingBreakdown,
+  accentColor,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   iconColor: string;
@@ -70,9 +90,13 @@ function AnalyticsCard({
   metadata?: Record<string, any>;
   showVehicles?: boolean;
   showLineCrossingBreakdown?: boolean;
+  accentColor?: string; // hex color for left border accent
 }) {
   return (
-    <div className="rounded-lg border p-4 text-center">
+    <div
+      className="rounded-lg border p-4 text-center"
+      style={accentColor ? { borderLeftWidth: "4px", borderLeftColor: accentColor } : undefined}
+    >
       <div className="flex items-center justify-center gap-2 mb-1">
         <Icon className={`h-4 w-4 ${iconColor}`} />
         <span className="text-sm font-medium text-muted-foreground">{label}</span>
@@ -699,17 +723,22 @@ export default function CameraDetail() {
                 const hasMultiple = scenarios && scenarios.length > 1;
                 return (
                   <>
-                    {hasMultiple && scenarios!.map((s, i) => (
-                      <AnalyticsCard
-                        key={`occ-${i}`}
-                        icon={Users}
-                        iconColor="text-muted-foreground"
-                        label="Occupancy"
-                        subtitle={s.scenario}
-                        value={s.value}
-                        timestamp={analyticsData.latest!.timestamp}
-                      />
-                    ))}
+                    {hasMultiple && scenarios!.map((s, i) => {
+                      const c = SCENARIO_COLORS[i % SCENARIO_COLORS.length];
+                      return (
+                        <AnalyticsCard
+                          key={`occ-${i}`}
+                          icon={Users}
+                          iconColor={c.text}
+                          label="Occupancy"
+                          subtitle={s.scenario}
+                          value={s.value}
+                          timestamp={analyticsData.latest!.timestamp}
+                          valueColor={c.text}
+                          accentColor={c.hex}
+                        />
+                      );
+                    })}
                     <AnalyticsCard
                       icon={Users}
                       iconColor="text-muted-foreground"
@@ -728,24 +757,28 @@ export default function CameraDetail() {
                 const hasMultiple = scenarios && scenarios.length > 1;
                 return (
                   <>
-                    {hasMultiple && scenarios!.map((s, i) => (
-                      <AnalyticsCard
-                        key={`in-${i}`}
-                        icon={ArrowDownToLine}
-                        iconColor="text-green-600"
-                        label="Entering"
-                        subtitle={s.scenario}
-                        value={s.value}
-                        timestamp={peopleInData.latest!.timestamp}
-                        valueColor="text-green-600"
-                        metadata={s.metadata ?? undefined}
-                        showVehicles
-                      />
-                    ))}
+                    {hasMultiple && scenarios!.map((s, i) => {
+                      const c = SCENARIO_COLORS[i % SCENARIO_COLORS.length];
+                      return (
+                        <AnalyticsCard
+                          key={`in-${i}`}
+                          icon={ArrowDownToLine}
+                          iconColor={c.text}
+                          label="Entering"
+                          subtitle={s.scenario}
+                          value={s.value}
+                          timestamp={peopleInData.latest!.timestamp}
+                          valueColor={c.text}
+                          accentColor={c.hex}
+                          metadata={s.metadata ?? undefined}
+                          showVehicles
+                        />
+                      );
+                    })}
                     <AnalyticsCard
                       icon={ArrowDownToLine}
                       iconColor="text-green-600"
-                      label={hasMultiple ? "Entering" : "Entering"}
+                      label="Entering"
                       subtitle={hasMultiple ? "Total" : (scenarios?.[0]?.scenario)}
                       value={peopleInData.total ?? peopleInData.latest.value}
                       timestamp={peopleInData.latest.timestamp}
@@ -763,24 +796,28 @@ export default function CameraDetail() {
                 const hasMultiple = scenarios && scenarios.length > 1;
                 return (
                   <>
-                    {hasMultiple && scenarios!.map((s, i) => (
-                      <AnalyticsCard
-                        key={`out-${i}`}
-                        icon={ArrowUpFromLine}
-                        iconColor="text-red-600"
-                        label="Exiting"
-                        subtitle={s.scenario}
-                        value={s.value}
-                        timestamp={peopleOutData.latest!.timestamp}
-                        valueColor="text-red-600"
-                        metadata={s.metadata ?? undefined}
-                        showVehicles
-                      />
-                    ))}
+                    {hasMultiple && scenarios!.map((s, i) => {
+                      const c = SCENARIO_COLORS[i % SCENARIO_COLORS.length];
+                      return (
+                        <AnalyticsCard
+                          key={`out-${i}`}
+                          icon={ArrowUpFromLine}
+                          iconColor={c.text}
+                          label="Exiting"
+                          subtitle={s.scenario}
+                          value={s.value}
+                          timestamp={peopleOutData.latest!.timestamp}
+                          valueColor={c.text}
+                          accentColor={c.hex}
+                          metadata={s.metadata ?? undefined}
+                          showVehicles
+                        />
+                      );
+                    })}
                     <AnalyticsCard
                       icon={ArrowUpFromLine}
                       iconColor="text-red-600"
-                      label={hasMultiple ? "Exiting" : "Exiting"}
+                      label="Exiting"
                       subtitle={hasMultiple ? "Total" : (scenarios?.[0]?.scenario)}
                       value={peopleOutData.total ?? peopleOutData.latest.value}
                       timestamp={peopleOutData.latest.timestamp}
@@ -798,25 +835,29 @@ export default function CameraDetail() {
                 const hasMultiple = scenarios && scenarios.length > 1;
                 return (
                   <>
-                    {hasMultiple && scenarios!.map((s, i) => (
-                      <AnalyticsCard
-                        key={`lc-${i}`}
-                        icon={GitBranchPlus}
-                        iconColor="text-purple-600"
-                        label="Line Crossings"
-                        subtitle={s.scenario}
-                        value={s.value}
-                        timestamp={lineCrossingData.latest!.timestamp}
-                        valueColor="text-purple-600"
-                        metadata={s.metadata ?? undefined}
-                        showLineCrossingBreakdown
-                        showVehicles
-                      />
-                    ))}
+                    {hasMultiple && scenarios!.map((s, i) => {
+                      const c = SCENARIO_COLORS[i % SCENARIO_COLORS.length];
+                      return (
+                        <AnalyticsCard
+                          key={`lc-${i}`}
+                          icon={GitBranchPlus}
+                          iconColor={c.text}
+                          label="Line Crossings"
+                          subtitle={s.scenario}
+                          value={s.value}
+                          timestamp={lineCrossingData.latest!.timestamp}
+                          valueColor={c.text}
+                          accentColor={c.hex}
+                          metadata={s.metadata ?? undefined}
+                          showLineCrossingBreakdown
+                          showVehicles
+                        />
+                      );
+                    })}
                     <AnalyticsCard
                       icon={GitBranchPlus}
                       iconColor="text-purple-600"
-                      label={hasMultiple ? "Line Crossings" : "Line Crossings"}
+                      label="Line Crossings"
                       subtitle={hasMultiple ? "Total" : (scenarios?.[0]?.scenario)}
                       value={lineCrossingData.total ?? lineCrossingData.latest.value}
                       timestamp={lineCrossingData.latest.timestamp}
@@ -858,9 +899,10 @@ export default function CameraDetail() {
             : [];
           const showPerScenario = scenarioNames.length > 1;
 
-          // Color palettes for scenarios (green shades for entering, red shades for exiting)
-          const enterColors = ["#22c55e", "#86efac", "#4ade80", "#16a34a"];
-          const exitColors = ["#ef4444", "#fca5a5", "#f87171", "#dc2626"];
+          // Use the same SCENARIO_COLORS palette as the live cards.
+          // Entering = scenario's primary hex, Exiting = lighter shade.
+          const enterColors = SCENARIO_COLORS.map(c => c.hex);
+          const exitColors = SCENARIO_COLORS_LIGHT;
 
           // Build chart data
           const dateMap = new Map<string, Record<string, any>>();
