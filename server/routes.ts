@@ -463,12 +463,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
             priorStatus = priorEvent.status;
           }
 
-          // Fall back to lastBootAt like calculateUptimePercentage does
+          // Fall back to lastBootAt: if we know the camera booted at some point,
+          // it was operational before the boot too (a reboot implies prior uptime).
+          // Previously this only handled bootTime < dayStart, leaving days before
+          // the boot with 0% uptime — now we assume "online" for all days when
+          // lastBootAt is set, since the camera was running before any reboot.
           if (!priorStatus && camera.lastBootAt) {
-            const bootTime = new Date(camera.lastBootAt);
-            if (bootTime < dayStart) {
-              priorStatus = "online";
-            }
+            priorStatus = "online";
           }
 
           const uptime = calculateUptimeFromEvents(

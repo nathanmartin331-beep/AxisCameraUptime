@@ -61,6 +61,16 @@ export async function backfillFromUptimeSeconds(
       return false;
     }
 
+    // Create synthetic "offline" event 60s before boot to represent the reboot.
+    // This ensures reboots show as brief dips in uptime rather than being invisible.
+    const rebootOfflineTimestamp = new Date(bootTimestamp.getTime() - 60000);
+    await db.insert(uptimeEvents).values({
+      cameraId,
+      timestamp: rebootOfflineTimestamp,
+      status: "offline",
+      isSynthetic: true,
+    });
+
     // Create synthetic "online" event at boot time
     await db.insert(uptimeEvents).values({
       cameraId,

@@ -311,6 +311,9 @@ function parseAoaAccumulatedCounts(
     const d = json.data;
     if (d.total !== undefined || d.human !== undefined || d.resetTime !== undefined ||
         d.passings || d.in !== undefined || d.out !== undefined ||
+        d.enters !== undefined || d.exits !== undefined ||
+        d.totalIn !== undefined || d.totalOut !== undefined ||
+        d.total_in !== undefined || d.total_out !== undefined ||
         d.currentOccupancy !== undefined || d.count !== undefined) {
       if (!d.type && scenarioHint?.type) d.type = scenarioHint.type;
       if (!d.name && scenarioHint?.name) d.name = scenarioHint.name;
@@ -370,8 +373,16 @@ function parseAoaAccumulatedCounts(
       }
 
       // Format B: direct in/out on the scenario object
+      // AXIS firmware returns various field names depending on version:
+      //   in / out, enters / exits, totalIn / totalOut, total_in / total_out
       if (scenario.in !== undefined) scenarioIn += parseInt(scenario.in) || 0;
+      if (scenario.enters !== undefined) scenarioIn += parseInt(scenario.enters) || 0;
+      if (scenario.totalIn !== undefined) scenarioIn += parseInt(scenario.totalIn) || 0;
+      if (scenario.total_in !== undefined) scenarioIn += parseInt(scenario.total_in) || 0;
       if (scenario.out !== undefined) scenarioOut += parseInt(scenario.out) || 0;
+      if (scenario.exits !== undefined) scenarioOut += parseInt(scenario.exits) || 0;
+      if (scenario.totalOut !== undefined) scenarioOut += parseInt(scenario.totalOut) || 0;
+      if (scenario.total_out !== undefined) scenarioOut += parseInt(scenario.total_out) || 0;
 
       // Format C: AXIS getAccumulatedCounts flat response
       // { total: N, totalHuman: N, totalCar: M, totalBus: B, totalTruck: T, totalBike: K, totalOtherVehicle: O }
