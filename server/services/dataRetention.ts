@@ -32,21 +32,44 @@ async function runRetentionCleanup() {
   console.log("[Retention] Starting daily cleanup...");
 
   try {
-    // Get the minimum retention days across all users (most conservative)
+    // Process each user's retention setting individually
     const allSettings = await db.select().from(userSettings);
-    const retentionDays = allSettings.length > 0
-      ? Math.min(...allSettings.map(s => s.dataRetentionDays ?? 90))
-      : 90;
 
-    const beforeDate = new Date();
-    beforeDate.setDate(beforeDate.getDate() - retentionDays);
+    // Build a map of userId → retentionDays
+    const userRetention = new Map<string, number>();
+    for (const s of allSettings) {
+      userRetention.set(s.userId, s.dataRetentionDays ?? 90);
+    }
 
-    console.log(`[Retention] Deleting events older than ${retentionDays} days (before ${beforeDate.toISOString()})`);
+    // Get all users who have cameras (including those without explicit settings)
+    const allCameras = await storage.getAllCameras();
+    const userCameraIds = new Map<string, string[]>();
+    for (const cam of allCameras) {
+      const ids = userCameraIds.get(cam.userId) || [];
+      ids.push(cam.id);
+      userCameraIds.set(cam.userId, ids);
+    }
 
-    const uptimeDeleted = await storage.deleteOldUptimeEvents(beforeDate);
-    const analyticsDeleted = await storage.deleteOldAnalyticsEvents(beforeDate);
+    let totalUptimeDeleted = 0;
+    let totalAnalyticsDeleted = 0;
 
-    console.log(`[Retention] Cleanup complete: ${uptimeDeleted} uptime events, ${analyticsDeleted} analytics events deleted`);
+    for (const [userId, cameraIds] of userCameraIds) {
+      const retentionDays = userRetention.get(userId) ?? 90;
+      const beforeDate = new Date();
+      beforeDate.setDate(beforeDate.getDate() - retentionDays);
+
+      const uptimeDeleted = await storage.deleteOldUptimeEventsForCameras(cameraIds, beforeDate);
+      const analyticsDeleted = await storage.deleteOldAnalyticsEventsForCameras(cameraIds, beforeDate);
+
+      totalUptimeDeleted += uptimeDeleted;
+      totalAnalyticsDeleted += analyticsDeleted;
+
+      if (uptimeDeleted > 0 || analyticsDeleted > 0) {
+        console.log(`[Retention] User ${userId}: deleted ${uptimeDeleted} uptime + ${analyticsDeleted} analytics events (retention: ${retentionDays}d)`);
+      }
+    }
+
+    console.log(`[Retention] Cleanup complete: ${totalUptimeDeleted} uptime events, ${totalAnalyticsDeleted} analytics events deleted`);
   } catch (error) {
     console.error("[Retention] Error during cleanup:", error);
   }

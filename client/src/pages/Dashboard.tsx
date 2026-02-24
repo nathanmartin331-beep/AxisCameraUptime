@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Camera, Wifi, TrendingUp, Plus, Upload, Search as SearchIcon, AlertTriangle, Download, Filter, Users, ArrowUpDown, Volume2, Eye, EyeOff, Settings2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
@@ -216,6 +216,29 @@ export default function Dashboard() {
     errorMessage: "Failed to add camera",
   });
 
+  const bulkAddMutation = useAuthMutation({
+    mutationFn: async (ips: string[]) => {
+      const res = await apiRequest("POST", "/api/cameras/bulk-add", {
+        cameras: ips.map((ip) => ({
+          ipAddress: ip,
+          name: `Camera ${ip}`,
+          username: "root",
+          password: "pass",
+        })),
+      });
+      return res.json();
+    },
+    onSuccess: (result: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cameras"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/summary"] });
+      toast({
+        title: "Cameras Added",
+        description: `Added ${result.added} camera${result.added !== 1 ? "s" : ""}${result.skipped > 0 ? `, ${result.skipped} skipped (duplicates)` : ""}`,
+      });
+    },
+    errorMessage: "Failed to add cameras from scan",
+  });
+
   if (camerasError && isUnauthorizedError(camerasError as Error)) {
     toast({
       title: "Session Expired",
@@ -227,12 +250,20 @@ export default function Dashboard() {
     }, 500);
   }
 
-  const uptimeMap = new Map<string, { uptime: number; monitoredDays: number }>();
-  cameraUptimes?.forEach((item) => {
-    uptimeMap.set(item.cameraId, { uptime: item.uptime, monitoredDays: item.monitoredDays });
-  });
+  // Tick counter forces formatLastSeen to recompute relative times every 60s
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
-  const transformedCameras = cameras ? cameras.map(c => transformCamera(c, uptimeMap)) : [];
+  const transformedCameras = useMemo(() => {
+    const map = new Map<string, { uptime: number; monitoredDays: number }>();
+    cameraUptimes?.forEach((item) => {
+      map.set(item.cameraId, { uptime: item.uptime, monitoredDays: item.monitoredDays });
+    });
+    return cameras ? cameras.map(c => transformCamera(c, map)) : [];
+  }, [cameras, cameraUptimes, tick]);
   
   // Get unique locations for filter
   const uniqueLocations = useMemo(() => {
@@ -759,32 +790,7 @@ Cameras matching filters: ${filteredCameras.length}
       <NetworkScanModal
         open={scanOpen}
         onOpenChange={setScanOpen}
-        onAddCameras={async (ips) => {
-          try {
-            const res = await apiRequest("POST", "/api/cameras/bulk-add", {
-              cameras: ips.map((ip) => ({
-                ipAddress: ip,
-                name: `Camera ${ip}`,
-                username: "root",
-                password: "pass",
-              })),
-            });
-            const result = await res.json();
-            queryClient.invalidateQueries({ queryKey: ["/api/cameras"] });
-            queryClient.invalidateQueries({ queryKey: ["/api/dashboard/summary"] });
-            toast({
-              title: "Cameras Added",
-              description: `Added ${result.added} camera${result.added !== 1 ? "s" : ""}${result.skipped > 0 ? `, ${result.skipped} skipped (duplicates)` : ""}`,
-            });
-          } catch (error: any) {
-            if (isUnauthorizedError(error)) {
-              toast({ title: "Session Expired", description: "Please log in again", variant: "destructive" });
-              setTimeout(() => { window.location.href = "/api/login"; }, 500);
-              return;
-            }
-            toast({ title: "Error", description: "Failed to add cameras from scan", variant: "destructive" });
-          }
-        }}
+        onAddCameras={(ips) => bulkAddMutation.mutate(ips)}
       />
 
       <CSVImportModal

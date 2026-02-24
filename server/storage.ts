@@ -1446,7 +1446,44 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  // Data retention cleanup — batched deletes to avoid long write locks
+  async getAllCameras(): Promise<Camera[]> {
+    return db.select().from(cameras);
+  }
+
+  // Per-user data retention cleanup — deletes events only for specific cameras
+  async deleteOldUptimeEventsForCameras(cameraIds: string[], beforeDate: Date): Promise<number> {
+    if (cameraIds.length === 0) return 0;
+    let totalDeleted = 0;
+    const BATCH_SIZE = 10000;
+    const placeholders = cameraIds.map(() => '?').join(',');
+    const ts = Math.floor(beforeDate.getTime() / 1000);
+    while (true) {
+      const result = sqlite.prepare(
+        `DELETE FROM uptime_events WHERE rowid IN (SELECT rowid FROM uptime_events WHERE camera_id IN (${placeholders}) AND timestamp <= ? LIMIT ?)`
+      ).run(...cameraIds, ts, BATCH_SIZE);
+      totalDeleted += result.changes;
+      if (result.changes < BATCH_SIZE) break;
+    }
+    return totalDeleted;
+  }
+
+  async deleteOldAnalyticsEventsForCameras(cameraIds: string[], beforeDate: Date): Promise<number> {
+    if (cameraIds.length === 0) return 0;
+    let totalDeleted = 0;
+    const BATCH_SIZE = 10000;
+    const placeholders = cameraIds.map(() => '?').join(',');
+    const ts = Math.floor(beforeDate.getTime() / 1000);
+    while (true) {
+      const result = sqlite.prepare(
+        `DELETE FROM analytics_events WHERE rowid IN (SELECT rowid FROM analytics_events WHERE camera_id IN (${placeholders}) AND timestamp <= ? LIMIT ?)`
+      ).run(...cameraIds, ts, BATCH_SIZE);
+      totalDeleted += result.changes;
+      if (result.changes < BATCH_SIZE) break;
+    }
+    return totalDeleted;
+  }
+
+  // Data retention cleanup — batched deletes to avoid long write locks (legacy global method)
   async deleteOldUptimeEvents(beforeDate: Date): Promise<number> {
     let totalDeleted = 0;
     const BATCH_SIZE = 10000;

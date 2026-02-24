@@ -194,6 +194,8 @@ export const cameras = sqliteTable(
   },
   (table) => ({
     userIdIdx: index("idx_cameras_user_id").on(table.userId),
+    statusIdx: index("idx_cameras_current_status").on(table.currentStatus),
+    seriesIdx: index("idx_cameras_series").on(table.series),
   })
 );
 

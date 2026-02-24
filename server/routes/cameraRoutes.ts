@@ -2,7 +2,7 @@ import { Router } from "express";
 import { storage } from "../storage";
 import { requireAuth, requireAdmin } from "../auth";
 import { encryptPassword } from "../encryption";
-import { checkAllCameras } from "../cameraMonitor";
+import { checkAllCameras, checkSingleCamera } from "../cameraMonitor";
 import { calculateUptimeFromEvents } from "../uptimeCalculator";
 import type { Camera } from "@shared/schema";
 import { z } from "zod";
@@ -341,7 +341,7 @@ router.get("/api/cameras/:id/uptime", requireAuth, async (req: any, res) => {
 });
 
 // Manual camera check trigger
-router.post("/api/cameras/:id/check", requireAuth, async (req: any, res) => {
+router.post("/api/cameras/:id/check", cameraWriteLimiter, requireAuth, async (req: any, res) => {
   try {
     const cameraId = validateId(req.params.id);
     if (!cameraId) return sendError(res, 400, "Invalid camera ID");
@@ -350,7 +350,11 @@ router.post("/api/cameras/:id/check", requireAuth, async (req: any, res) => {
     if (!camera) return sendError(res, 404, "Camera not found");
     if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
 
+    // Run the check asynchronously — respond immediately
     res.json({ message: "Camera check queued" });
+    checkSingleCamera(camera).catch(err => {
+      console.error(`[Monitor] Manual check failed for ${camera.name}:`, err.message);
+    });
   } catch (error) {
     console.error("Error triggering camera check:", error);
     sendError(res, 500, "Failed to trigger camera check");

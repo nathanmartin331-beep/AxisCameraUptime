@@ -1083,5 +1083,28 @@ export function startCameraMonitoring() {
   console.log(`[Monitor] Camera monitoring scheduled (every 5 minutes, ${NUM_COHORTS} staggered cohorts)`);
 }
 
+/**
+ * Check a single camera by its DB row. Polls the camera, writes the result
+ * to the database, and broadcasts any status change via SSE.
+ */
+export async function checkSingleCamera(camera: any): Promise<void> {
+  const previousStatus = camera.currentStatus || "unknown";
+
+  const pendingEvents: InsertUptimeEvent[] = [];
+  const pendingStatusUpdates: PollResult["statusUpdate"][] = [];
+
+  await pollCameraWithFallback(camera, pendingEvents, pendingStatusUpdates);
+
+  if (pendingStatusUpdates.length > 0) {
+    await storage.batchUpdateCameraStatuses(pendingStatusUpdates);
+  }
+  if (pendingEvents.length > 0) {
+    await storage.createUptimeEventBatch(pendingEvents);
+  }
+
+  const previousStatuses = new Map<string, string>([[camera.id, previousStatus]]);
+  broadcastStatusChanges([camera], previousStatuses, pendingStatusUpdates);
+}
+
 // Export for manual triggering (checks all cameras at once — used for initial poll and ad-hoc triggers)
 export { checkAllCameras };

@@ -66,11 +66,11 @@ export default function CameraTable({
           <TableRow>
             <TableHead>Status</TableHead>
             <TableHead>Camera Name</TableHead>
-            <TableHead>Model</TableHead>
-            <TableHead>IP Address</TableHead>
-            <TableHead>Location</TableHead>
-            <TableHead>Current Uptime</TableHead>
-            <TableHead>Last Seen</TableHead>
+            <TableHead className="hidden lg:table-cell">Model</TableHead>
+            <TableHead className="hidden md:table-cell">IP Address</TableHead>
+            <TableHead className="hidden xl:table-cell">Location</TableHead>
+            <TableHead className="hidden sm:table-cell">Current Uptime</TableHead>
+            <TableHead className="hidden md:table-cell">Last Seen</TableHead>
             <TableHead className="w-[70px]">Actions</TableHead>
           </TableRow>
         </TableHeader>
@@ -149,7 +149,7 @@ export default function CameraTable({
                   </TooltipProvider>
                 </TableCell>
                 <TableCell className="font-medium">{camera.name}</TableCell>
-                <TableCell>
+                <TableCell className="hidden lg:table-cell">
                   <TooltipProvider>
                     <div className="flex items-center gap-2">
                       <div className="flex flex-col gap-1">
@@ -185,7 +185,7 @@ export default function CameraTable({
                           <div className="flex items-center gap-1">
                             {(camera.capabilities as any)?.enabledAnalytics && Object.values((camera.capabilities as any).enabledAnalytics).some(Boolean) && (
                               <Tooltip>
-                                <TooltipTrigger>
+                                <TooltipTrigger tabIndex={0}>
                                   <BarChart3 className="w-3 h-3 text-blue-500" />
                                 </TooltipTrigger>
                                 <TooltipContent>
@@ -195,7 +195,7 @@ export default function CameraTable({
                             )}
                             {camera.hasPTZ && (
                               <Tooltip>
-                                <TooltipTrigger>
+                                <TooltipTrigger tabIndex={0}>
                                   <Move className="w-3 h-3 text-muted-foreground" />
                                 </TooltipTrigger>
                                 <TooltipContent>
@@ -205,7 +205,7 @@ export default function CameraTable({
                             )}
                             {camera.hasAudio && (
                               <Tooltip>
-                                <TooltipTrigger>
+                                <TooltipTrigger tabIndex={0}>
                                   <Mic className="w-3 h-3 text-muted-foreground" />
                                 </TooltipTrigger>
                                 <TooltipContent>
@@ -215,7 +215,7 @@ export default function CameraTable({
                             )}
                             {camera.numberOfViews && camera.numberOfViews > 1 && (
                               <Tooltip>
-                                <TooltipTrigger>
+                                <TooltipTrigger tabIndex={0}>
                                   <div className="flex items-center gap-0.5">
                                     <CameraIcon className="w-3 h-3 text-muted-foreground" />
                                     <span className="text-xs text-muted-foreground">×{camera.numberOfViews}</span>
@@ -232,7 +232,7 @@ export default function CameraTable({
                     </div>
                   </TooltipProvider>
                 </TableCell>
-                <TableCell>
+                <TableCell className="hidden md:table-cell">
                   <div className="flex items-center gap-1.5">
                     <code className="text-sm font-mono">{camera.ipAddress}</code>
                     <TooltipProvider>
@@ -267,11 +267,11 @@ export default function CameraTable({
                     </TooltipProvider>
                   </div>
                 </TableCell>
-                <TableCell>{camera.location}</TableCell>
-                <TableCell>
+                <TableCell className="hidden xl:table-cell">{camera.location}</TableCell>
+                <TableCell className="hidden sm:table-cell">
                   <Badge variant="secondary">{camera.uptime}</Badge>
                 </TableCell>
-                <TableCell className="text-sm text-muted-foreground">
+                <TableCell className="hidden md:table-cell text-sm text-muted-foreground">
                   {camera.lastSeen}
                 </TableCell>
                 <TableCell>
