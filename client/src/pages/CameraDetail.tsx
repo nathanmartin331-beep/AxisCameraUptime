@@ -694,13 +694,13 @@ export default function CameraDetail() {
                     <Label htmlFor="toggle-occupancy" className="text-xs text-muted-foreground cursor-pointer">Occupancy</Label>
                   </div>
                 )}
-                {peopleInData?.latest && (
+                {peopleInData?.latest && !(lineCrossingData?.scenarios && lineCrossingData.scenarios.length > 0) && (
                   <div className="flex items-center gap-1.5">
                     <Switch id="toggle-entering" checked={cardVisibility.entering} onCheckedChange={() => toggleCard("entering")} className="scale-75" />
                     <Label htmlFor="toggle-entering" className="text-xs text-muted-foreground cursor-pointer">Entering</Label>
                   </div>
                 )}
-                {peopleOutData?.latest && (
+                {peopleOutData?.latest && !(lineCrossingData?.scenarios && lineCrossingData.scenarios.length > 0) && (
                   <div className="flex items-center gap-1.5">
                     <Switch id="toggle-exiting" checked={cardVisibility.exiting} onCheckedChange={() => toggleCard("exiting")} className="scale-75" />
                     <Label htmlFor="toggle-exiting" className="text-xs text-muted-foreground cursor-pointer">Exiting</Label>
@@ -752,7 +752,8 @@ export default function CameraDetail() {
               })()}
 
               {/* Entering — per-scenario cards + total */}
-              {peopleInData?.latest && cardVisibility.entering && (() => {
+              {/* Hidden when line_crossing has per-scenario data (crossline scenarios already show totals) */}
+              {peopleInData?.latest && cardVisibility.entering && !(lineCrossingData?.scenarios && lineCrossingData.scenarios.length > 0) && (() => {
                 const scenarios = peopleInData.scenarios;
                 const hasMultiple = scenarios && scenarios.length > 1;
                 return (
@@ -791,7 +792,8 @@ export default function CameraDetail() {
               })()}
 
               {/* Exiting — per-scenario cards + total */}
-              {peopleOutData?.latest && cardVisibility.exiting && (() => {
+              {/* Hidden when line_crossing has per-scenario data (crossline scenarios already show totals) */}
+              {peopleOutData?.latest && cardVisibility.exiting && !(lineCrossingData?.scenarios && lineCrossingData.scenarios.length > 0) && (() => {
                 const scenarios = peopleOutData.scenarios;
                 const hasMultiple = scenarios && scenarios.length > 1;
                 return (
