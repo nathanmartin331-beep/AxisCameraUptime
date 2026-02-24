@@ -885,56 +885,114 @@ export default function CameraDetail() {
 
       {/* Daily Analytics Trends Chart */}
       {hasEnabledAnalytics && (dailyEntering?.dailyTotals?.length || dailyExiting?.dailyTotals?.length || dailyLineCrossing?.dailyTotals?.length) && (() => {
-        // Determine if we have directional data (people_in / people_out) or only total crossings
+        // Priority 1: Line crossing with per-scenario breakdown (e.g., northbound / southbound)
+        // This takes precedence because crossline scenarios report people_in/people_out too,
+        // but the line_crossing total per scenario is the meaningful number.
+        const lcScenarios = dailyLineCrossing?.scenarioTotals;
+        const lcScenarioNames = lcScenarios
+          ? Object.keys(lcScenarios).filter(s => s !== "default")
+          : [];
+
+        if (lcScenarioNames.length > 0) {
+          const crossingDateMap = new Map<string, Record<string, any>>();
+
+          // Per-scenario bars (one bar per scenario per day)
+          for (const name of lcScenarioNames) {
+            for (const d of lcScenarios![name] || []) {
+              const entry = crossingDateMap.get(d.date) || { date: d.date };
+              entry[name] = d.total;
+              crossingDateMap.set(d.date, entry);
+            }
+          }
+
+          // Also add a "Total" key for each day from the combined dailyTotals
+          if (lcScenarioNames.length > 1) {
+            for (const d of dailyLineCrossing?.dailyTotals || []) {
+              const entry = crossingDateMap.get(d.date) || { date: d.date };
+              entry._total = d.total;
+              crossingDateMap.set(d.date, entry);
+            }
+          }
+
+          const crossingData = Array.from(crossingDateMap.values())
+            .sort((a, b) => (a.date as string).localeCompare(b.date as string))
+            .map(d => ({
+              ...d,
+              date: new Date(d.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+            }));
+
+          if (crossingData.length === 0) return null;
+
+          const lcLegendLabels: Record<string, string> = {};
+          lcScenarioNames.forEach(name => { lcLegendLabels[name] = name; });
+          if (lcScenarioNames.length > 1) lcLegendLabels._total = "Total";
+
+          return (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <TrendingUp className="h-5 w-5" />
+                      Daily Trends
+                    </CardTitle>
+                    <CardDescription>
+                      Daily line crossings per scenario
+                    </CardDescription>
+                  </div>
+                  <Tabs value={String(trendDays)} onValueChange={(v) => setTrendDays(parseInt(v))}>
+                    <TabsList className="h-8">
+                      <TabsTrigger value="7" className="text-xs px-2 h-6">7d</TabsTrigger>
+                      <TabsTrigger value="14" className="text-xs px-2 h-6">14d</TabsTrigger>
+                      <TabsTrigger value="30" className="text-xs px-2 h-6">30d</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={280}>
+                  <BarChart data={crossingData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                    <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+                    <YAxis tick={{ fontSize: 12 }} />
+                    <Tooltip
+                      contentStyle={{ borderRadius: "8px", fontSize: "12px" }}
+                      formatter={(value: number, name: string) => [
+                        value.toLocaleString(),
+                        lcLegendLabels[name] || name
+                      ]}
+                    />
+                    <Legend formatter={(value) => lcLegendLabels[value] || value} />
+                    {lcScenarioNames.map((name, i) => (
+                      <Bar key={name} dataKey={name} fill={SCENARIO_COLORS[i % SCENARIO_COLORS.length].hex} radius={[4, 4, 0, 0]} />
+                    ))}
+                    {lcScenarioNames.length > 1 && (
+                      <Bar dataKey="_total" fill="#6b7280" radius={[4, 4, 0, 0]} />
+                    )}
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          );
+        }
+
+        // Priority 2: Entering / Exiting (people_in / people_out) — genuine occupancy counting
         const hasDirectionalData = (dailyEntering?.dailyTotals?.length ?? 0) > 0 || (dailyExiting?.dailyTotals?.length ?? 0) > 0;
 
         if (hasDirectionalData) {
-          // Check for per-scenario data
-          const enterScenarios = dailyEntering?.scenarioTotals;
-          const exitScenarios = dailyExiting?.scenarioTotals;
-          const hasScenarioData = enterScenarios || exitScenarios;
-          const scenarioNames = hasScenarioData
-            ? [...new Set([...Object.keys(enterScenarios || {}), ...Object.keys(exitScenarios || {})])]
-                .filter(s => s !== "default")
-            : [];
-          const showPerScenario = scenarioNames.length > 1;
-
-          // Use the same SCENARIO_COLORS palette as the live cards.
-          // Entering = scenario's primary hex, Exiting = lighter shade.
-          const enterColors = SCENARIO_COLORS.map(c => c.hex);
-          const exitColors = SCENARIO_COLORS_LIGHT;
-
-          // Build chart data
           const dateMap = new Map<string, Record<string, any>>();
 
-          if (showPerScenario) {
-            // Per-scenario bars: scenarioName_entering, scenarioName_exiting
-            for (const name of scenarioNames) {
-              for (const d of enterScenarios?.[name] || []) {
-                const entry = dateMap.get(d.date) || { date: d.date };
-                entry[`${name}_entering`] = d.total;
-                dateMap.set(d.date, entry);
-              }
-              for (const d of exitScenarios?.[name] || []) {
-                const entry = dateMap.get(d.date) || { date: d.date };
-                entry[`${name}_exiting`] = d.total;
-                dateMap.set(d.date, entry);
-              }
-            }
-          } else {
-            // Single scenario / combined: simple entering + exiting
-            for (const d of dailyEntering?.dailyTotals || []) {
-              const entry = dateMap.get(d.date) || { date: d.date, entering: 0, exiting: 0 };
-              entry.entering = d.total;
-              entry.enterMeta = d.metadata;
-              dateMap.set(d.date, entry);
-            }
-            for (const d of dailyExiting?.dailyTotals || []) {
-              const entry = dateMap.get(d.date) || { date: d.date, entering: 0, exiting: 0 };
-              entry.exiting = d.total;
-              entry.exitMeta = d.metadata;
-              dateMap.set(d.date, entry);
-            }
+          for (const d of dailyEntering?.dailyTotals || []) {
+            const entry = dateMap.get(d.date) || { date: d.date, entering: 0, exiting: 0 };
+            entry.entering = d.total;
+            entry.enterMeta = d.metadata;
+            dateMap.set(d.date, entry);
+          }
+          for (const d of dailyExiting?.dailyTotals || []) {
+            const entry = dateMap.get(d.date) || { date: d.date, entering: 0, exiting: 0 };
+            entry.exiting = d.total;
+            entry.exitMeta = d.metadata;
+            dateMap.set(d.date, entry);
           }
 
           const chartData = Array.from(dateMap.values())
@@ -949,18 +1007,6 @@ export default function CameraDetail() {
           const latestDay = chartData[chartData.length - 1];
           const latestMeta = (latestDay as any).enterMeta || (latestDay as any).exitMeta;
 
-          // Build the bar legend labels
-          const legendLabels: Record<string, string> = {};
-          if (showPerScenario) {
-            scenarioNames.forEach(name => {
-              legendLabels[`${name}_entering`] = `${name} - Entering`;
-              legendLabels[`${name}_exiting`] = `${name} - Exiting`;
-            });
-          } else {
-            legendLabels.entering = "Entering";
-            legendLabels.exiting = "Exiting";
-          }
-
           return (
             <Card>
               <CardHeader>
@@ -971,7 +1017,7 @@ export default function CameraDetail() {
                       Daily Trends
                     </CardTitle>
                     <CardDescription>
-                      Daily entering/exiting totals{showPerScenario ? " (per scenario)" : ""} (counters reset at midnight)
+                      Daily entering/exiting totals
                       {latestMeta?.resetTime && (
                         <span className="ml-1 text-xs">
                           — reset: {new Date(latestMeta.resetTime).toLocaleString()}
@@ -998,25 +1044,12 @@ export default function CameraDetail() {
                       contentStyle={{ borderRadius: "8px", fontSize: "12px" }}
                       formatter={(value: number, name: string) => [
                         value.toLocaleString(),
-                        legendLabels[name] || name
+                        name === "entering" ? "Entering" : "Exiting"
                       ]}
                     />
-                    <Legend formatter={(value) => legendLabels[value] || value} />
-                    {showPerScenario ? (
-                      <>
-                        {scenarioNames.map((name, i) => (
-                          <Bar key={`${name}_entering`} dataKey={`${name}_entering`} fill={enterColors[i % enterColors.length]} radius={[4, 4, 0, 0]} />
-                        ))}
-                        {scenarioNames.map((name, i) => (
-                          <Bar key={`${name}_exiting`} dataKey={`${name}_exiting`} fill={exitColors[i % exitColors.length]} radius={[4, 4, 0, 0]} />
-                        ))}
-                      </>
-                    ) : (
-                      <>
-                        <Bar dataKey="entering" fill="#22c55e" radius={[4, 4, 0, 0]} />
-                        <Bar dataKey="exiting" fill="#ef4444" radius={[4, 4, 0, 0]} />
-                      </>
-                    )}
+                    <Legend formatter={(value) => value === "entering" ? "Entering" : "Exiting"} />
+                    <Bar dataKey="entering" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="exiting" fill="#ef4444" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </CardContent>
@@ -1024,43 +1057,15 @@ export default function CameraDetail() {
           );
         }
 
-        // No directional data — show line crossings chart (with per-scenario bars if available)
-        const lcScenarios = dailyLineCrossing?.scenarioTotals;
-        const lcScenarioNames = lcScenarios
-          ? Object.keys(lcScenarios).filter(s => s !== "default")
-          : [];
-        const showLcPerScenario = lcScenarioNames.length > 1;
-
-        const crossingDateMap = new Map<string, Record<string, any>>();
-        if (showLcPerScenario) {
-          for (const name of lcScenarioNames) {
-            for (const d of lcScenarios![name] || []) {
-              const entry = crossingDateMap.get(d.date) || { date: d.date };
-              entry[name] = d.total;
-              crossingDateMap.set(d.date, entry);
-            }
-          }
-        } else {
-          for (const d of dailyLineCrossing?.dailyTotals || []) {
-            crossingDateMap.set(d.date, { date: d.date, crossings: d.total });
-          }
-        }
-
-        const crossingData = Array.from(crossingDateMap.values())
-          .sort((a, b) => (a.date as string).localeCompare(b.date as string))
+        // Priority 3: Line crossings combined (single total bar)
+        const crossingData = (dailyLineCrossing?.dailyTotals || [])
+          .sort((a, b) => a.date.localeCompare(b.date))
           .map(d => ({
-            ...d,
+            crossings: d.total,
             date: new Date(d.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }),
           }));
 
         if (crossingData.length === 0) return null;
-
-        const lcLegendLabels: Record<string, string> = {};
-        if (showLcPerScenario) {
-          lcScenarioNames.forEach(name => { lcLegendLabels[name] = name; });
-        } else {
-          lcLegendLabels.crossings = "Total Crossings";
-        }
 
         return (
           <Card>
@@ -1072,7 +1077,7 @@ export default function CameraDetail() {
                     Daily Trends
                   </CardTitle>
                   <CardDescription>
-                    Daily line crossings{showLcPerScenario ? " (per scenario)" : ""}
+                    Daily line crossings
                   </CardDescription>
                 </div>
                 <Tabs value={String(trendDays)} onValueChange={(v) => setTrendDays(parseInt(v))}>
@@ -1092,19 +1097,10 @@ export default function CameraDetail() {
                   <YAxis tick={{ fontSize: 12 }} />
                   <Tooltip
                     contentStyle={{ borderRadius: "8px", fontSize: "12px" }}
-                    formatter={(value: number, name: string) => [
-                      value.toLocaleString(),
-                      lcLegendLabels[name] || name
-                    ]}
+                    formatter={(value: number) => [value.toLocaleString(), "Total Crossings"]}
                   />
-                  <Legend formatter={(value) => lcLegendLabels[value] || value} />
-                  {showLcPerScenario ? (
-                    lcScenarioNames.map((name, i) => (
-                      <Bar key={name} dataKey={name} fill={SCENARIO_COLORS[i % SCENARIO_COLORS.length].hex} radius={[4, 4, 0, 0]} />
-                    ))
-                  ) : (
-                    <Bar dataKey="crossings" fill="#a855f7" radius={[4, 4, 0, 0]} />
-                  )}
+                  <Legend formatter={() => "Total Crossings"} />
+                  <Bar dataKey="crossings" fill="#a855f7" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
