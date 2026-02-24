@@ -64,6 +64,51 @@ export default function CameraDetail() {
     refetchInterval: 30000,
   });
 
+  const editMutation = useMutation({
+    mutationFn: async (data: CameraFormData) => {
+      const payload: Record<string, string> = {
+        name: data.name,
+        ipAddress: data.ipAddress,
+        username: data.username,
+        location: data.location,
+        notes: data.notes,
+      };
+      if (data.password) payload.password = data.password;
+      await apiRequest("PATCH", `/api/cameras/${cameraId}`, payload);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cameras", cameraId] });
+      toast({ title: "Success", description: "Camera updated successfully" });
+      setEditOpen(false);
+    },
+    onError: (error: Error) => {
+      if (isUnauthorizedError(error)) {
+        toast({ title: "Session Expired", description: "Please log in again", variant: "destructive" });
+        setTimeout(() => { window.location.href = "/api/login"; }, 500);
+        return;
+      }
+      toast({ title: "Error", description: "Failed to update camera", variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("DELETE", `/api/cameras/${cameraId}`);
+    },
+    onSuccess: () => {
+      toast({ title: "Success", description: "Camera deleted successfully" });
+      setLocation("/");
+    },
+    onError: (error: Error) => {
+      if (isUnauthorizedError(error)) {
+        toast({ title: "Session Expired", description: "Please log in again", variant: "destructive" });
+        setTimeout(() => { window.location.href = "/api/login"; }, 500);
+        return;
+      }
+      toast({ title: "Error", description: "Failed to delete camera", variant: "destructive" });
+    },
+  });
+
   // Determine which specific analytics this camera supports
   const caps = camera?.capabilities as any;
   const enabledAnalytics = caps?.enabledAnalytics;
@@ -372,51 +417,6 @@ export default function CameraDetail() {
   const handleEdit = () => {
     setEditOpen(true);
   };
-
-  const editMutation = useMutation({
-    mutationFn: async (data: CameraFormData) => {
-      const payload: Record<string, string> = {
-        name: data.name,
-        ipAddress: data.ipAddress,
-        username: data.username,
-        location: data.location,
-        notes: data.notes,
-      };
-      if (data.password) payload.password = data.password;
-      await apiRequest("PATCH", `/api/cameras/${cameraId}`, payload);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/cameras", cameraId] });
-      toast({ title: "Success", description: "Camera updated successfully" });
-      setEditOpen(false);
-    },
-    onError: (error: Error) => {
-      if (isUnauthorizedError(error)) {
-        toast({ title: "Session Expired", description: "Please log in again", variant: "destructive" });
-        setTimeout(() => { window.location.href = "/api/login"; }, 500);
-        return;
-      }
-      toast({ title: "Error", description: "Failed to update camera", variant: "destructive" });
-    },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: async () => {
-      await apiRequest("DELETE", `/api/cameras/${cameraId}`);
-    },
-    onSuccess: () => {
-      toast({ title: "Success", description: "Camera deleted successfully" });
-      setLocation("/");
-    },
-    onError: (error: Error) => {
-      if (isUnauthorizedError(error)) {
-        toast({ title: "Session Expired", description: "Please log in again", variant: "destructive" });
-        setTimeout(() => { window.location.href = "/api/login"; }, 500);
-        return;
-      }
-      toast({ title: "Error", description: "Failed to delete camera", variant: "destructive" });
-    },
-  });
 
   const handleDelete = () => {
     setDeleteConfirmOpen(true);
