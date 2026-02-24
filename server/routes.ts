@@ -8,9 +8,11 @@ import { requireAuth, requireAdmin } from "./auth";
 import { encryptPassword } from "./encryption";
 import { checkAllCameras } from "./cameraMonitor";
 import { insertCameraSchema, type Camera } from "@shared/schema";
+import { calculateUptimeFromEvents } from "./uptimeCalculator";
 import { buildCameraUrl, getCameraDispatcher, getConnectionInfo } from "./services/cameraUrl";
 import type { SafeUser } from "./storage";
 import { z } from "zod";
+import { analyticsBroadcaster } from "./services/analyticsEventBroadcaster";
 
 // ===== Input Validation & Sanitization Helpers =====
 
@@ -378,6 +380,120 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching uptime events:", error);
       sendError(res, 500, "Failed to fetch uptime events");
+    }
+  });
+
+  // Daily uptime percentages for the chart (server-side calculation)
+  app.get("/api/uptime/daily", requireAuth, async (req: any, res) => {
+    try {
+      const userId = getUserId(req);
+      const daysResult = validateDays(req.query.days);
+      if (typeof daysResult === "object") return sendError(res, 400, daysResult.error);
+      const days = daysResult;
+
+      const cameraIdParam = typeof req.query.cameraId === "string" ? req.query.cameraId.trim() : null;
+
+      let camerasToProcess: Camera[];
+      if (cameraIdParam && cameraIdParam !== "all") {
+        const camId = validateId(cameraIdParam);
+        if (!camId) return sendError(res, 400, "Invalid camera ID");
+        const camera = await storage.getCameraById(camId);
+        if (!camera) return sendError(res, 404, "Camera not found");
+        if (camera.userId !== userId) return sendError(res, 403, "Forbidden");
+        camerasToProcess = [camera];
+      } else {
+        camerasToProcess = await storage.getCamerasByUserId(userId);
+      }
+
+      if (camerasToProcess.length === 0) {
+        return res.json({ data: [] });
+      }
+
+      const now = new Date();
+      const rangeStart = new Date(now);
+      rangeStart.setDate(rangeStart.getDate() - days);
+
+      // Fetch events and prior event for each camera
+      const cameraData = await Promise.all(
+        camerasToProcess.map(async (camera) => {
+          const events = await storage.getUptimeEventsInRange(camera.id, rangeStart, now);
+          const priorEvent = await storage.getLatestEventBefore(camera.id, rangeStart);
+          return { camera, events, priorEvent };
+        })
+      );
+
+      const data: Array<{ date: string; uptime: number }> = [];
+
+      for (let i = days - 1; i >= 0; i--) {
+        const dayStart = new Date(now);
+        dayStart.setDate(dayStart.getDate() - i);
+        dayStart.setHours(0, 0, 0, 0);
+
+        const dayEnd = new Date(dayStart);
+        dayEnd.setDate(dayEnd.getDate() + 1);
+        const effectiveDayEnd = dayEnd.getTime() > now.getTime() ? now : dayEnd;
+
+        let totalUptime = 0;
+        let cameraCount = 0;
+
+        for (const { camera, events, priorEvent } of cameraData) {
+          // Skip cameras not yet monitored on this day
+          const monitoringStart = camera.createdAt ? new Date(camera.createdAt) : null;
+          if (monitoringStart && monitoringStart >= effectiveDayEnd) {
+            continue;
+          }
+
+          // Events for this specific day
+          const dayEvents = events
+            .filter(e => {
+              const t = new Date(e.timestamp).getTime();
+              return t >= dayStart.getTime() && t < dayEnd.getTime();
+            })
+            .map(e => ({ timestamp: new Date(e.timestamp), status: e.status }));
+
+          // Find the status just before this day starts:
+          // latest event from the range that occurred before dayStart, or the prior event
+          let priorStatus: string | undefined;
+          const eventsBeforeDay = events.filter(
+            e => new Date(e.timestamp).getTime() < dayStart.getTime()
+          );
+          if (eventsBeforeDay.length > 0) {
+            priorStatus = eventsBeforeDay[eventsBeforeDay.length - 1].status;
+          } else if (priorEvent) {
+            priorStatus = priorEvent.status;
+          }
+
+          // Fall back to lastBootAt like calculateUptimePercentage does
+          if (!priorStatus && camera.lastBootAt) {
+            const bootTime = new Date(camera.lastBootAt);
+            if (bootTime < dayStart) {
+              priorStatus = "online";
+            }
+          }
+
+          const uptime = calculateUptimeFromEvents(
+            dayEvents,
+            dayStart,
+            effectiveDayEnd,
+            priorStatus
+          );
+
+          totalUptime += uptime;
+          cameraCount++;
+        }
+
+        if (cameraCount > 0) {
+          data.push({
+            date: dayStart.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+            uptime: parseFloat((totalUptime / cameraCount).toFixed(1)),
+          });
+        }
+      }
+
+      res.json({ data });
+    } catch (error) {
+      console.error("Error fetching daily uptime:", error);
+      sendError(res, 500, "Failed to fetch daily uptime data");
     }
   });
 
@@ -1782,6 +1898,79 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("Error fetching daily analytics:", error);
       sendError(res, 500, "Failed to fetch daily analytics");
     }
+  });
+
+  // ===== Analytics SSE Streams =====
+
+  // Stream all cameras' analytics (optionally filtered by cameraId query param)
+  app.get("/api/analytics/stream", requireAuth, async (req: any, res) => {
+    const userId = getUserId(req);
+    const filterCameraId = typeof req.query.cameraId === "string" ? validateId(req.query.cameraId) : null;
+
+    // If filtering by camera, verify ownership
+    if (filterCameraId) {
+      const camera = await storage.getCameraById(filterCameraId);
+      if (!camera || camera.userId !== userId) {
+        return sendError(res, 403, "Camera not found or not owned by you");
+      }
+    }
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+    res.flushHeaders();
+
+    // Subscribe to broadcaster
+    const unsubscribe = filterCameraId
+      ? analyticsBroadcaster.subscribe(filterCameraId, (payload) => {
+          res.write(`data: ${JSON.stringify(payload)}\n\n`);
+        })
+      : analyticsBroadcaster.subscribeAll((payload) => {
+          res.write(`data: ${JSON.stringify(payload)}\n\n`);
+        });
+
+    // Keepalive comment every 30s to prevent proxy timeouts
+    const keepalive = setInterval(() => {
+      res.write(": keepalive\n\n");
+    }, 30_000);
+
+    // Cleanup on client disconnect
+    req.on("close", () => {
+      unsubscribe();
+      clearInterval(keepalive);
+    });
+  });
+
+  // Stream single camera's analytics (for UI detail views)
+  app.get("/api/cameras/:id/analytics/stream", requireAuth, async (req: any, res) => {
+    const cameraId = validateId(req.params.id);
+    if (!cameraId) return sendError(res, 400, "Invalid camera ID");
+
+    const camera = await storage.getCameraById(cameraId);
+    if (!camera) return sendError(res, 404, "Camera not found");
+    if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+    res.flushHeaders();
+
+    const unsubscribe = analyticsBroadcaster.subscribe(cameraId, (payload) => {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    });
+
+    const keepalive = setInterval(() => {
+      res.write(": keepalive\n\n");
+    }, 30_000);
+
+    req.on("close", () => {
+      unsubscribe();
+      clearInterval(keepalive);
+    });
   });
 
   // Group real-time occupancy

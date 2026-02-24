@@ -19,6 +19,7 @@ import { decryptPassword } from "../encryption";
 import { authFetch } from "./digestAuth";
 import { buildCameraUrl, getCameraDispatcher, getConnectionInfo, type CameraConnectionInfo } from "./cameraUrl";
 import { storage } from "../storage";
+import { analyticsBroadcaster } from "./analyticsEventBroadcaster";
 
 // Configurable concurrency for analytics HTTP polling (default 25 parallel requests)
 const ANALYTICS_CONCURRENCY = parseInt(process.env.POLL_CONCURRENCY || "25", 10);
@@ -1836,6 +1837,9 @@ async function pollCameraAnalytics(camera: any): Promise<void> {
         metadata: e.metadata || null,
       }))
     );
+
+    // Push to SSE subscribers in real time
+    analyticsBroadcaster.broadcast(camera.id, events);
   }
 }
 

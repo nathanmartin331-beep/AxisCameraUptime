@@ -301,3 +301,143 @@ curl -X POST http://localhost:5000/api/cameras/abc123/detect-model \
 - Profile editing endpoint (PATCH `/api/auth/me`)
 - Camera group management (GET/POST/PATCH/DELETE `/api/groups`)
 - Product lifecycle/EOL tracking
+- Real-time analytics SSE streams (see below)
+
+---
+
+## Real-Time Analytics — Server-Sent Events (SSE)
+
+The server pushes analytics data to clients in real time via SSE. Events are emitted the instant the analytics poller retrieves new data from cameras, so consumers never need to poll the REST API for fresh numbers.
+
+### 6. Stream All Analytics — GET /api/analytics/stream
+
+Stream analytics events from all cameras (or a single camera via query param). Designed for external tools, dashboards, and integrations that need a firehose of analytics data.
+
+**Authentication:** Session cookie (any authenticated user).
+
+**Query Parameters:**
+- `cameraId` (string, optional) — Only receive events for this camera. The camera must belong to the authenticated user.
+
+**SSE Headers (set automatically):**
+```
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+```
+
+**Event Format:**
+
+Each event is a single `data:` line containing a JSON object, followed by two newlines:
+
+```
+data: {"cameraId":"abc123","timestamp":"2026-02-24T14:30:01.123Z","events":[{"eventType":"people_in","value":42,"metadata":{"source":"tvpc"}},{"eventType":"people_out","value":38,"metadata":{"source":"tvpc"}},{"eventType":"occupancy","value":4,"metadata":{"source":"tvpc"}}]}\n\n
+```
+
+**Keepalive:** A comment line is sent every 30 seconds to prevent proxy/load-balancer timeouts:
+```
+: keepalive\n\n
+```
+
+**Payload Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cameraId` | string | ID of the camera that produced the events |
+| `timestamp` | string (ISO 8601) | Server time when the events were broadcast |
+| `events` | array | Array of analytics event objects |
+| `events[].eventType` | string | One of: `people_in`, `people_out`, `occupancy`, `line_crossing`, `avg_dwell_time` |
+| `events[].value` | number | The metric value (count, occupancy number, seconds, etc.) |
+| `events[].metadata` | object \| null | Source info, scenario name, vehicle breakdown, etc. |
+
+**Examples:**
+
+```bash
+# Stream all cameras
+curl -N http://localhost:5000/api/analytics/stream \
+  -b cookies.txt
+
+# Stream a specific camera only
+curl -N http://localhost:5000/api/analytics/stream?cameraId=abc123 \
+  -b cookies.txt
+```
+
+**JavaScript (browser/Node):**
+```js
+const es = new EventSource('/api/analytics/stream?cameraId=abc123', {
+  // credentials needed for session cookie
+  withCredentials: true,
+});
+
+es.onmessage = (event) => {
+  const payload = JSON.parse(event.data);
+  console.log(`Camera ${payload.cameraId}:`, payload.events);
+};
+
+es.onerror = () => {
+  console.log('SSE connection lost, browser will auto-reconnect');
+};
+```
+
+**Python:**
+```python
+import requests
+import json
+
+with requests.get(
+    'http://localhost:5000/api/analytics/stream',
+    cookies={'connect.sid': SESSION_COOKIE},
+    stream=True,
+) as resp:
+    for line in resp.iter_lines(decode_unicode=True):
+        if line.startswith('data: '):
+            payload = json.loads(line[6:])
+            print(f"Camera {payload['cameraId']}: {payload['events']}")
+```
+
+---
+
+### 7. Stream Single Camera Analytics — GET /api/cameras/:id/analytics/stream
+
+Stream analytics events for a single camera. Same SSE protocol as the global stream but scoped to one camera. Ideal for camera detail views in a UI.
+
+**URL Parameters:**
+- `id` (string, required) — Camera ID. Must belong to the authenticated user.
+
+**Authentication:** Session cookie (any authenticated user).
+
+**Event Format:** Identical to the global stream (see above).
+
+**Example:**
+```bash
+curl -N http://localhost:5000/api/cameras/abc123/analytics/stream \
+  -b cookies.txt
+```
+
+**JavaScript:**
+```js
+const es = new EventSource('/api/cameras/abc123/analytics/stream', {
+  withCredentials: true,
+});
+
+es.onmessage = (event) => {
+  const { events } = JSON.parse(event.data);
+  const occupancy = events.find(e => e.eventType === 'occupancy');
+  if (occupancy) {
+    document.getElementById('occ').textContent = occupancy.value;
+  }
+};
+```
+
+---
+
+### SSE Integration Notes
+
+| Concern | Detail |
+|---------|--------|
+| **Event frequency** | One burst per camera per poll cycle (~1 minute, configurable via `ANALYTICS_POLL_INTERVAL` env var). |
+| **Reconnection** | Browsers auto-reconnect on disconnect. The `EventSource` API handles this natively. For non-browser clients, reconnect on TCP close. |
+| **Keepalive** | A `: keepalive` comment is sent every 30 seconds. If your proxy has a longer idle timeout you can ignore these. |
+| **Backpressure** | The server does not buffer missed events. If a client disconnects and reconnects, it should fetch the latest state from the REST API (`GET /api/cameras/:id/analytics`) and then resume streaming. |
+| **Auth** | Both endpoints require a valid session cookie. An unauthenticated request returns `401`. |
+| **Ownership** | Camera ownership is validated at connection time. If a camera ID is provided that doesn't belong to the user, the server returns `403`. |
+| **Cleanup** | The server automatically unsubscribes listeners when the client TCP connection closes. No manual teardown is needed on the server side. |
