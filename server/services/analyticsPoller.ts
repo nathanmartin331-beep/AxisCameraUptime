@@ -494,7 +494,7 @@ async function queryObjectAnalyticsData(
       ? "/local/objectanalytics/control.cgi"
       : storedApiPath;
 
-    // Fire all per-scenario requests in parallel to cut per-camera latency
+    // Strategy 1: Per-scenario with { scenario: N } (most firmware)
     const scenarioResults = await Promise.allSettled(
       scenariosWithIds.map(s =>
         tryAoaPost(
@@ -516,7 +516,31 @@ async function queryObjectAnalyticsData(
       allEvents.push(...parsed);
     }
 
-    // Strategy 2: No params (some firmware returns all scenarios)
+    // Strategy 2: Per-scenario with { channel: 0, scenario: N } (some firmware requires channel)
+    if (allEvents.length === 0) {
+      const channelResults = await Promise.allSettled(
+        scenariosWithIds.map(s =>
+          tryAoaPost(
+            ipAddress, username, password, acapPath,
+            "getAccumulatedCounts", timeout, conn,
+            { channel: 0, scenario: Number(s.id) }
+          ).then(json => ({ json, scenario: s }))
+        )
+      );
+
+      for (const result of channelResults) {
+        if (result.status !== "fulfilled" || !result.value.json) continue;
+        const { json, scenario: s } = result.value;
+        aoaCountsFailedCache.delete(ipAddress);
+        if (allEvents.length === 0) {
+          console.log(`[Analytics] AOA getAccumulatedCounts on ${ipAddress} scenario "${s.name}" (channel:0): ${JSON.stringify(json.data || {}).substring(0, 300)}`);
+        }
+        const parsed = parseAoaAccumulatedCounts(json, { name: s.name, type: s.type });
+        allEvents.push(...parsed);
+      }
+    }
+
+    // Strategy 3: No params (some firmware returns all scenarios at once)
     if (allEvents.length === 0) {
       const jsonNoParams = await tryAoaPost(
         ipAddress, username, password, acapPath,
@@ -1446,6 +1470,12 @@ async function queryObjectAnalyticsScenarios(
       for (const s of scenarios) {
         if (s.id !== undefined && s.id !== null) {
           paramFormats.push({ label: `scenario:${s.id}`, params: { scenario: Number(s.id) } });
+        }
+      }
+      // Some firmware requires channel alongside scenario
+      for (const s of scenarios) {
+        if (s.id !== undefined && s.id !== null) {
+          paramFormats.push({ label: `ch0+scenario:${s.id}`, params: { channel: 0, scenario: Number(s.id) } });
         }
       }
       // Fallbacks: no params key, empty params, channel:0
