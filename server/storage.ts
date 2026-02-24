@@ -1051,17 +1051,33 @@ export class DatabaseStorage implements IStorage {
       )
       .orderBy(analyticsEvents.timestamp);
 
-    // Sum values at each timestamp (handles multi-scenario data)
-    const perTimestamp = new Map<number, { sum: number; metadata?: Record<string, any> }>();
+    // Deduplicate by (scenario, timestamp) — keep highest value per scenario at
+    // each timestamp — then sum across unique scenarios at each timestamp.
+    // This prevents duplicate rows from inflating the combined total.
+    const perScenarioTs = new Map<string, Map<number, { value: number; metadata?: Record<string, any> }>>();
     for (const evt of rawEvents) {
+      const scenario = (evt.metadata as Record<string, any>)?.scenario || "default";
       const ts = evt.timestamp.getTime();
-      const existing = perTimestamp.get(ts);
-      if (existing) {
-        existing.sum += evt.value;
-      } else {
-        perTimestamp.set(ts, { sum: evt.value, metadata: evt.metadata ?? undefined });
+      if (!perScenarioTs.has(scenario)) perScenarioTs.set(scenario, new Map());
+      const tsMap = perScenarioTs.get(scenario)!;
+      const existing = tsMap.get(ts);
+      if (!existing || evt.value > existing.value) {
+        tsMap.set(ts, { value: evt.value, metadata: evt.metadata ?? undefined });
       }
     }
+
+    // Sum across scenarios at each timestamp to get the combined total
+    const perTimestamp = new Map<number, { sum: number; metadata?: Record<string, any> }>();
+    perScenarioTs.forEach((tsMap) => {
+      tsMap.forEach((data, ts) => {
+        const existing = perTimestamp.get(ts);
+        if (existing) {
+          existing.sum += data.value;
+        } else {
+          perTimestamp.set(ts, { sum: data.value, metadata: data.metadata });
+        }
+      });
+    });
 
     perTimestamp.forEach((data, ts) => {
       const d = new Date(ts);

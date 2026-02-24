@@ -858,13 +858,17 @@ export default function CameraDetail() {
             }
           }
 
-          // Also add a "Total" key for each day from the combined dailyTotals
+          // Compute total as sum of per-scenario values for each day.
+          // This ensures the total bar always matches the visible scenario bars,
+          // regardless of any duplicate rows in the raw event data.
           if (lcScenarioNames.length > 1) {
-            for (const d of dailyLineCrossing?.dailyTotals || []) {
-              const entry = crossingDateMap.get(d.date) || { date: d.date };
-              entry._total = d.total;
-              crossingDateMap.set(d.date, entry);
-            }
+            crossingDateMap.forEach((entry) => {
+              let sum = 0;
+              for (const name of lcScenarioNames) {
+                sum += (entry[name] as number) || 0;
+              }
+              entry._total = sum;
+            });
           }
 
           const crossingData = Array.from(crossingDateMap.values())
