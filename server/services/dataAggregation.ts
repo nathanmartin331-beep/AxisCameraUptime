@@ -69,14 +69,15 @@ async function runHourlyAggregation() {
 
     console.log(`[Aggregation] Uptime hourly: ${(uptimeInserted as any).changes ?? 0} summaries upserted`);
 
-    // Analytics hourly rollup — preserve metadata from the max-value row (vehicle breakdown)
+    // Analytics hourly rollup — group by scenario to preserve per-scenario data
     const analyticsInserted = sqlite.prepare(`
-      INSERT OR REPLACE INTO analytics_hourly_summary (id, camera_id, hour_start, event_type, sum_value, avg_value, max_value, min_value, sample_count, metadata)
+      INSERT OR REPLACE INTO analytics_hourly_summary (id, camera_id, hour_start, event_type, scenario, sum_value, avg_value, max_value, min_value, sample_count, metadata)
       SELECT
         lower(hex(randomblob(16))),
         camera_id,
         (timestamp / 3600) * 3600 AS hour_start,
         event_type,
+        COALESCE(json_extract(metadata, '$.scenario'), 'default') AS scenario,
         SUM(value) AS sum_value,
         AVG(value) AS avg_value,
         MAX(value) AS max_value,
@@ -84,11 +85,12 @@ async function runHourlyAggregation() {
         COUNT(*) AS sample_count,
         (SELECT ae2.metadata FROM analytics_events ae2
          WHERE ae2.camera_id = ae.camera_id AND ae2.event_type = ae.event_type
+           AND COALESCE(json_extract(ae2.metadata, '$.scenario'), 'default') = COALESCE(json_extract(ae.metadata, '$.scenario'), 'default')
            AND (ae2.timestamp / 3600) = (ae.timestamp / 3600)
          ORDER BY ae2.value DESC LIMIT 1) AS metadata
       FROM analytics_events ae
       WHERE timestamp <= ?
-      GROUP BY camera_id, event_type, hour_start
+      GROUP BY camera_id, event_type, scenario, hour_start
     `).run(cutoffTs);
 
     console.log(`[Aggregation] Analytics hourly: ${(analyticsInserted as any).changes ?? 0} summaries upserted`);
@@ -152,14 +154,15 @@ async function runDailyAggregation() {
 
     console.log(`[Aggregation] Uptime daily: ${(uptimeInserted as any).changes ?? 0} summaries upserted`);
 
-    // Analytics daily rollup from hourly — preserve metadata from the max-value hour
+    // Analytics daily rollup from hourly — group by scenario to preserve per-scenario data
     const analyticsInserted = sqlite.prepare(`
-      INSERT OR REPLACE INTO analytics_daily_summary (id, camera_id, day_start, event_type, sum_value, avg_value, max_value, min_value, sample_count, metadata)
+      INSERT OR REPLACE INTO analytics_daily_summary (id, camera_id, day_start, event_type, scenario, sum_value, avg_value, max_value, min_value, sample_count, metadata)
       SELECT
         lower(hex(randomblob(16))),
         camera_id,
         (hour_start / 86400) * 86400 AS day_start,
         event_type,
+        COALESCE(scenario, 'default') AS scenario,
         SUM(sum_value) AS sum_value,
         AVG(avg_value) AS avg_value,
         MAX(max_value) AS max_value,
@@ -167,11 +170,12 @@ async function runDailyAggregation() {
         SUM(sample_count) AS sample_count,
         (SELECT h2.metadata FROM analytics_hourly_summary h2
          WHERE h2.camera_id = h.camera_id AND h2.event_type = h.event_type
+           AND COALESCE(h2.scenario, 'default') = COALESCE(h.scenario, 'default')
            AND (h2.hour_start / 86400) = (h.hour_start / 86400)
          ORDER BY h2.max_value DESC LIMIT 1) AS metadata
       FROM analytics_hourly_summary h
       WHERE hour_start <= ?
-      GROUP BY camera_id, event_type, day_start
+      GROUP BY camera_id, event_type, scenario, day_start
     `).run(cutoffTs);
 
     console.log(`[Aggregation] Analytics daily: ${(analyticsInserted as any).changes ?? 0} summaries upserted`);

@@ -408,7 +408,7 @@ export const uptimeDailySummary = sqliteTable(
 
 export type UptimeDailySummary = typeof uptimeDailySummary.$inferSelect;
 
-// Hourly analytics rollup — one row per camera per event type per hour
+// Hourly analytics rollup — one row per camera per event type per scenario per hour
 export const analyticsHourlySummary = sqliteTable(
   "analytics_hourly_summary",
   {
@@ -418,6 +418,7 @@ export const analyticsHourlySummary = sqliteTable(
       .references(() => cameras.id, { onDelete: "cascade" }),
     hourStart: integer("hour_start", { mode: "timestamp" }).notNull(),
     eventType: text("event_type").notNull(),
+    scenario: text("scenario").notNull().default("default"),
     sumValue: integer("sum_value").notNull().default(0),
     avgValue: integer("avg_value"),
     maxValue: integer("max_value"),
@@ -426,13 +427,13 @@ export const analyticsHourlySummary = sqliteTable(
     metadata: text("metadata", { mode: "json" }).$type<Record<string, any>>(), // vehicle breakdown from max-value row
   },
   (table) => ({
-    uniqueHour: uniqueIndex("idx_analytics_hourly_camera_type_hour").on(table.cameraId, table.eventType, table.hourStart),
+    uniqueHourScenario: uniqueIndex("idx_analytics_hourly_camera_type_scenario_hour").on(table.cameraId, table.eventType, table.scenario, table.hourStart),
   })
 );
 
 export type AnalyticsHourlySummary = typeof analyticsHourlySummary.$inferSelect;
 
-// Daily analytics rollup — one row per camera per event type per day
+// Daily analytics rollup — one row per camera per event type per scenario per day
 export const analyticsDailySummary = sqliteTable(
   "analytics_daily_summary",
   {
@@ -442,6 +443,7 @@ export const analyticsDailySummary = sqliteTable(
       .references(() => cameras.id, { onDelete: "cascade" }),
     dayStart: integer("day_start", { mode: "timestamp" }).notNull(),
     eventType: text("event_type").notNull(),
+    scenario: text("scenario").notNull().default("default"),
     sumValue: integer("sum_value").notNull().default(0),
     avgValue: integer("avg_value"),
     maxValue: integer("max_value"),
@@ -450,7 +452,7 @@ export const analyticsDailySummary = sqliteTable(
     metadata: text("metadata", { mode: "json" }).$type<Record<string, any>>(), // vehicle breakdown from max-value row
   },
   (table) => ({
-    uniqueDay: uniqueIndex("idx_analytics_daily_camera_type_day").on(table.cameraId, table.eventType, table.dayStart),
+    uniqueDayScenario: uniqueIndex("idx_analytics_daily_camera_type_scenario_day").on(table.cameraId, table.eventType, table.scenario, table.dayStart),
   })
 );
 

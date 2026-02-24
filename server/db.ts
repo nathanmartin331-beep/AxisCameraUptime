@@ -30,9 +30,20 @@ function ensureColumn(table: string, column: string, type: string) {
 }
 ensureColumn('analytics_daily_summary', 'metadata', 'TEXT');
 ensureColumn('analytics_hourly_summary', 'metadata', 'TEXT');
+ensureColumn('analytics_hourly_summary', 'scenario', "TEXT NOT NULL DEFAULT 'default'");
+ensureColumn('analytics_daily_summary', 'scenario', "TEXT NOT NULL DEFAULT 'default'");
 ensureColumn('cameras', 'ssl_fingerprint', 'TEXT');
 ensureColumn('cameras', 'ssl_fingerprint_first_seen', 'INTEGER');
 ensureColumn('cameras', 'ssl_fingerprint_last_verified', 'INTEGER');
+
+// Migrate unique indexes to include scenario column
+// Drop old indexes (without scenario) and create new ones (with scenario)
+try {
+  sqlite.exec(`DROP INDEX IF EXISTS idx_analytics_hourly_camera_type_hour`);
+  sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_analytics_hourly_camera_type_scenario_hour ON analytics_hourly_summary(camera_id, event_type, scenario, hour_start)`);
+  sqlite.exec(`DROP INDEX IF EXISTS idx_analytics_daily_camera_type_day`);
+  sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_analytics_daily_camera_type_scenario_day ON analytics_daily_summary(camera_id, event_type, scenario, day_start)`);
+} catch { /* indexes already migrated */ }
 
 export const db = drizzle(sqlite, { schema });
 export { sqlite };

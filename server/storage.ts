@@ -221,6 +221,7 @@ export interface IStorage {
   getLatestAnalyticsEvent(cameraId: string, eventType: string): Promise<AnalyticsEvent | undefined>;
   getLatestAnalyticsEventsByScenario(cameraId: string, eventType: string): Promise<AnalyticsEvent[]>;
   getAnalyticsDailyTotals(cameraId: string, eventType: string, days: number): Promise<Array<{ date: string; total: number; metadata?: Record<string, any> }>>;
+  getAnalyticsDailyTotalsByScenario(cameraId: string, eventType: string, days: number): Promise<Record<string, Array<{ date: string; total: number; metadata?: Record<string, any> }>>>;
   getLatestAnalyticsPerCamera(cameraIds: string[], eventTypes: string[]): Promise<Map<string, Map<string, { value: number; metadata?: Record<string, any> }>>>;
   getGroupCurrentOccupancy(groupId: string): Promise<{ total: number; cameras: Array<{ id: string; name: string; occupancy: number }> }>;
   getGroupAnalyticsSummary(groupId: string, startDate: Date, endDate: Date): Promise<{
@@ -1068,6 +1069,111 @@ export class DatabaseStorage implements IStorage {
     return Array.from(dailyMap.entries())
       .map(([date, data]) => ({ date, ...data }))
       .sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  async getAnalyticsDailyTotalsByScenario(
+    cameraId: string,
+    eventType: string,
+    days: number
+  ): Promise<Record<string, Array<{ date: string; total: number; metadata?: Record<string, any> }>>> {
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    startDate.setHours(0, 0, 0, 0);
+    const startTs = Math.floor(startDate.getTime() / 1000);
+    const endTs = Math.floor(endDate.getTime() / 1000);
+
+    // scenarioMap: scenario -> dateKey -> { total, metadata }
+    const scenarioMap = new Map<string, Map<string, { total: number; metadata?: Record<string, any> }>>();
+
+    function ensureScenario(scenario: string) {
+      if (!scenarioMap.has(scenario)) scenarioMap.set(scenario, new Map());
+      return scenarioMap.get(scenario)!;
+    }
+
+    // 1. Daily summaries (oldest data, > 48h)
+    const dailyRows = sqlite.prepare(`
+      SELECT day_start, max_value, metadata, COALESCE(scenario, 'default') AS scenario
+      FROM analytics_daily_summary
+      WHERE camera_id = ? AND event_type = ? AND day_start >= ? AND day_start <= ?
+    `).all(cameraId, eventType, startTs, endTs) as Array<{ day_start: number; max_value: number; metadata: string | null; scenario: string }>;
+
+    for (const row of dailyRows) {
+      const d = new Date(row.day_start * 1000);
+      const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      let meta: Record<string, any> | undefined;
+      if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
+      const dmap = ensureScenario(row.scenario);
+      dmap.set(dateKey, { total: row.max_value ?? 0, metadata: meta });
+    }
+
+    // 2. Hourly summaries (6h–48h)
+    const hourlyRows = sqlite.prepare(`
+      SELECT hour_start, max_value, metadata, COALESCE(scenario, 'default') AS scenario
+      FROM analytics_hourly_summary
+      WHERE camera_id = ? AND event_type = ? AND hour_start >= ? AND hour_start <= ?
+    `).all(cameraId, eventType, startTs, endTs) as Array<{ hour_start: number; max_value: number; metadata: string | null; scenario: string }>;
+
+    for (const row of hourlyRows) {
+      const d = new Date(row.hour_start * 1000);
+      const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const hourMax = row.max_value ?? 0;
+      const dmap = ensureScenario(row.scenario);
+      const existing = dmap.get(dateKey);
+      if (!existing || hourMax > existing.total) {
+        let meta: Record<string, any> | undefined;
+        if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
+        dmap.set(dateKey, { total: hourMax, metadata: meta });
+      }
+    }
+
+    // 3. Raw events (< 6h, not yet rolled up) — group by scenario
+    const rawEvents = await db
+      .select()
+      .from(analyticsEvents)
+      .where(
+        and(
+          eq(analyticsEvents.cameraId, cameraId),
+          eq(analyticsEvents.eventType, eventType),
+          gte(analyticsEvents.timestamp, new Date(startTs * 1000)),
+          lte(analyticsEvents.timestamp, new Date(endTs * 1000))
+        )
+      )
+      .orderBy(analyticsEvents.timestamp);
+
+    // Group by (scenario, timestamp) then take max per (scenario, day)
+    const perScenarioTs = new Map<string, Map<number, { value: number; metadata?: Record<string, any> }>>();
+    for (const evt of rawEvents) {
+      const scenario = (evt.metadata as Record<string, any>)?.scenario || "default";
+      if (!perScenarioTs.has(scenario)) perScenarioTs.set(scenario, new Map());
+      const tsMap = perScenarioTs.get(scenario)!;
+      const ts = evt.timestamp.getTime();
+      const existing = tsMap.get(ts);
+      if (!existing || evt.value > existing.value) {
+        tsMap.set(ts, { value: evt.value, metadata: evt.metadata ?? undefined });
+      }
+    }
+
+    perScenarioTs.forEach((tsMap, scenario) => {
+      const dmap = ensureScenario(scenario);
+      tsMap.forEach((data, ts) => {
+        const d = new Date(ts);
+        const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        const existing = dmap.get(dateKey);
+        if (!existing || data.value > existing.total) {
+          dmap.set(dateKey, { total: data.value, metadata: data.metadata });
+        }
+      });
+    });
+
+    // Convert to result format
+    const result: Record<string, Array<{ date: string; total: number; metadata?: Record<string, any> }>> = {};
+    scenarioMap.forEach((dmap, scenario) => {
+      result[scenario] = Array.from(dmap.entries())
+        .map(([date, data]) => ({ date, ...data }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+    });
+    return result;
   }
 
   /**

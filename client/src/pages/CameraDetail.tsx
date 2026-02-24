@@ -47,21 +47,58 @@ interface AnalyticsResponse {
   events: AnalyticsEventWithMeta[];
 }
 
-// Per-scenario breakdown component — shows individual scenario values when a camera has multiple
-function ScenarioList({ scenarios }: { scenarios?: ScenarioBreakdown[] }) {
-  if (!scenarios || scenarios.length <= 1) return null;
-
+// Render one analytics card (used for both per-scenario and total cards)
+function AnalyticsCard({
+  icon: Icon,
+  iconColor,
+  label,
+  subtitle,
+  value,
+  timestamp,
+  valueColor,
+  metadata,
+  showVehicles,
+  showLineCrossingBreakdown,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  iconColor: string;
+  label: string;
+  subtitle?: string;
+  value: number;
+  timestamp?: string;
+  valueColor?: string;
+  metadata?: Record<string, any>;
+  showVehicles?: boolean;
+  showLineCrossingBreakdown?: boolean;
+}) {
   return (
-    <div className="mt-2 pt-2 border-t border-dashed">
-      <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Per Scenario</div>
-      <div className="space-y-0.5">
-        {scenarios.map((s, i) => (
-          <div key={i} className="flex justify-between text-xs">
-            <span className="text-muted-foreground truncate mr-2">{s.scenario}</span>
-            <span className="font-medium tabular-nums">{s.value.toLocaleString()}</span>
-          </div>
-        ))}
+    <div className="rounded-lg border p-4 text-center">
+      <div className="flex items-center justify-center gap-2 mb-1">
+        <Icon className={`h-4 w-4 ${iconColor}`} />
+        <span className="text-sm font-medium text-muted-foreground">{label}</span>
       </div>
+      {subtitle && (
+        <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">{subtitle}</div>
+      )}
+      <div className={`text-3xl font-bold ${valueColor || ""}`}>
+        {value.toLocaleString()}
+      </div>
+      {timestamp && (
+        <div className="text-xs text-muted-foreground mt-1">
+          {new Date(timestamp).toLocaleTimeString()}
+        </div>
+      )}
+      {showLineCrossingBreakdown && metadata && (metadata.in > 0 || metadata.out > 0) && (
+        <div className="mt-2 pt-2 border-t border-dashed flex justify-center gap-4 text-xs">
+          {metadata.in > 0 && (
+            <span className="text-green-600 font-medium">{Number(metadata.in).toLocaleString()} in</span>
+          )}
+          {metadata.out > 0 && (
+            <span className="text-red-600 font-medium">{Number(metadata.out).toLocaleString()} out</span>
+          )}
+        </div>
+      )}
+      {showVehicles && <VehicleBreakdown metadata={metadata} />}
     </div>
   );
 }
@@ -215,9 +252,12 @@ export default function CameraDetail() {
   // Daily analytics trends (entering + exiting history)
   const [trendDays, setTrendDays] = useState(7);
 
-  const { data: dailyEntering } = useQuery<{
+  interface DailyAnalyticsResponse {
     dailyTotals: Array<{ date: string; total: number; metadata?: Record<string, any> }>;
-  }>({
+    scenarioTotals?: Record<string, Array<{ date: string; total: number; metadata?: Record<string, any> }>>;
+  }
+
+  const { data: dailyEntering } = useQuery<DailyAnalyticsResponse>({
     queryKey: ["/api/cameras", cameraId, "analytics/daily", "people_in", trendDays],
     queryFn: async () => {
       const res = await fetch(`/api/cameras/${cameraId}/analytics/daily?eventType=people_in&days=${trendDays}`, { credentials: "include" });
@@ -228,9 +268,7 @@ export default function CameraDetail() {
     refetchInterval: 60000,
   });
 
-  const { data: dailyExiting } = useQuery<{
-    dailyTotals: Array<{ date: string; total: number; metadata?: Record<string, any> }>;
-  }>({
+  const { data: dailyExiting } = useQuery<DailyAnalyticsResponse>({
     queryKey: ["/api/cameras", cameraId, "analytics/daily", "people_out", trendDays],
     queryFn: async () => {
       const res = await fetch(`/api/cameras/${cameraId}/analytics/daily?eventType=people_out&days=${trendDays}`, { credentials: "include" });
@@ -242,9 +280,7 @@ export default function CameraDetail() {
   });
 
   // Fetch line_crossing daily data — used when camera has no directional (people_in/out) split
-  const { data: dailyLineCrossing } = useQuery<{
-    dailyTotals: Array<{ date: string; total: number; metadata?: Record<string, any> }>;
-  }>({
+  const { data: dailyLineCrossing } = useQuery<DailyAnalyticsResponse>({
     queryKey: ["/api/cameras", cameraId, "analytics/daily", "line_crossing", trendDays],
     queryFn: async () => {
       const res = await fetch(`/api/cameras/${cameraId}/analytics/daily?eventType=line_crossing&days=${trendDays}`, { credentials: "include" });
@@ -657,107 +693,141 @@ export default function CameraDetail() {
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {/* Occupancy */}
-              {analyticsData?.latest && cardVisibility.occupancy && (
-                <div className="rounded-lg border p-4 text-center">
-                  <div className="flex items-center justify-center gap-2 mb-2">
-                    <Users className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-medium text-muted-foreground">Current Occupancy</span>
-                  </div>
-                  <div className="text-3xl font-bold">
-                    {(analyticsData.total ?? analyticsData.latest.value).toLocaleString()}
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    {new Date(analyticsData.latest.timestamp).toLocaleTimeString()}
-                  </div>
-                  {!analyticsData.scenarios && analyticsData.latest.metadata?.scenario && (
-                    <div className="text-xs text-muted-foreground mt-1">
-                      {analyticsData.latest.metadata.scenario}
-                    </div>
-                  )}
-                  <ScenarioList scenarios={analyticsData.scenarios} />
-                </div>
-              )}
+              {/* Occupancy — per-scenario cards + total */}
+              {analyticsData?.latest && cardVisibility.occupancy && (() => {
+                const scenarios = analyticsData.scenarios;
+                const hasMultiple = scenarios && scenarios.length > 1;
+                return (
+                  <>
+                    {hasMultiple && scenarios!.map((s, i) => (
+                      <AnalyticsCard
+                        key={`occ-${i}`}
+                        icon={Users}
+                        iconColor="text-muted-foreground"
+                        label="Occupancy"
+                        subtitle={s.scenario}
+                        value={s.value}
+                        timestamp={analyticsData.latest!.timestamp}
+                      />
+                    ))}
+                    <AnalyticsCard
+                      icon={Users}
+                      iconColor="text-muted-foreground"
+                      label={hasMultiple ? "Occupancy" : "Current Occupancy"}
+                      subtitle={hasMultiple ? "Total" : (scenarios?.[0]?.scenario)}
+                      value={analyticsData.total ?? analyticsData.latest.value}
+                      timestamp={analyticsData.latest.timestamp}
+                    />
+                  </>
+                );
+              })()}
 
-              {/* Entering (People In + Vehicles) */}
-              {peopleInData?.latest && cardVisibility.entering && (
-                <div className="rounded-lg border p-4 text-center">
-                  <div className="flex items-center justify-center gap-2 mb-2">
-                    <ArrowDownToLine className="h-4 w-4 text-green-600" />
-                    <span className="text-sm font-medium text-muted-foreground">Entering</span>
-                  </div>
-                  <div className="text-3xl font-bold text-green-600">
-                    {(peopleInData.total ?? peopleInData.latest.value).toLocaleString()}
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    {new Date(peopleInData.latest.timestamp).toLocaleTimeString()}
-                  </div>
-                  {!peopleInData.scenarios && peopleInData.latest.metadata?.scenario && (
-                    <div className="text-xs text-muted-foreground mt-0.5">
-                      {peopleInData.latest.metadata.scenario}
-                    </div>
-                  )}
-                  <ScenarioList scenarios={peopleInData.scenarios} />
-                  <VehicleBreakdown metadata={peopleInData.latest.metadata} />
-                </div>
-              )}
+              {/* Entering — per-scenario cards + total */}
+              {peopleInData?.latest && cardVisibility.entering && (() => {
+                const scenarios = peopleInData.scenarios;
+                const hasMultiple = scenarios && scenarios.length > 1;
+                return (
+                  <>
+                    {hasMultiple && scenarios!.map((s, i) => (
+                      <AnalyticsCard
+                        key={`in-${i}`}
+                        icon={ArrowDownToLine}
+                        iconColor="text-green-600"
+                        label="Entering"
+                        subtitle={s.scenario}
+                        value={s.value}
+                        timestamp={peopleInData.latest!.timestamp}
+                        valueColor="text-green-600"
+                        metadata={s.metadata ?? undefined}
+                        showVehicles
+                      />
+                    ))}
+                    <AnalyticsCard
+                      icon={ArrowDownToLine}
+                      iconColor="text-green-600"
+                      label={hasMultiple ? "Entering" : "Entering"}
+                      subtitle={hasMultiple ? "Total" : (scenarios?.[0]?.scenario)}
+                      value={peopleInData.total ?? peopleInData.latest.value}
+                      timestamp={peopleInData.latest.timestamp}
+                      valueColor="text-green-600"
+                      metadata={peopleInData.latest.metadata ?? undefined}
+                      showVehicles
+                    />
+                  </>
+                );
+              })()}
 
-              {/* Exiting (People Out + Vehicles) */}
-              {peopleOutData?.latest && cardVisibility.exiting && (
-                <div className="rounded-lg border p-4 text-center">
-                  <div className="flex items-center justify-center gap-2 mb-2">
-                    <ArrowUpFromLine className="h-4 w-4 text-red-600" />
-                    <span className="text-sm font-medium text-muted-foreground">Exiting</span>
-                  </div>
-                  <div className="text-3xl font-bold text-red-600">
-                    {(peopleOutData.total ?? peopleOutData.latest.value).toLocaleString()}
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    {new Date(peopleOutData.latest.timestamp).toLocaleTimeString()}
-                  </div>
-                  {!peopleOutData.scenarios && peopleOutData.latest.metadata?.scenario && (
-                    <div className="text-xs text-muted-foreground mt-0.5">
-                      {peopleOutData.latest.metadata.scenario}
-                    </div>
-                  )}
-                  <ScenarioList scenarios={peopleOutData.scenarios} />
-                  <VehicleBreakdown metadata={peopleOutData.latest.metadata} />
-                </div>
-              )}
+              {/* Exiting — per-scenario cards + total */}
+              {peopleOutData?.latest && cardVisibility.exiting && (() => {
+                const scenarios = peopleOutData.scenarios;
+                const hasMultiple = scenarios && scenarios.length > 1;
+                return (
+                  <>
+                    {hasMultiple && scenarios!.map((s, i) => (
+                      <AnalyticsCard
+                        key={`out-${i}`}
+                        icon={ArrowUpFromLine}
+                        iconColor="text-red-600"
+                        label="Exiting"
+                        subtitle={s.scenario}
+                        value={s.value}
+                        timestamp={peopleOutData.latest!.timestamp}
+                        valueColor="text-red-600"
+                        metadata={s.metadata ?? undefined}
+                        showVehicles
+                      />
+                    ))}
+                    <AnalyticsCard
+                      icon={ArrowUpFromLine}
+                      iconColor="text-red-600"
+                      label={hasMultiple ? "Exiting" : "Exiting"}
+                      subtitle={hasMultiple ? "Total" : (scenarios?.[0]?.scenario)}
+                      value={peopleOutData.total ?? peopleOutData.latest.value}
+                      timestamp={peopleOutData.latest.timestamp}
+                      valueColor="text-red-600"
+                      metadata={peopleOutData.latest.metadata ?? undefined}
+                      showVehicles
+                    />
+                  </>
+                );
+              })()}
 
-              {/* Line Crossing Total */}
-              {lineCrossingData?.latest && cardVisibility.lineCrossing && (
-                <div className="rounded-lg border p-4 text-center">
-                  <div className="flex items-center justify-center gap-2 mb-2">
-                    <GitBranchPlus className="h-4 w-4 text-purple-600" />
-                    <span className="text-sm font-medium text-muted-foreground">Line Crossings</span>
-                  </div>
-                  <div className="text-3xl font-bold text-purple-600">
-                    {(lineCrossingData.total ?? lineCrossingData.latest.value).toLocaleString()}
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    {new Date(lineCrossingData.latest.timestamp).toLocaleTimeString()}
-                  </div>
-                  {!lineCrossingData.scenarios && lineCrossingData.latest.metadata?.scenario && (
-                    <div className="text-xs text-muted-foreground mt-0.5">
-                      {lineCrossingData.latest.metadata.scenario}
-                    </div>
-                  )}
-                  <ScenarioList scenarios={lineCrossingData.scenarios} />
-                  {/* Show in/out breakdown if available */}
-                  {(lineCrossingData.latest.metadata?.in > 0 || lineCrossingData.latest.metadata?.out > 0) && (
-                    <div className="mt-2 pt-2 border-t border-dashed flex justify-center gap-4 text-xs">
-                      {lineCrossingData.latest.metadata?.in > 0 && (
-                        <span className="text-green-600 font-medium">{Number(lineCrossingData.latest.metadata?.in).toLocaleString()} in</span>
-                      )}
-                      {lineCrossingData.latest.metadata?.out > 0 && (
-                        <span className="text-red-600 font-medium">{Number(lineCrossingData.latest.metadata?.out).toLocaleString()} out</span>
-                      )}
-                    </div>
-                  )}
-                  <VehicleBreakdown metadata={lineCrossingData.latest.metadata} />
-                </div>
-              )}
+              {/* Line Crossings — per-scenario cards + total */}
+              {lineCrossingData?.latest && cardVisibility.lineCrossing && (() => {
+                const scenarios = lineCrossingData.scenarios;
+                const hasMultiple = scenarios && scenarios.length > 1;
+                return (
+                  <>
+                    {hasMultiple && scenarios!.map((s, i) => (
+                      <AnalyticsCard
+                        key={`lc-${i}`}
+                        icon={GitBranchPlus}
+                        iconColor="text-purple-600"
+                        label="Line Crossings"
+                        subtitle={s.scenario}
+                        value={s.value}
+                        timestamp={lineCrossingData.latest!.timestamp}
+                        valueColor="text-purple-600"
+                        metadata={s.metadata ?? undefined}
+                        showLineCrossingBreakdown
+                        showVehicles
+                      />
+                    ))}
+                    <AnalyticsCard
+                      icon={GitBranchPlus}
+                      iconColor="text-purple-600"
+                      label={hasMultiple ? "Line Crossings" : "Line Crossings"}
+                      subtitle={hasMultiple ? "Total" : (scenarios?.[0]?.scenario)}
+                      value={lineCrossingData.total ?? lineCrossingData.latest.value}
+                      timestamp={lineCrossingData.latest.timestamp}
+                      valueColor="text-purple-600"
+                      metadata={lineCrossingData.latest.metadata ?? undefined}
+                      showLineCrossingBreakdown
+                      showVehicles
+                    />
+                  </>
+                );
+              })()}
             </div>
 
             {/* Recent events count */}
@@ -778,22 +848,55 @@ export default function CameraDetail() {
         const hasDirectionalData = (dailyEntering?.dailyTotals?.length ?? 0) > 0 || (dailyExiting?.dailyTotals?.length ?? 0) > 0;
 
         if (hasDirectionalData) {
-          // Merge entering + exiting into chart data by date
-          const dateMap = new Map<string, { date: string; entering: number; exiting: number; enterMeta?: Record<string, any>; exitMeta?: Record<string, any> }>();
-          for (const d of dailyEntering?.dailyTotals || []) {
-            const entry = dateMap.get(d.date) || { date: d.date, entering: 0, exiting: 0 };
-            entry.entering = d.total;
-            entry.enterMeta = d.metadata;
-            dateMap.set(d.date, entry);
+          // Check for per-scenario data
+          const enterScenarios = dailyEntering?.scenarioTotals;
+          const exitScenarios = dailyExiting?.scenarioTotals;
+          const hasScenarioData = enterScenarios || exitScenarios;
+          const scenarioNames = hasScenarioData
+            ? [...new Set([...Object.keys(enterScenarios || {}), ...Object.keys(exitScenarios || {})])]
+                .filter(s => s !== "default")
+            : [];
+          const showPerScenario = scenarioNames.length > 1;
+
+          // Color palettes for scenarios (green shades for entering, red shades for exiting)
+          const enterColors = ["#22c55e", "#86efac", "#4ade80", "#16a34a"];
+          const exitColors = ["#ef4444", "#fca5a5", "#f87171", "#dc2626"];
+
+          // Build chart data
+          const dateMap = new Map<string, Record<string, any>>();
+
+          if (showPerScenario) {
+            // Per-scenario bars: scenarioName_entering, scenarioName_exiting
+            for (const name of scenarioNames) {
+              for (const d of enterScenarios?.[name] || []) {
+                const entry = dateMap.get(d.date) || { date: d.date };
+                entry[`${name}_entering`] = d.total;
+                dateMap.set(d.date, entry);
+              }
+              for (const d of exitScenarios?.[name] || []) {
+                const entry = dateMap.get(d.date) || { date: d.date };
+                entry[`${name}_exiting`] = d.total;
+                dateMap.set(d.date, entry);
+              }
+            }
+          } else {
+            // Single scenario / combined: simple entering + exiting
+            for (const d of dailyEntering?.dailyTotals || []) {
+              const entry = dateMap.get(d.date) || { date: d.date, entering: 0, exiting: 0 };
+              entry.entering = d.total;
+              entry.enterMeta = d.metadata;
+              dateMap.set(d.date, entry);
+            }
+            for (const d of dailyExiting?.dailyTotals || []) {
+              const entry = dateMap.get(d.date) || { date: d.date, entering: 0, exiting: 0 };
+              entry.exiting = d.total;
+              entry.exitMeta = d.metadata;
+              dateMap.set(d.date, entry);
+            }
           }
-          for (const d of dailyExiting?.dailyTotals || []) {
-            const entry = dateMap.get(d.date) || { date: d.date, entering: 0, exiting: 0 };
-            entry.exiting = d.total;
-            entry.exitMeta = d.metadata;
-            dateMap.set(d.date, entry);
-          }
+
           const chartData = Array.from(dateMap.values())
-            .sort((a, b) => a.date.localeCompare(b.date))
+            .sort((a, b) => (a.date as string).localeCompare(b.date as string))
             .map(d => ({
               ...d,
               date: new Date(d.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }),
@@ -803,6 +906,18 @@ export default function CameraDetail() {
 
           const latestDay = chartData[chartData.length - 1];
           const latestMeta = (latestDay as any).enterMeta || (latestDay as any).exitMeta;
+
+          // Build the bar legend labels
+          const legendLabels: Record<string, string> = {};
+          if (showPerScenario) {
+            scenarioNames.forEach(name => {
+              legendLabels[`${name}_entering`] = `${name} - Entering`;
+              legendLabels[`${name}_exiting`] = `${name} - Exiting`;
+            });
+          } else {
+            legendLabels.entering = "Entering";
+            legendLabels.exiting = "Exiting";
+          }
 
           return (
             <Card>
@@ -814,7 +929,7 @@ export default function CameraDetail() {
                       Daily Trends
                     </CardTitle>
                     <CardDescription>
-                      Daily entering/exiting totals (counters reset at midnight)
+                      Daily entering/exiting totals{showPerScenario ? " (per scenario)" : ""} (counters reset at midnight)
                       {latestMeta?.resetTime && (
                         <span className="ml-1 text-xs">
                           — reset: {new Date(latestMeta.resetTime).toLocaleString()}
@@ -841,12 +956,25 @@ export default function CameraDetail() {
                       contentStyle={{ borderRadius: "8px", fontSize: "12px" }}
                       formatter={(value: number, name: string) => [
                         value.toLocaleString(),
-                        name === "entering" ? "Entering" : "Exiting"
+                        legendLabels[name] || name
                       ]}
                     />
-                    <Legend formatter={(value) => value === "entering" ? "Entering" : "Exiting"} />
-                    <Bar dataKey="entering" fill="#22c55e" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="exiting" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                    <Legend formatter={(value) => legendLabels[value] || value} />
+                    {showPerScenario ? (
+                      <>
+                        {scenarioNames.map((name, i) => (
+                          <Bar key={`${name}_entering`} dataKey={`${name}_entering`} fill={enterColors[i % enterColors.length]} radius={[4, 4, 0, 0]} />
+                        ))}
+                        {scenarioNames.map((name, i) => (
+                          <Bar key={`${name}_exiting`} dataKey={`${name}_exiting`} fill={exitColors[i % exitColors.length]} radius={[4, 4, 0, 0]} />
+                        ))}
+                      </>
+                    ) : (
+                      <>
+                        <Bar dataKey="entering" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="exiting" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                      </>
+                    )}
                   </BarChart>
                 </ResponsiveContainer>
               </CardContent>

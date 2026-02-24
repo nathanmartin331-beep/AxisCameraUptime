@@ -1864,10 +1864,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         cameraId,
         eventType,
         latest: latest || null,
-        // Per-scenario breakdown at the latest timestamp
-        scenarios: scenarios.length > 1 ? scenarios : undefined,
-        // Total across all scenarios (sum). When only 1 scenario, equals latest.value
-        total: scenarios.length > 1 ? total : (latest?.value ?? null),
+        // Always return per-scenario breakdown so the UI can display each scenario
+        scenarios: scenarios.length > 0 ? scenarios : undefined,
+        // Total across all scenarios (sum)
+        total: total || (latest?.value ?? null),
         events,
       });
     } catch (error) {
@@ -1894,7 +1894,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
 
       const dailyTotals = await storage.getAnalyticsDailyTotals(cameraId, eventType, days);
-      res.json({ cameraId, eventType, days, dailyTotals });
+      const scenarioTotals = await storage.getAnalyticsDailyTotalsByScenario(cameraId, eventType, days);
+      const scenarioNames = Object.keys(scenarioTotals);
+      res.json({
+        cameraId,
+        eventType,
+        days,
+        dailyTotals,
+        // Only include per-scenario breakdown when there are multiple scenarios
+        scenarioTotals: scenarioNames.length > 1 ? scenarioTotals : undefined,
+      });
     } catch (error) {
       console.error("Error fetching daily analytics:", error);
       sendError(res, 500, "Failed to fetch daily analytics");
