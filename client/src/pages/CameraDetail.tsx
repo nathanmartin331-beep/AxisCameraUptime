@@ -694,23 +694,26 @@ export default function CameraDetail() {
                     <Label htmlFor="toggle-occupancy" className="text-xs text-muted-foreground cursor-pointer">Occupancy</Label>
                   </div>
                 )}
-                {peopleInData?.latest && !(lineCrossingData?.scenarios && lineCrossingData.scenarios.length > 0) && (
-                  <div className="flex items-center gap-1.5">
-                    <Switch id="toggle-entering" checked={cardVisibility.entering} onCheckedChange={() => toggleCard("entering")} className="scale-75" />
-                    <Label htmlFor="toggle-entering" className="text-xs text-muted-foreground cursor-pointer">Entering</Label>
-                  </div>
-                )}
-                {peopleOutData?.latest && !(lineCrossingData?.scenarios && lineCrossingData.scenarios.length > 0) && (
-                  <div className="flex items-center gap-1.5">
-                    <Switch id="toggle-exiting" checked={cardVisibility.exiting} onCheckedChange={() => toggleCard("exiting")} className="scale-75" />
-                    <Label htmlFor="toggle-exiting" className="text-xs text-muted-foreground cursor-pointer">Exiting</Label>
-                  </div>
-                )}
-                {lineCrossingData?.latest && (
+                {lineCrossingData?.latest ? (
                   <div className="flex items-center gap-1.5">
                     <Switch id="toggle-linecrossing" checked={cardVisibility.lineCrossing} onCheckedChange={() => toggleCard("lineCrossing")} className="scale-75" />
                     <Label htmlFor="toggle-linecrossing" className="text-xs text-muted-foreground cursor-pointer">Crossings</Label>
                   </div>
+                ) : (
+                  <>
+                    {peopleInData?.latest && (
+                      <div className="flex items-center gap-1.5">
+                        <Switch id="toggle-entering" checked={cardVisibility.entering} onCheckedChange={() => toggleCard("entering")} className="scale-75" />
+                        <Label htmlFor="toggle-entering" className="text-xs text-muted-foreground cursor-pointer">Entering</Label>
+                      </div>
+                    )}
+                    {peopleOutData?.latest && (
+                      <div className="flex items-center gap-1.5">
+                        <Switch id="toggle-exiting" checked={cardVisibility.exiting} onCheckedChange={() => toggleCard("exiting")} className="scale-75" />
+                        <Label htmlFor="toggle-exiting" className="text-xs text-muted-foreground cursor-pointer">Exiting</Label>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -751,85 +754,34 @@ export default function CameraDetail() {
                 );
               })()}
 
-              {/* Entering — per-scenario cards + total */}
-              {/* Hidden when line_crossing has per-scenario data (crossline scenarios already show totals) */}
-              {peopleInData?.latest && cardVisibility.entering && !(lineCrossingData?.scenarios && lineCrossingData.scenarios.length > 0) && (() => {
-                const scenarios = peopleInData.scenarios;
-                const hasMultiple = scenarios && scenarios.length > 1;
-                return (
-                  <>
-                    {hasMultiple && scenarios!.map((s, i) => {
-                      const c = SCENARIO_COLORS[i % SCENARIO_COLORS.length];
-                      return (
-                        <AnalyticsCard
-                          key={`in-${i}`}
-                          icon={ArrowDownToLine}
-                          iconColor={c.text}
-                          label="Entering"
-                          subtitle={s.scenario}
-                          value={s.value}
-                          timestamp={peopleInData.latest!.timestamp}
-                          valueColor={c.text}
-                          accentColor={c.hex}
-                          metadata={s.metadata ?? undefined}
-                          showVehicles
-                        />
-                      );
-                    })}
-                    <AnalyticsCard
-                      icon={ArrowDownToLine}
-                      iconColor="text-green-600"
-                      label="Entering"
-                      subtitle={hasMultiple ? "Total" : (scenarios?.[0]?.scenario)}
-                      value={peopleInData.total ?? peopleInData.latest.value}
-                      timestamp={peopleInData.latest.timestamp}
-                      valueColor="text-green-600"
-                      metadata={peopleInData.latest.metadata ?? undefined}
-                      showVehicles
-                    />
-                  </>
-                );
-              })()}
-
-              {/* Exiting — per-scenario cards + total */}
-              {/* Hidden when line_crossing has per-scenario data (crossline scenarios already show totals) */}
-              {peopleOutData?.latest && cardVisibility.exiting && !(lineCrossingData?.scenarios && lineCrossingData.scenarios.length > 0) && (() => {
-                const scenarios = peopleOutData.scenarios;
-                const hasMultiple = scenarios && scenarios.length > 1;
-                return (
-                  <>
-                    {hasMultiple && scenarios!.map((s, i) => {
-                      const c = SCENARIO_COLORS[i % SCENARIO_COLORS.length];
-                      return (
-                        <AnalyticsCard
-                          key={`out-${i}`}
-                          icon={ArrowUpFromLine}
-                          iconColor={c.text}
-                          label="Exiting"
-                          subtitle={s.scenario}
-                          value={s.value}
-                          timestamp={peopleOutData.latest!.timestamp}
-                          valueColor={c.text}
-                          accentColor={c.hex}
-                          metadata={s.metadata ?? undefined}
-                          showVehicles
-                        />
-                      );
-                    })}
-                    <AnalyticsCard
-                      icon={ArrowUpFromLine}
-                      iconColor="text-red-600"
-                      label="Exiting"
-                      subtitle={hasMultiple ? "Total" : (scenarios?.[0]?.scenario)}
-                      value={peopleOutData.total ?? peopleOutData.latest.value}
-                      timestamp={peopleOutData.latest.timestamp}
-                      valueColor="text-red-600"
-                      metadata={peopleOutData.latest.metadata ?? undefined}
-                      showVehicles
-                    />
-                  </>
-                );
-              })()}
+              {/* Entering/Exiting — ONLY shown when there's no line_crossing data.
+                  Crossline scenarios produce people_in + people_out + line_crossing;
+                  showing entering/exiting alongside line_crossing triples the counts.
+                  These only render for TVPC cameras (people counter without crosslines). */}
+              {!lineCrossingData?.latest && peopleInData?.latest && cardVisibility.entering && (
+                <AnalyticsCard
+                  icon={ArrowDownToLine}
+                  iconColor="text-green-600"
+                  label="Entering"
+                  value={peopleInData.total ?? peopleInData.latest.value}
+                  timestamp={peopleInData.latest.timestamp}
+                  valueColor="text-green-600"
+                  metadata={peopleInData.latest.metadata ?? undefined}
+                  showVehicles
+                />
+              )}
+              {!lineCrossingData?.latest && peopleOutData?.latest && cardVisibility.exiting && (
+                <AnalyticsCard
+                  icon={ArrowUpFromLine}
+                  iconColor="text-red-600"
+                  label="Exiting"
+                  value={peopleOutData.total ?? peopleOutData.latest.value}
+                  timestamp={peopleOutData.latest.timestamp}
+                  valueColor="text-red-600"
+                  metadata={peopleOutData.latest.metadata ?? undefined}
+                  showVehicles
+                />
+              )}
 
               {/* Line Crossings — per-scenario cards + total */}
               {lineCrossingData?.latest && cardVisibility.lineCrossing && (() => {
@@ -844,27 +796,22 @@ export default function CameraDetail() {
                           key={`lc-${i}`}
                           icon={GitBranchPlus}
                           iconColor={c.text}
-                          label="Line Crossings"
-                          subtitle={s.scenario}
+                          label={s.scenario}
                           value={s.value}
                           timestamp={lineCrossingData.latest!.timestamp}
                           valueColor={c.text}
                           accentColor={c.hex}
-                          metadata={s.metadata ?? undefined}
-                          showVehicles
                         />
                       );
                     })}
                     <AnalyticsCard
                       icon={GitBranchPlus}
                       iconColor="text-purple-600"
-                      label="Line Crossings"
-                      subtitle={hasMultiple ? "Total" : (scenarios?.[0]?.scenario)}
+                      label={hasMultiple ? "Total Crossings" : "Line Crossings"}
+                      subtitle={!hasMultiple ? (scenarios?.[0]?.scenario) : undefined}
                       value={lineCrossingData.total ?? lineCrossingData.latest.value}
                       timestamp={lineCrossingData.latest.timestamp}
                       valueColor="text-purple-600"
-                      metadata={!hasMultiple ? (lineCrossingData.latest.metadata ?? undefined) : undefined}
-                      showVehicles={!hasMultiple}
                     />
                   </>
                 );
