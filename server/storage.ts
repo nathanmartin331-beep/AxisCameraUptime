@@ -1384,11 +1384,24 @@ export class DatabaseStorage implements IStorage {
         ]);
         const cameraOcc = occupancyData.cameras.find((c) => c.id === camera.id);
 
+        let cameraIn = inEvents.reduce((sum, e) => sum + e.value, 0);
+        let cameraOut = outEvents.reduce((sum, e) => sum + e.value, 0);
+
+        // Fallback: crossline-only cameras store in/out in line_crossing metadata
+        if (cameraIn === 0 && cameraOut === 0) {
+          const lcEvents = await this.getLatestAnalyticsEventsByScenario(camera.id, "line_crossing");
+          for (const lc of lcEvents) {
+            const meta = lc.metadata as Record<string, any> | null;
+            if (meta?.in !== undefined) cameraIn += Number(meta.in);
+            if (meta?.out !== undefined) cameraOut += Number(meta.out);
+          }
+        }
+
         return {
           id: camera.id,
           name: camera.name,
-          in: inEvents.reduce((sum, e) => sum + e.value, 0),
-          out: outEvents.reduce((sum, e) => sum + e.value, 0),
+          in: cameraIn,
+          out: cameraOut,
           occupancy: cameraOcc?.occupancy ?? 0,
         };
       })

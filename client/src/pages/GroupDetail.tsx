@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useParams } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -109,6 +109,7 @@ export default function GroupDetail() {
   const [manageOpen, setManageOpen] = useState(false);
   const [selectedCameraIds, setSelectedCameraIds] = useState<Set<string>>(new Set());
   const [trendDays, setTrendDays] = useState(7);
+  const [trendEventType, setTrendEventType] = useState<string>("occupancy");
 
   // Fetch group details
   const {
@@ -150,14 +151,21 @@ export default function GroupDetail() {
 
   // Fetch trend data
   const { data: trend, isLoading: trendLoading } = useQuery<TrendData>({
-    queryKey: ["/api/groups", groupId, "trend", trendDays],
+    queryKey: ["/api/groups", groupId, "trend", trendDays, trendEventType],
     queryFn: async () => {
-      const res = await fetch(`/api/groups/${groupId}/analytics/trend?eventType=occupancy&days=${trendDays}`, { credentials: "include" });
+      const res = await fetch(`/api/groups/${groupId}/analytics/trend?eventType=${trendEventType}&days=${trendDays}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed");
       return res.json();
     },
     enabled: !!groupId,
   });
+
+  // Auto-fallback: if occupancy trend returns empty, try line_crossing
+  useEffect(() => {
+    if (trendEventType === "occupancy" && trend && trend.trend.length === 0) {
+      setTrendEventType("line_crossing");
+    }
+  }, [trend, trendEventType]);
 
   // Fetch all cameras for manage members dialog
   const { data: allCameras } = useQuery<AllCamera[]>({
@@ -288,9 +296,15 @@ export default function GroupDetail() {
   const totalOut = analytics?.totalOut ?? 0;
   const memberCount = group.members.length;
 
+  const trendLabel =
+    trendEventType === "occupancy" ? "Occupancy"
+    : trendEventType === "line_crossing" ? "Line Crossings"
+    : trendEventType === "people_in" ? "People In"
+    : trendEventType;
+
   const chartData = (trend?.trend ?? []).map((point) => ({
     time: formatTrendTimestamp(point.timestamp, trendDays),
-    occupancy: point.value,
+    value: point.value,
   }));
 
   const cameraOccupancyMap = new Map<string, number>();
@@ -440,15 +454,24 @@ export default function GroupDetail() {
         </Card>
       </div>
 
-      {/* Occupancy Trend Chart */}
+      {/* Analytics Trend Chart */}
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle>Occupancy Trend</CardTitle>
-          <Tabs value={String(trendDays)} onValueChange={(v) => setTrendDays(parseInt(v))}>
+        <CardHeader className="flex flex-col space-y-3 pb-2">
+          <div className="flex flex-row items-center justify-between">
+            <CardTitle>{trendLabel} Trend</CardTitle>
+            <Tabs value={String(trendDays)} onValueChange={(v) => setTrendDays(parseInt(v))}>
+              <TabsList className="h-8">
+                <TabsTrigger value="1" className="text-xs px-2 h-6">24h</TabsTrigger>
+                <TabsTrigger value="7" className="text-xs px-2 h-6">7d</TabsTrigger>
+                <TabsTrigger value="30" className="text-xs px-2 h-6">30d</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+          <Tabs value={trendEventType} onValueChange={setTrendEventType}>
             <TabsList className="h-8">
-              <TabsTrigger value="1" className="text-xs px-2 h-6">24h</TabsTrigger>
-              <TabsTrigger value="7" className="text-xs px-2 h-6">7d</TabsTrigger>
-              <TabsTrigger value="30" className="text-xs px-2 h-6">30d</TabsTrigger>
+              <TabsTrigger value="occupancy" className="text-xs px-2 h-6">Occupancy</TabsTrigger>
+              <TabsTrigger value="line_crossing" className="text-xs px-2 h-6">Line Crossing</TabsTrigger>
+              <TabsTrigger value="people_in" className="text-xs px-2 h-6">People In</TabsTrigger>
             </TabsList>
           </Tabs>
         </CardHeader>
@@ -482,11 +505,11 @@ export default function GroupDetail() {
                 />
                 <Area
                   type="monotone"
-                  dataKey="occupancy"
+                  dataKey="value"
                   stroke={groupColor}
                   strokeWidth={2}
                   fill="url(#occupancyGradient)"
-                  name="Occupancy"
+                  name={trendLabel}
                 />
               </AreaChart>
             </ResponsiveContainer>
