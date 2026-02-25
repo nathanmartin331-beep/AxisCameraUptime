@@ -35,3 +35,7 @@ claude-flow
 hive-mind-prompt-*.txt
 sessions/
 data/
+
+# RuVector intelligence data
+.ruvector/
+.claude/statusline.sh
