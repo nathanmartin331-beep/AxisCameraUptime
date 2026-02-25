@@ -54,5 +54,35 @@ try {
   sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_analytics_daily_camera_type_scenario_day ON analytics_daily_summary(camera_id, event_type, scenario, day_start)`);
 } catch { /* indexes already migrated */ }
 
+// Create api_keys table for external API authentication
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    key_hash TEXT NOT NULL,
+    key_prefix TEXT NOT NULL,
+    scopes TEXT,
+    created_at INTEGER,
+    last_used_at INTEGER,
+    expires_at INTEGER
+  )
+`);
+
+// Create webhooks table for external event delivery subscriptions
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS webhooks (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    secret TEXT NOT NULL,
+    events TEXT,
+    active INTEGER DEFAULT 1,
+    created_at INTEGER,
+    last_delivery_at INTEGER,
+    consecutive_failures INTEGER DEFAULT 0
+  )
+`);
+
 export const db = drizzle(sqlite, { schema });
 export { sqlite };

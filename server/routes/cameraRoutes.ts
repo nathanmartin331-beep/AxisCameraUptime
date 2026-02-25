@@ -1,9 +1,8 @@
 import { Router } from "express";
 import { storage } from "../storage";
-import { requireAuth, requireAdmin } from "../auth";
+import { requireAuth, requireAdmin, requireApiKeyOrAuth } from "../auth";
 import { encryptPassword } from "../encryption";
 import { checkAllCameras, checkSingleCamera } from "../cameraMonitor";
-import { calculateUptimeFromEvents } from "../uptimeCalculator";
 import type { Camera } from "@shared/schema";
 import { z } from "zod";
 import {
@@ -24,7 +23,7 @@ const cameraWriteLimiter = rateLimit({
 });
 
 // Camera CRUD routes
-router.get("/api/cameras", requireAuth, async (req: any, res) => {
+router.get("/api/cameras", requireApiKeyOrAuth, async (req: any, res) => {
   try {
     const userId = getUserId(req);
     const { model, hasPTZ, hasAudio } = req.query;
@@ -48,7 +47,7 @@ router.get("/api/cameras", requireAuth, async (req: any, res) => {
   }
 });
 
-router.get("/api/cameras/:id", requireAuth, async (req: any, res) => {
+router.get("/api/cameras/:id", requireApiKeyOrAuth, async (req: any, res) => {
   try {
     const cameraId = validateId(req.params.id);
     if (!cameraId) return sendError(res, 400, "Invalid camera ID");
@@ -237,82 +236,22 @@ router.get("/api/uptime/daily", requireAuth, async (req: any, res) => {
 
     const cameraIdParam = typeof req.query.cameraId === "string" ? req.query.cameraId.trim() : null;
 
-    let camerasToProcess: Camera[];
+    let cameraIds: string[];
     if (cameraIdParam && cameraIdParam !== "all") {
       const camId = validateId(cameraIdParam);
       if (!camId) return sendError(res, 400, "Invalid camera ID");
       const camera = await storage.getCameraById(camId);
       if (!camera) return sendError(res, 404, "Camera not found");
       if (camera.userId !== userId) return sendError(res, 403, "Forbidden");
-      camerasToProcess = [camera];
+      cameraIds = [camera.id];
     } else {
-      camerasToProcess = await storage.getCamerasByUserId(userId);
+      const cameras = await storage.getCamerasByUserId(userId);
+      cameraIds = cameras.map(c => c.id);
     }
 
-    if (camerasToProcess.length === 0) return res.json({ data: [] });
+    if (cameraIds.length === 0) return res.json({ data: [] });
 
-    const now = new Date();
-    const rangeStart = new Date(now);
-    rangeStart.setDate(rangeStart.getDate() - days);
-
-    const cameraData = await Promise.all(
-      camerasToProcess.map(async (camera) => {
-        const events = await storage.getUptimeEventsInRange(camera.id, rangeStart, now);
-        const priorEvent = await storage.getLatestEventBefore(camera.id, rangeStart);
-        return { camera, events, priorEvent };
-      })
-    );
-
-    const data: Array<{ date: string; uptime: number }> = [];
-
-    for (let i = days - 1; i >= 0; i--) {
-      const dayStart = new Date(now);
-      dayStart.setDate(dayStart.getDate() - i);
-      dayStart.setHours(0, 0, 0, 0);
-
-      const dayEnd = new Date(dayStart);
-      dayEnd.setDate(dayEnd.getDate() + 1);
-      const effectiveDayEnd = dayEnd.getTime() > now.getTime() ? now : dayEnd;
-
-      let totalUptime = 0;
-      let cameraCount = 0;
-
-      for (const { camera, events, priorEvent } of cameraData) {
-        const monitoringStart = camera.createdAt ? new Date(camera.createdAt) : null;
-        if (monitoringStart && monitoringStart >= effectiveDayEnd) continue;
-
-        const dayEvents = events
-          .filter(e => {
-            const t = new Date(e.timestamp).getTime();
-            return t >= dayStart.getTime() && t < dayEnd.getTime();
-          })
-          .map(e => ({ timestamp: new Date(e.timestamp), status: e.status }));
-
-        let priorStatus: string | undefined;
-        const eventsBeforeDay = events.filter(
-          e => new Date(e.timestamp).getTime() < dayStart.getTime()
-        );
-        if (eventsBeforeDay.length > 0) {
-          priorStatus = eventsBeforeDay[eventsBeforeDay.length - 1].status;
-        } else if (priorEvent) {
-          priorStatus = priorEvent.status;
-        }
-
-        if (!priorStatus && camera.lastBootAt) priorStatus = "online";
-
-        const uptime = calculateUptimeFromEvents(dayEvents, dayStart, effectiveDayEnd, priorStatus);
-        totalUptime += uptime;
-        cameraCount++;
-      }
-
-      if (cameraCount > 0) {
-        data.push({
-          date: dayStart.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-          uptime: parseFloat((totalUptime / cameraCount).toFixed(1)),
-        });
-      }
-    }
-
+    const data = await storage.getDailyUptimeFromSummaries(cameraIds, days);
     res.json({ data });
   } catch (error) {
     console.error("Error fetching daily uptime:", error);

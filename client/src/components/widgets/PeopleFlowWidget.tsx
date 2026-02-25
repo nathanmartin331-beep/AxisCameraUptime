@@ -2,17 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { useGroupAnalyticsStream } from "@/hooks/useGroupAnalyticsStream";
 
 interface GroupInfo {
   id: string;
   name: string;
   memberCount: number;
-}
-
-interface AnalyticsSummary {
-  totalIn: number;
-  totalOut: number;
-  currentOccupancy: number;
 }
 
 export function PeopleFlowWidget() {
@@ -21,18 +16,11 @@ export function PeopleFlowWidget() {
   });
 
   const firstGroup = groups?.[0];
-  const { data: analytics, isLoading: analyticsLoading } = useQuery<AnalyticsSummary>({
-    queryKey: ["/api/groups", firstGroup?.id, "analytics"],
-    queryFn: async () => {
-      const res = await fetch(`/api/groups/${firstGroup!.id}/analytics?days=1`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
-    enabled: !!firstGroup,
-    refetchInterval: 30000,
-  });
 
-  if (groupsLoading || analyticsLoading) {
+  // Live analytics via SSE stream
+  const stream = useGroupAnalyticsStream(firstGroup?.id);
+
+  if (groupsLoading) {
     return (
       <Card className="h-full">
         <CardHeader className="pb-2">
@@ -70,18 +58,18 @@ export function PeopleFlowWidget() {
               <ArrowDownLeft className="h-4 w-4" />
               <span className="text-xs font-medium">In</span>
             </div>
-            <div className="text-2xl font-bold">{analytics?.totalIn ?? 0}</div>
+            <div className="text-2xl font-bold">{stream.totalIn}</div>
           </div>
           <div className="text-center">
             <div className="flex items-center justify-center gap-1 text-red-500 mb-1">
               <ArrowUpRight className="h-4 w-4" />
               <span className="text-xs font-medium">Out</span>
             </div>
-            <div className="text-2xl font-bold">{analytics?.totalOut ?? 0}</div>
+            <div className="text-2xl font-bold">{stream.totalOut}</div>
           </div>
           <div className="text-center">
             <p className="text-xs text-muted-foreground mb-1">Current</p>
-            <div className="text-2xl font-bold">{analytics?.currentOccupancy ?? 0}</div>
+            <div className="text-2xl font-bold">{stream.occupancy}</div>
           </div>
         </div>
       </CardContent>

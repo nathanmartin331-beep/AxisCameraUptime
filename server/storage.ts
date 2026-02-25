@@ -7,6 +7,8 @@ import {
   cameraGroupMembers,
   analyticsEvents,
   userSettings,
+  apiKeys,
+  webhooks,
   type User,
   type InsertUser,
   type Camera,
@@ -20,6 +22,8 @@ import {
   type InsertAnalyticsEvent,
   type CameraCapabilities,
   type UserSettings,
+  type ApiKey,
+  type Webhook,
 } from "@shared/schema";
 import { db, sqlite } from "./db";
 import { eq, and, desc, gte, lte, sql, isNull } from "drizzle-orm";
@@ -203,6 +207,11 @@ export interface IStorage {
     days: number
   ): Promise<{ percentage: number; monitoredDays: number }>;
 
+  getDailyUptimeFromSummaries(
+    cameraIds: string[],
+    days: number
+  ): Promise<Array<{ date: string; uptime: number }>>;
+
   // Camera group operations
   createGroup(group: InsertCameraGroup): Promise<CameraGroup>;
   getGroupsByUserId(userId: string): Promise<CameraGroup[]>;
@@ -230,6 +239,21 @@ export interface IStorage {
     currentOccupancy: number;
     perCamera: Array<{ id: string; name: string; in: number; out: number; occupancy: number }>;
   }>;
+  getGroupAnalyticsDailyTotals(memberIds: string[], eventType: string, days: number): Promise<Array<{ date: string; total: number }>>;
+  getFleetAnalyticsSummary(userId: string): Promise<{
+    groups: Array<{
+      groupId: string;
+      name: string;
+      occupancy: number;
+      cameraCount: number;
+      onlineCameras: number;
+    }>;
+    fleet: {
+      totalOccupancy: number;
+      totalCameras: number;
+      onlineCameras: number;
+    };
+  }>;
 
   // User management operations
   getAllUsers(): Promise<SafeUser[]>;
@@ -238,6 +262,20 @@ export interface IStorage {
   // User settings operations
   getUserSettings(userId: string): Promise<UserSettings>;
   updateUserSettings(userId: string, settings: Partial<Pick<UserSettings, 'pollingInterval' | 'dataRetentionDays' | 'emailNotifications' | 'defaultCertValidationMode' | 'globalCaCert'>>): Promise<UserSettings>;
+
+  // API key operations
+  createApiKey(data: { userId: string; name: string; keyHash: string; keyPrefix: string; scopes?: string[]; expiresAt?: Date }): Promise<ApiKey>;
+  getApiKeyByHash(keyHash: string): Promise<ApiKey | undefined>;
+  listApiKeysByUserId(userId: string): Promise<Omit<ApiKey, 'keyHash'>[]>;
+  deleteApiKey(id: string, userId: string): Promise<void>;
+  updateApiKeyLastUsed(id: string): Promise<void>;
+
+  // Webhook operations
+  createWebhook(data: { userId: string; url: string; secret: string; events: string[] }): Promise<Webhook>;
+  listWebhooksByUserId(userId: string): Promise<Webhook[]>;
+  deleteWebhook(id: string, userId: string): Promise<void>;
+  getActiveWebhooksByEvent(eventType: string): Promise<Webhook[]>;
+  updateWebhookAfterDelivery(id: string, success: boolean): Promise<void>;
 
   // Data retention cleanup
   deleteOldUptimeEvents(beforeDate: Date): Promise<number>;
@@ -870,6 +908,101 @@ export class DatabaseStorage implements IStorage {
     return results;
   }
 
+  /**
+   * Get per-day uptime percentages by querying all 3 data tiers:
+   *   Tier 3: uptime_daily_summary (data >48h old)
+   *   Tier 2: uptime_hourly_summary (6h-48h old)
+   *   Tier 1: uptime_events (last ~6h raw)
+   * Merges all tiers per day, computes uptime % = online / total * 100,
+   * then averages across all cameras for each day.
+   */
+  async getDailyUptimeFromSummaries(
+    cameraIds: string[],
+    days: number
+  ): Promise<Array<{ date: string; uptime: number }>> {
+    if (cameraIds.length === 0) return [];
+
+    const now = new Date();
+    const rangeStart = new Date(now);
+    rangeStart.setDate(rangeStart.getDate() - days);
+    rangeStart.setHours(0, 0, 0, 0);
+
+    const startTs = Math.floor(rangeStart.getTime() / 1000);
+    const endTs = Math.floor(now.getTime() / 1000);
+
+    const placeholders = cameraIds.map(() => '?').join(',');
+
+    // Tier 3: Daily summaries — already per-day, use date() to normalize
+    const dailyRows = sqlite.prepare(`
+      SELECT date(day_start, 'unixepoch') as day_date,
+        SUM(online_count) as online_count,
+        SUM(total_checks) as total_checks
+      FROM uptime_daily_summary
+      WHERE camera_id IN (${placeholders}) AND day_start >= ? AND day_start <= ?
+      GROUP BY day_date
+    `).all(...cameraIds, startTs, endTs) as Array<{
+      day_date: string; online_count: number; total_checks: number;
+    }>;
+
+    // Tier 2: Hourly summaries — aggregate into days
+    const hourlyRows = sqlite.prepare(`
+      SELECT date(hour_start, 'unixepoch') as day_date,
+        SUM(online_count) as online_count,
+        SUM(total_checks) as total_checks
+      FROM uptime_hourly_summary
+      WHERE camera_id IN (${placeholders}) AND hour_start >= ? AND hour_start <= ?
+      GROUP BY day_date
+    `).all(...cameraIds, startTs, endTs) as Array<{
+      day_date: string; online_count: number; total_checks: number;
+    }>;
+
+    // Tier 1: Raw events — aggregate into days
+    // uptime_events.timestamp is stored as ISO string by Drizzle
+    const rawRows = sqlite.prepare(`
+      SELECT date(timestamp) as day_date,
+        SUM(CASE WHEN status = 'online' THEN 1 ELSE 0 END) as online_count,
+        COUNT(*) as total_checks
+      FROM uptime_events
+      WHERE camera_id IN (${placeholders})
+        AND timestamp >= ? AND timestamp <= ?
+      GROUP BY day_date
+    `).all(...cameraIds, rangeStart.toISOString(), now.toISOString()) as Array<{
+      day_date: string; online_count: number; total_checks: number;
+    }>;
+
+    // Merge all 3 tiers into a single map: day_date → { online, total }
+    const dayMap = new Map<string, { online: number; total: number }>();
+
+    for (const rows of [dailyRows, hourlyRows, rawRows]) {
+      for (const row of rows) {
+        if (!row.day_date) continue;
+        const existing = dayMap.get(row.day_date) ?? { online: 0, total: 0 };
+        existing.online += row.online_count;
+        existing.total += row.total_checks;
+        dayMap.set(row.day_date, existing);
+      }
+    }
+
+    // Build result array sorted by date, formatted like the original endpoint
+    const result: Array<{ date: string; uptime: number }> = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      d.setHours(0, 0, 0, 0);
+      // Format as YYYY-MM-DD to match SQLite date() output
+      const dayKey = d.toISOString().slice(0, 10);
+      const agg = dayMap.get(dayKey);
+      if (agg && agg.total > 0) {
+        result.push({
+          date: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+          uptime: parseFloat(((agg.online / agg.total) * 100).toFixed(1)),
+        });
+      }
+    }
+
+    return result;
+  }
+
   // Dashboard layout methods
   async getDashboardLayout(userId: string) {
     const result = await db
@@ -1341,18 +1474,18 @@ export class DatabaseStorage implements IStorage {
     cameras: Array<{ id: string; name: string; occupancy: number }>;
   }> {
     const members = await this.getGroupMembers(groupId);
-    const cameraOccupancies = await Promise.all(
-      members.map(async (camera) => {
-        // Sum across all scenarios for this camera (group view aggregates)
-        const scenarioEvents = await this.getLatestAnalyticsEventsByScenario(camera.id, "occupancy");
-        const occupancy = scenarioEvents.reduce((sum, e) => sum + e.value, 0);
-        return {
-          id: camera.id,
-          name: camera.name,
-          occupancy,
-        };
-      })
-    );
+    if (members.length === 0) {
+      return { total: 0, cameras: [] };
+    }
+
+    const cameraIds = members.map((m) => m.id);
+    const batchData = await this.getLatestAnalyticsPerCamera(cameraIds, ["occupancy"]);
+
+    const cameraOccupancies = members.map((camera) => {
+      const eventMap = batchData.get(camera.id);
+      const occupancy = eventMap?.get("occupancy")?.value ?? 0;
+      return { id: camera.id, name: camera.name, occupancy };
+    });
 
     return {
       total: cameraOccupancies.reduce((sum, c) => sum + c.occupancy, 0),
@@ -1362,8 +1495,8 @@ export class DatabaseStorage implements IStorage {
 
   async getGroupAnalyticsSummary(
     groupId: string,
-    _startDate: Date,
-    _endDate: Date
+    startDate: Date,
+    endDate: Date
   ): Promise<{
     totalIn: number;
     totalOut: number;
@@ -1371,47 +1504,351 @@ export class DatabaseStorage implements IStorage {
     perCamera: Array<{ id: string; name: string; in: number; out: number; occupancy: number }>;
   }> {
     const members = await this.getGroupMembers(groupId);
-    const occupancyData = await this.getGroupCurrentOccupancy(groupId);
+    if (members.length === 0) {
+      return { totalIn: 0, totalOut: 0, currentOccupancy: 0, perCamera: [] };
+    }
 
-    const perCamera = await Promise.all(
-      members.map(async (camera) => {
-        // Sum across all scenarios per camera for group view.
-        // getLatestAnalyticsEventsByScenario returns all events at the latest
-        // timestamp, so each scenario's value is included in the total.
-        const [inEvents, outEvents] = await Promise.all([
-          this.getLatestAnalyticsEventsByScenario(camera.id, "people_in"),
-          this.getLatestAnalyticsEventsByScenario(camera.id, "people_out"),
-        ]);
-        const cameraOcc = occupancyData.cameras.find((c) => c.id === camera.id);
+    const cameraIds = members.map((m) => m.id);
 
-        let cameraIn = inEvents.reduce((sum, e) => sum + e.value, 0);
-        let cameraOut = outEvents.reduce((sum, e) => sum + e.value, 0);
+    // Detect if the range is "live" (endDate within last 10 minutes)
+    const isLive = endDate.getTime() > Date.now() - 10 * 60 * 1000;
 
-        // Fallback: crossline-only cameras store in/out in line_crossing metadata
+    if (isLive) {
+      // Live mode: return latest point-in-time values (existing behavior)
+      const batchData = await this.getLatestAnalyticsPerCamera(
+        cameraIds,
+        ["occupancy", "people_in", "people_out", "line_crossing"]
+      );
+
+      const perCamera = members.map((camera) => {
+        const eventMap = batchData.get(camera.id);
+        const occupancy = eventMap?.get("occupancy")?.value ?? 0;
+        let cameraIn = eventMap?.get("people_in")?.value ?? 0;
+        let cameraOut = eventMap?.get("people_out")?.value ?? 0;
+
         if (cameraIn === 0 && cameraOut === 0) {
-          const lcEvents = await this.getLatestAnalyticsEventsByScenario(camera.id, "line_crossing");
-          for (const lc of lcEvents) {
-            const meta = lc.metadata as Record<string, any> | null;
-            if (meta?.in !== undefined) cameraIn += Number(meta.in);
-            if (meta?.out !== undefined) cameraOut += Number(meta.out);
+          const lcData = eventMap?.get("line_crossing");
+          if (lcData?.metadata) {
+            if (lcData.metadata.in !== undefined) cameraIn += Number(lcData.metadata.in);
+            if (lcData.metadata.out !== undefined) cameraOut += Number(lcData.metadata.out);
           }
         }
 
-        return {
-          id: camera.id,
-          name: camera.name,
-          in: cameraIn,
-          out: cameraOut,
-          occupancy: cameraOcc?.occupancy ?? 0,
-        };
-      })
-    );
+        return { id: camera.id, name: camera.name, in: cameraIn, out: cameraOut, occupancy };
+      });
+
+      return {
+        totalIn: perCamera.reduce((sum, c) => sum + c.in, 0),
+        totalOut: perCamera.reduce((sum, c) => sum + c.out, 0),
+        currentOccupancy: perCamera.reduce((sum, c) => sum + c.occupancy, 0),
+        perCamera,
+      };
+    }
+
+    // Historical mode: query all 3 summary tiers for the date range
+    const camPlaceholders = cameraIds.map(() => "?").join(",");
+    const eventTypes = ["people_in", "people_out", "occupancy", "line_crossing"];
+    const typePlaceholders = eventTypes.map(() => "?").join(",");
+    const startTs = Math.floor(startDate.getTime() / 1000);
+    const endTs = Math.floor(endDate.getTime() / 1000);
+
+    // Accumulator: cameraId -> { people_in, people_out, occupancy, lc_in, lc_out }
+    const acc = new Map<string, { people_in: number; people_out: number; occupancy: number; lc_in: number; lc_out: number }>();
+    const ensureCamera = (id: string) => {
+      if (!acc.has(id)) acc.set(id, { people_in: 0, people_out: 0, occupancy: 0, lc_in: 0, lc_out: 0 });
+      return acc.get(id)!;
+    };
+
+    type SummaryRow = { camera_id: string; event_type: string; total: number; max_val: number; meta: string | null };
+
+    const applyRow = (row: SummaryRow, metaField: "meta" | "metadata") => {
+      const cam = ensureCamera(row.camera_id);
+      if (row.event_type === "occupancy") {
+        cam.occupancy = Math.max(cam.occupancy, row.max_val ?? 0);
+      } else if (row.event_type === "people_in") {
+        cam.people_in += row.total;
+      } else if (row.event_type === "people_out") {
+        cam.people_out += row.total;
+      } else if (row.event_type === "line_crossing") {
+        const rawMeta = (row as any)[metaField];
+        if (rawMeta) {
+          try {
+            const meta = typeof rawMeta === "string" ? JSON.parse(rawMeta) : rawMeta;
+            if (meta.in !== undefined) cam.lc_in += Number(meta.in);
+            if (meta.out !== undefined) cam.lc_out += Number(meta.out);
+          } catch {}
+        }
+      }
+    };
+
+    // 1. Daily summaries
+    const dailyRows = sqlite.prepare(`
+      SELECT camera_id, event_type,
+             SUM(sum_value) as total,
+             MAX(max_value) as max_val,
+             metadata as meta
+      FROM analytics_daily_summary
+      WHERE camera_id IN (${camPlaceholders})
+        AND event_type IN (${typePlaceholders})
+        AND day_start >= ? AND day_start <= ?
+      GROUP BY camera_id, event_type
+    `).all(...cameraIds, ...eventTypes, startTs, endTs) as SummaryRow[];
+
+    for (const row of dailyRows) applyRow(row, "meta");
+
+    // 2. Hourly summaries (data not yet rolled into daily)
+    const hourlyRows = sqlite.prepare(`
+      SELECT camera_id, event_type,
+             SUM(sum_value) as total,
+             MAX(max_value) as max_val,
+             metadata as meta
+      FROM analytics_hourly_summary
+      WHERE camera_id IN (${camPlaceholders})
+        AND event_type IN (${typePlaceholders})
+        AND hour_start >= ? AND hour_start <= ?
+      GROUP BY camera_id, event_type
+    `).all(...cameraIds, ...eventTypes, startTs, endTs) as SummaryRow[];
+
+    for (const row of hourlyRows) applyRow(row, "meta");
+
+    // 3. Raw events (last ~6h, not yet rolled up)
+    const rawRows = sqlite.prepare(`
+      SELECT camera_id, event_type,
+             SUM(value) as total,
+             MAX(value) as max_val,
+             metadata
+      FROM analytics_events
+      WHERE camera_id IN (${camPlaceholders})
+        AND event_type IN (${typePlaceholders})
+        AND timestamp >= ? AND timestamp <= ?
+      GROUP BY camera_id, event_type
+    `).all(...cameraIds, ...eventTypes, startTs, endTs) as SummaryRow[];
+
+    for (const row of rawRows) applyRow(row, "metadata");
+
+    // Build perCamera array with line_crossing fallback
+    const perCamera = members.map((camera) => {
+      const data = acc.get(camera.id);
+      let cameraIn = data?.people_in ?? 0;
+      let cameraOut = data?.people_out ?? 0;
+      const occupancy = data?.occupancy ?? 0;
+
+      // Fallback: if no people_in/people_out, use line_crossing in/out metadata
+      if (cameraIn === 0 && cameraOut === 0 && data) {
+        cameraIn = data.lc_in;
+        cameraOut = data.lc_out;
+      }
+
+      return { id: camera.id, name: camera.name, in: cameraIn, out: cameraOut, occupancy };
+    });
 
     return {
       totalIn: perCamera.reduce((sum, c) => sum + c.in, 0),
       totalOut: perCamera.reduce((sum, c) => sum + c.out, 0),
-      currentOccupancy: occupancyData.total,
+      currentOccupancy: perCamera.reduce((sum, c) => sum + c.occupancy, 0),
       perCamera,
+    };
+  }
+
+  async getGroupAnalyticsDailyTotals(
+    memberIds: string[],
+    eventType: string,
+    days: number
+  ): Promise<Array<{ date: string; total: number }>> {
+    if (memberIds.length === 0) return [];
+
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    startDate.setHours(0, 0, 0, 0);
+    const startTs = Math.floor(startDate.getTime() / 1000);
+    const endTs = Math.floor(endDate.getTime() / 1000);
+
+    const dailyMap = new Map<string, number>();
+    const placeholders = memberIds.map(() => "?").join(",");
+
+    // Tier 3: Daily summary — SUM max_value across cameras and scenarios per day
+    const dailyRows = sqlite.prepare(`
+      SELECT day_start, SUM(max_value) as total
+      FROM analytics_daily_summary
+      WHERE camera_id IN (${placeholders}) AND event_type = ? AND day_start >= ? AND day_start <= ?
+      GROUP BY day_start
+    `).all(...memberIds, eventType, startTs, endTs) as Array<{ day_start: number; total: number }>;
+
+    for (const row of dailyRows) {
+      const d = new Date(row.day_start * 1000);
+      const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      dailyMap.set(dateKey, (dailyMap.get(dateKey) || 0) + (row.total ?? 0));
+    }
+
+    // Tier 2: Hourly summary — SUM across cameras per hour, then take max per day
+    const hourlyRows = sqlite.prepare(`
+      SELECT hour_start, SUM(max_value) as total
+      FROM analytics_hourly_summary
+      WHERE camera_id IN (${placeholders}) AND event_type = ? AND hour_start >= ? AND hour_start <= ?
+      GROUP BY hour_start
+    `).all(...memberIds, eventType, startTs, endTs) as Array<{ hour_start: number; total: number }>;
+
+    const hourlyDayMax = new Map<string, number>();
+    for (const row of hourlyRows) {
+      const d = new Date(row.hour_start * 1000);
+      const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const hourVal = row.total ?? 0;
+      const existing = hourlyDayMax.get(dateKey);
+      if (existing === undefined || hourVal > existing) {
+        hourlyDayMax.set(dateKey, hourVal);
+      }
+    }
+    for (const [dateKey, maxVal] of hourlyDayMax) {
+      const existing = dailyMap.get(dateKey) || 0;
+      if (maxVal > existing) {
+        dailyMap.set(dateKey, maxVal);
+      }
+    }
+
+    // Tier 1: Raw events — batch query, deduplicate per camera by scenario, sum across cameras per day
+    const rawRows = sqlite.prepare(`
+      SELECT camera_id, timestamp, value, metadata
+      FROM analytics_events
+      WHERE camera_id IN (${placeholders}) AND event_type = ? AND timestamp >= ? AND timestamp <= ?
+    `).all(...memberIds, eventType, startDate.toISOString(), endDate.toISOString()) as Array<{
+      camera_id: string; timestamp: string; value: number; metadata: string | null;
+    }>;
+
+    // Group by camera_id, then deduplicate by (scenario, timestamp) keeping highest value
+    const perCamera = new Map<string, Map<string, Map<number, number>>>();
+    for (const row of rawRows) {
+      let meta: Record<string, any> | undefined;
+      if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
+      const scenario = meta?.scenario || "default";
+      const ts = new Date(row.timestamp).getTime();
+
+      if (!perCamera.has(row.camera_id)) perCamera.set(row.camera_id, new Map());
+      const scenarioMap = perCamera.get(row.camera_id)!;
+      if (!scenarioMap.has(scenario)) scenarioMap.set(scenario, new Map());
+      const tsMap = scenarioMap.get(scenario)!;
+      const existing = tsMap.get(ts);
+      if (existing === undefined || row.value > existing) {
+        tsMap.set(ts, row.value);
+      }
+    }
+
+    // For each camera: sum across scenarios at each timestamp
+    // Then for each day: sum across cameras and take the max combined value
+    const perDayCombined = new Map<string, number>();
+    for (const [, scenarioMap] of perCamera) {
+      // Sum scenarios per timestamp for this camera
+      const cameraTimestampSums = new Map<number, number>();
+      for (const [, tsMap] of scenarioMap) {
+        for (const [ts, val] of tsMap) {
+          cameraTimestampSums.set(ts, (cameraTimestampSums.get(ts) || 0) + val);
+        }
+      }
+      // Group by day: take max timestamp-sum per day for this camera
+      const cameraDayMax = new Map<string, number>();
+      for (const [ts, sum] of cameraTimestampSums) {
+        const d = new Date(ts);
+        const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        const existing = cameraDayMax.get(dateKey);
+        if (existing === undefined || sum > existing) {
+          cameraDayMax.set(dateKey, sum);
+        }
+      }
+      // Sum this camera's daily max into the combined total
+      for (const [dateKey, dayMax] of cameraDayMax) {
+        perDayCombined.set(dateKey, (perDayCombined.get(dateKey) || 0) + dayMax);
+      }
+    }
+
+    // Merge raw tier into dailyMap (take the max of existing vs raw combined)
+    for (const [dateKey, rawTotal] of perDayCombined) {
+      const existing = dailyMap.get(dateKey) || 0;
+      if (rawTotal > existing) {
+        dailyMap.set(dateKey, rawTotal);
+      }
+    }
+
+    return Array.from(dailyMap.entries())
+      .map(([date, total]) => ({ date, total }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  async getFleetAnalyticsSummary(userId: string): Promise<{
+    groups: Array<{
+      groupId: string;
+      name: string;
+      occupancy: number;
+      cameraCount: number;
+      onlineCameras: number;
+    }>;
+    fleet: {
+      totalOccupancy: number;
+      totalCameras: number;
+      onlineCameras: number;
+    };
+  }> {
+    const allGroups = await this.getGroupsByUserId(userId);
+    const allCameras = await this.getCamerasByUserId(userId);
+    const allCameraIds = allCameras.map((c) => c.id);
+
+    // Batch fetch latest occupancy for ALL cameras in one query
+    const analyticsMap = allCameraIds.length > 0
+      ? await this.getLatestAnalyticsPerCamera(allCameraIds, ["occupancy"])
+      : new Map<string, Map<string, { value: number; metadata?: Record<string, any> }>>();
+
+    // Build camera lookup for online status
+    const cameraMap = new Map(allCameras.map((c) => [c.id, c]));
+
+    // Batch fetch all group memberships in one query to avoid N getGroupMembers calls
+    const groupMemberships = new Map<string, string[]>();
+    if (allGroups.length > 0) {
+      const groupIds = allGroups.map((g) => g.id);
+      const placeholders = groupIds.map(() => "?").join(",");
+      const rows = sqlite.prepare(
+        `SELECT group_id, camera_id FROM camera_group_members WHERE group_id IN (${placeholders})`
+      ).all(...groupIds) as Array<{ group_id: string; camera_id: string }>;
+      for (const row of rows) {
+        if (!groupMemberships.has(row.group_id)) {
+          groupMemberships.set(row.group_id, []);
+        }
+        groupMemberships.get(row.group_id)!.push(row.camera_id);
+      }
+    }
+
+    // Aggregate per group
+    const groups = allGroups.map((group) => {
+      const memberIds = groupMemberships.get(group.id) || [];
+      let occupancy = 0;
+      let onlineCameras = 0;
+      for (const camId of memberIds) {
+        const cam = cameraMap.get(camId);
+        if (cam?.currentStatus === "online") onlineCameras++;
+        const eventMap = analyticsMap.get(camId);
+        occupancy += eventMap?.get("occupancy")?.value ?? 0;
+      }
+      return {
+        groupId: group.id,
+        name: group.name,
+        occupancy,
+        cameraCount: memberIds.length,
+        onlineCameras,
+      };
+    });
+
+    const onlineCameras = allCameras.filter((c) => c.currentStatus === "online").length;
+    let totalOccupancy = 0;
+    for (const camId of allCameraIds) {
+      const eventMap = analyticsMap.get(camId);
+      totalOccupancy += eventMap?.get("occupancy")?.value ?? 0;
+    }
+
+    return {
+      groups,
+      fleet: {
+        totalOccupancy,
+        totalCameras: allCameras.length,
+        onlineCameras,
+      },
     };
   }
 
@@ -1461,6 +1898,136 @@ export class DatabaseStorage implements IStorage {
 
   async getAllCameras(): Promise<Camera[]> {
     return db.select().from(cameras);
+  }
+
+  // API key operations
+  async createApiKey(data: {
+    userId: string;
+    name: string;
+    keyHash: string;
+    keyPrefix: string;
+    scopes?: string[];
+    expiresAt?: Date;
+  }): Promise<ApiKey> {
+    const [created] = await db.insert(apiKeys).values({
+      userId: data.userId,
+      name: data.name,
+      keyHash: data.keyHash,
+      keyPrefix: data.keyPrefix,
+      scopes: data.scopes ?? null,
+      expiresAt: data.expiresAt ?? null,
+    }).returning();
+    return created;
+  }
+
+  async getApiKeyByHash(keyHash: string): Promise<ApiKey | undefined> {
+    const [record] = await db
+      .select()
+      .from(apiKeys)
+      .where(eq(apiKeys.keyHash, keyHash));
+    return record;
+  }
+
+  async listApiKeysByUserId(userId: string): Promise<Omit<ApiKey, 'keyHash'>[]> {
+    const rows = await db
+      .select({
+        id: apiKeys.id,
+        userId: apiKeys.userId,
+        name: apiKeys.name,
+        keyPrefix: apiKeys.keyPrefix,
+        scopes: apiKeys.scopes,
+        createdAt: apiKeys.createdAt,
+        lastUsedAt: apiKeys.lastUsedAt,
+        expiresAt: apiKeys.expiresAt,
+      })
+      .from(apiKeys)
+      .where(eq(apiKeys.userId, userId))
+      .orderBy(desc(apiKeys.createdAt));
+    return rows;
+  }
+
+  async deleteApiKey(id: string, userId: string): Promise<void> {
+    await db
+      .delete(apiKeys)
+      .where(and(eq(apiKeys.id, id), eq(apiKeys.userId, userId)));
+  }
+
+  async updateApiKeyLastUsed(id: string): Promise<void> {
+    await db
+      .update(apiKeys)
+      .set({ lastUsedAt: new Date() })
+      .where(eq(apiKeys.id, id));
+  }
+
+  // Webhook operations
+  async createWebhook(data: { userId: string; url: string; secret: string; events: string[] }): Promise<Webhook> {
+    const [created] = await db.insert(webhooks).values({
+      userId: data.userId,
+      url: data.url,
+      secret: data.secret,
+      events: data.events,
+    }).returning();
+    return created;
+  }
+
+  async listWebhooksByUserId(userId: string): Promise<Webhook[]> {
+    const rows = await db
+      .select()
+      .from(webhooks)
+      .where(eq(webhooks.userId, userId))
+      .orderBy(desc(webhooks.createdAt));
+    // Mask secrets — return first 8 chars + "..."
+    return rows.map((row) => ({
+      ...row,
+      secret: row.secret.slice(0, 8) + "...",
+    }));
+  }
+
+  async deleteWebhook(id: string, userId: string): Promise<void> {
+    await db
+      .delete(webhooks)
+      .where(and(eq(webhooks.id, id), eq(webhooks.userId, userId)));
+  }
+
+  async getActiveWebhooksByEvent(eventType: string): Promise<Webhook[]> {
+    // Get all active webhooks whose events JSON array contains the eventType
+    const rows = await db
+      .select()
+      .from(webhooks)
+      .where(eq(webhooks.active, true));
+    // Filter in JS since SQLite JSON array containment varies
+    return rows.filter((row) => {
+      const events = row.events as string[] | null;
+      if (!events || !Array.isArray(events)) return false;
+      return events.includes(eventType);
+    });
+  }
+
+  async updateWebhookAfterDelivery(id: string, success: boolean): Promise<void> {
+    if (success) {
+      await db
+        .update(webhooks)
+        .set({
+          lastDeliveryAt: new Date(),
+          consecutiveFailures: 0,
+        })
+        .where(eq(webhooks.id, id));
+    } else {
+      // Increment consecutive failures; deactivate after 10
+      const [current] = await db
+        .select({ consecutiveFailures: webhooks.consecutiveFailures })
+        .from(webhooks)
+        .where(eq(webhooks.id, id));
+      const failures = (current?.consecutiveFailures ?? 0) + 1;
+      await db
+        .update(webhooks)
+        .set({
+          lastDeliveryAt: new Date(),
+          consecutiveFailures: failures,
+          ...(failures >= 10 ? { active: false } : {}),
+        })
+        .where(eq(webhooks.id, id));
+    }
   }
 
   // Per-user data retention cleanup — deletes events only for specific cameras

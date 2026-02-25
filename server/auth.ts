@@ -1,6 +1,7 @@
 import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import type { Request, Response, NextFunction } from "express";
 import { storage, type SafeUser } from "./storage";
 import type { User } from "@shared/schema";
@@ -95,6 +96,39 @@ export function requireAdmin(
     return res.status(403).json({ message: "Admin access required" });
   }
   return next();
+}
+
+// Middleware that accepts either API key (X-API-Key header) or session auth.
+// Used on read endpoints that external consumers need to access.
+export function requireApiKeyOrAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  const apiKey = req.headers["x-api-key"];
+  if (!apiKey || typeof apiKey !== "string") {
+    // No API key header — fall through to session auth
+    return requireAuth(req, res, next);
+  }
+
+  const keyHash = crypto.createHash("sha256").update(apiKey).digest("hex");
+
+  storage.getApiKeyByHash(keyHash).then((record) => {
+    if (!record) {
+      return res.status(401).json({ message: "Invalid API key" });
+    }
+    // Check expiry
+    if (record.expiresAt && new Date(record.expiresAt) < new Date()) {
+      return res.status(401).json({ message: "API key has expired" });
+    }
+    // Attach user identity to request (same shape as session auth)
+    (req as any).user = { id: record.userId } as SafeUser;
+    // Fire-and-forget: update lastUsedAt
+    storage.updateApiKeyLastUsed(record.id).catch(() => {});
+    return next();
+  }).catch(() => {
+    return res.status(500).json({ message: "Authentication error" });
+  });
 }
 
 export default passport;

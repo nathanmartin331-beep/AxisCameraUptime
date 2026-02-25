@@ -3,6 +3,7 @@ import { useParams } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useGroupAnalyticsStream } from "@/hooks/useGroupAnalyticsStream";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -43,32 +44,6 @@ interface GroupData {
   members: GroupMember[];
 }
 
-interface OccupancyCamera {
-  id: string;
-  name: string;
-  occupancy: number;
-}
-
-interface OccupancyData {
-  total: number;
-  cameras: OccupancyCamera[];
-}
-
-interface AnalyticsPerCamera {
-  id: string;
-  name: string;
-  in: number;
-  out: number;
-  occupancy: number;
-}
-
-interface AnalyticsData {
-  totalIn: number;
-  totalOut: number;
-  currentOccupancy: number;
-  perCamera: AnalyticsPerCamera[];
-}
-
 interface TrendPoint {
   timestamp: string;
   value: number;
@@ -77,6 +52,13 @@ interface TrendPoint {
 interface TrendData {
   eventType: string;
   trend: TrendPoint[];
+}
+
+interface DailyData {
+  groupId: string;
+  eventType: string;
+  days: number;
+  dailyTotals: { date: string; total: number }[];
 }
 
 interface AllCamera {
@@ -111,6 +93,9 @@ export default function GroupDetail() {
   const [trendDays, setTrendDays] = useState(7);
   const [trendEventType, setTrendEventType] = useState<string>("occupancy");
 
+  // Live group analytics via SSE stream
+  const stream = useGroupAnalyticsStream(groupId);
+
   // Fetch group details
   const {
     data: group,
@@ -126,33 +111,28 @@ export default function GroupDetail() {
     enabled: !!groupId,
   });
 
-  // Fetch real-time occupancy (refetch every 10s)
-  const { data: occupancy, isLoading: occupancyLoading } = useQuery<OccupancyData>({
-    queryKey: ["/api/groups", groupId, "occupancy"],
-    queryFn: async () => {
-      const res = await fetch(`/api/groups/${groupId}/occupancy`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
-    enabled: !!groupId,
-    refetchInterval: 10000,
-  });
+  // Occupancy and analytics now come from the SSE stream (stream variable above)
 
-  // Fetch analytics summary
-  const { data: analytics, isLoading: analyticsLoading } = useQuery<AnalyticsData>({
-    queryKey: ["/api/groups", groupId, "analytics", trendDays],
-    queryFn: async () => {
-      const res = await fetch(`/api/groups/${groupId}/analytics?days=${trendDays}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
-    enabled: !!groupId,
-  });
-
-  // Fetch trend data
+  // Fetch trend data — use hourly trend endpoint for <= 30d, daily endpoint for longer ranges
+  const useDaily = trendDays > 30;
   const { data: trend, isLoading: trendLoading } = useQuery<TrendData>({
     queryKey: ["/api/groups", groupId, "trend", trendDays, trendEventType],
     queryFn: async () => {
+      if (useDaily) {
+        const res = await fetch(`/api/groups/${groupId}/analytics/daily?eventType=${trendEventType}&days=${trendDays}`, { credentials: "include" });
+        if (!res.ok) throw new Error("Failed");
+        const data: DailyData = await res.json();
+        return {
+          eventType: data.eventType,
+          trend: data.dailyTotals.map((item) => {
+            const d = new Date(item.date + "T00:00:00");
+            return {
+              timestamp: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+              value: item.total,
+            };
+          }),
+        };
+      }
       const res = await fetch(`/api/groups/${groupId}/analytics/trend?eventType=${trendEventType}&days=${trendDays}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed");
       return res.json();
@@ -173,8 +153,6 @@ export default function GroupDetail() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/groups", groupId] });
-      queryClient.invalidateQueries({ queryKey: ["/api/groups", groupId, "occupancy"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/groups", groupId, "analytics"] });
       toast({ title: "Members updated", description: "Group members have been updated." });
     },
     onError: () => {
@@ -193,8 +171,6 @@ export default function GroupDetail() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/groups", groupId] });
-      queryClient.invalidateQueries({ queryKey: ["/api/groups", groupId, "occupancy"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/groups", groupId, "analytics"] });
       toast({ title: "Member removed", description: "Camera removed from group." });
     },
     onError: () => {
@@ -284,9 +260,9 @@ export default function GroupDetail() {
     return null;
   }
 
-  const currentOccupancy = occupancy?.total ?? analytics?.currentOccupancy ?? 0;
-  const totalIn = analytics?.totalIn ?? 0;
-  const totalOut = analytics?.totalOut ?? 0;
+  const currentOccupancy = stream.occupancy;
+  const totalIn = stream.totalIn;
+  const totalOut = stream.totalOut;
   const memberCount = group.members.length;
 
   const trendLabel =
@@ -296,15 +272,13 @@ export default function GroupDetail() {
     : trendEventType;
 
   const chartData = (trend?.trend ?? []).map((point) => ({
-    time: formatTrendTimestamp(point.timestamp, trendDays),
+    time: useDaily ? point.timestamp : formatTrendTimestamp(point.timestamp, trendDays),
     value: point.value,
   }));
 
   const cameraOccupancyMap = new Map<string, number>();
-  if (occupancy?.cameras) {
-    for (const cam of occupancy.cameras) {
-      cameraOccupancyMap.set(cam.id, cam.occupancy);
-    }
+  for (const cam of stream.perCamera) {
+    cameraOccupancyMap.set(cam.cameraId, cam.occupancy);
   }
 
   const groupColor = group.color || "#6366f1";
@@ -394,11 +368,7 @@ export default function GroupDetail() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {occupancyLoading ? (
-              <Skeleton className="h-10 w-16" />
-            ) : (
-              <p className="text-4xl font-bold">{currentOccupancy}</p>
-            )}
+            <p className="text-4xl font-bold">{currentOccupancy}</p>
           </CardContent>
         </Card>
 
@@ -410,11 +380,7 @@ export default function GroupDetail() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {analyticsLoading ? (
-              <Skeleton className="h-10 w-16" />
-            ) : (
-              <p className="text-4xl font-bold">{totalIn}</p>
-            )}
+            <p className="text-4xl font-bold">{totalIn}</p>
           </CardContent>
         </Card>
 
@@ -426,11 +392,7 @@ export default function GroupDetail() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {analyticsLoading ? (
-              <Skeleton className="h-10 w-16" />
-            ) : (
-              <p className="text-4xl font-bold">{totalOut}</p>
-            )}
+            <p className="text-4xl font-bold">{totalOut}</p>
           </CardContent>
         </Card>
 
@@ -457,6 +419,8 @@ export default function GroupDetail() {
                 <TabsTrigger value="1" className="text-xs px-2 h-6">24h</TabsTrigger>
                 <TabsTrigger value="7" className="text-xs px-2 h-6">7d</TabsTrigger>
                 <TabsTrigger value="30" className="text-xs px-2 h-6">30d</TabsTrigger>
+                <TabsTrigger value="90" className="text-xs px-2 h-6">90d</TabsTrigger>
+                <TabsTrigger value="365" className="text-xs px-2 h-6">1y</TabsTrigger>
               </TabsList>
             </Tabs>
           </div>

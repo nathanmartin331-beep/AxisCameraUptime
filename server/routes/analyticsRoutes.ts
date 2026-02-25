@@ -1,14 +1,26 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { sqlite } from "../db";
-import { requireAuth } from "../auth";
+import { requireApiKeyOrAuth } from "../auth";
 import { analyticsBroadcaster } from "../services/analyticsEventBroadcaster";
 import { validateId, validateDays, sendError, getUserId } from "./shared";
 
 const router = Router();
 
+// Fleet-wide analytics summary (all groups + totals in one call)
+router.get("/api/analytics/summary", requireApiKeyOrAuth, async (req: any, res) => {
+  try {
+    const userId = getUserId(req);
+    const summary = await storage.getFleetAnalyticsSummary(userId);
+    res.json(summary);
+  } catch (error) {
+    console.error("Error fetching fleet analytics summary:", error);
+    sendError(res, 500, "Failed to fetch fleet analytics summary");
+  }
+});
+
 // Per-camera analytics
-router.get("/api/cameras/:id/analytics", requireAuth, async (req: any, res) => {
+router.get("/api/cameras/:id/analytics", requireApiKeyOrAuth, async (req: any, res) => {
   try {
     const cameraId = validateId(req.params.id);
     if (!cameraId) return sendError(res, 400, "Invalid camera ID");
@@ -60,7 +72,7 @@ router.get("/api/cameras/:id/analytics", requireAuth, async (req: any, res) => {
 });
 
 // Camera analytics daily history
-router.get("/api/cameras/:id/analytics/daily", requireAuth, async (req: any, res) => {
+router.get("/api/cameras/:id/analytics/daily", requireApiKeyOrAuth, async (req: any, res) => {
   try {
     const cameraId = validateId(req.params.id);
     if (!cameraId) return sendError(res, 400, "Invalid camera ID");
@@ -94,7 +106,7 @@ router.get("/api/cameras/:id/analytics/daily", requireAuth, async (req: any, res
 });
 
 // Analytics SSE Streams
-router.get("/api/analytics/stream", requireAuth, async (req: any, res) => {
+router.get("/api/analytics/stream", requireApiKeyOrAuth, async (req: any, res) => {
   const userId = getUserId(req);
   const filterCameraId = typeof req.query.cameraId === "string" ? validateId(req.query.cameraId) : null;
 
@@ -112,13 +124,45 @@ router.get("/api/analytics/stream", requireAuth, async (req: any, res) => {
   });
   res.flushHeaders();
 
+  // Build a set of the user's camera IDs to filter events by ownership
+  const userCameras = await storage.getCamerasByUserId(userId);
+  let userCameraIds = new Set(userCameras.map((c) => c.id));
+
+  // Replay missed events on reconnect (Last-Event-ID support)
+  const lastEventId = parseInt(req.headers['last-event-id'] as string);
+  if (!isNaN(lastEventId)) {
+    const missed = analyticsBroadcaster.getEventsSince(lastEventId);
+    if (missed) {
+      for (const event of missed) {
+        if (filterCameraId) {
+          if (event.payload.cameraId !== filterCameraId) continue;
+        } else {
+          if (!userCameraIds.has(event.payload.cameraId)) continue;
+        }
+        res.write(`id: ${event.id}\ndata: ${JSON.stringify(event.payload)}\n\n`);
+      }
+    } else {
+      // Gap too large, tell client to reset
+      res.write(`event: reset\ndata: {}\n\n`);
+    }
+  }
+
   const unsubscribe = filterCameraId
-    ? analyticsBroadcaster.subscribe(filterCameraId, (payload) => {
-        res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    ? analyticsBroadcaster.subscribe(filterCameraId, (payload, seqId) => {
+        res.write(`id: ${seqId}\ndata: ${JSON.stringify(payload)}\n\n`);
       })
-    : analyticsBroadcaster.subscribeAll((payload) => {
-        res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    : analyticsBroadcaster.subscribeAll((payload, seqId) => {
+        if (!userCameraIds.has(payload.cameraId)) return;
+        res.write(`id: ${seqId}\ndata: ${JSON.stringify(payload)}\n\n`);
       });
+
+  // Refresh camera ownership periodically for long-lived connections
+  const refreshInterval = setInterval(async () => {
+    try {
+      const fresh = await storage.getCamerasByUserId(userId);
+      userCameraIds = new Set(fresh.map((c) => c.id));
+    } catch {}
+  }, 60_000);
 
   const keepalive = setInterval(() => {
     res.write(": keepalive\n\n");
@@ -126,12 +170,13 @@ router.get("/api/analytics/stream", requireAuth, async (req: any, res) => {
 
   req.on("close", () => {
     unsubscribe();
+    clearInterval(refreshInterval);
     clearInterval(keepalive);
   });
 });
 
 // Single camera analytics stream
-router.get("/api/cameras/:id/analytics/stream", requireAuth, async (req: any, res) => {
+router.get("/api/cameras/:id/analytics/stream", requireApiKeyOrAuth, async (req: any, res) => {
   const cameraId = validateId(req.params.id);
   if (!cameraId) return sendError(res, 400, "Invalid camera ID");
 
@@ -146,8 +191,22 @@ router.get("/api/cameras/:id/analytics/stream", requireAuth, async (req: any, re
   });
   res.flushHeaders();
 
-  const unsubscribe = analyticsBroadcaster.subscribe(cameraId, (payload) => {
-    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  // Replay missed events on reconnect (Last-Event-ID support)
+  const lastEventId = parseInt(req.headers['last-event-id'] as string);
+  if (!isNaN(lastEventId)) {
+    const missed = analyticsBroadcaster.getEventsSince(lastEventId);
+    if (missed) {
+      for (const event of missed) {
+        if (event.payload.cameraId !== cameraId) continue;
+        res.write(`id: ${event.id}\ndata: ${JSON.stringify(event.payload)}\n\n`);
+      }
+    } else {
+      res.write(`event: reset\ndata: {}\n\n`);
+    }
+  }
+
+  const unsubscribe = analyticsBroadcaster.subscribe(cameraId, (payload, seqId) => {
+    res.write(`id: ${seqId}\ndata: ${JSON.stringify(payload)}\n\n`);
   });
 
   const keepalive = setInterval(() => {
@@ -161,7 +220,7 @@ router.get("/api/cameras/:id/analytics/stream", requireAuth, async (req: any, re
 });
 
 // Group analytics summary
-router.get("/api/groups/:id/analytics", requireAuth, async (req: any, res) => {
+router.get("/api/groups/:id/analytics", requireApiKeyOrAuth, async (req: any, res) => {
   try {
     const groupId = validateId(req.params.id);
     if (!groupId) return sendError(res, 400, "Invalid group ID");
@@ -185,8 +244,36 @@ router.get("/api/groups/:id/analytics", requireAuth, async (req: any, res) => {
   }
 });
 
+// Group analytics daily history (3-tier merge across member cameras)
+router.get("/api/groups/:id/analytics/daily", requireApiKeyOrAuth, async (req: any, res) => {
+  try {
+    const groupId = validateId(req.params.id);
+    if (!groupId) return sendError(res, 400, "Invalid group ID");
+
+    const days = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 365);
+    const VALID_EVENT_TYPES = ["occupancy", "people_in", "people_out", "line_crossing", "avg_dwell_time"];
+    const eventType = (req.query.eventType as string) || "occupancy";
+    if (!VALID_EVENT_TYPES.includes(eventType)) {
+      return sendError(res, 400, `Invalid eventType. Must be one of: ${VALID_EVENT_TYPES.join(", ")}`);
+    }
+
+    const group = await storage.getGroupById(groupId);
+    if (!group) return sendError(res, 404, "Group not found");
+    if (group.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
+
+    const members = await storage.getGroupMembers(groupId);
+    const memberIds = members.map((m) => m.id);
+
+    const dailyTotals = await storage.getGroupAnalyticsDailyTotals(memberIds, eventType, days);
+    res.json({ groupId, eventType, days, dailyTotals });
+  } catch (error) {
+    console.error("Error fetching group daily analytics:", error);
+    sendError(res, 500, "Failed to fetch group daily analytics");
+  }
+});
+
 // Group analytics trend data
-router.get("/api/groups/:id/analytics/trend", requireAuth, async (req: any, res) => {
+router.get("/api/groups/:id/analytics/trend", requireApiKeyOrAuth, async (req: any, res) => {
   try {
     const groupId = validateId(req.params.id);
     if (!groupId) return sendError(res, 400, "Invalid group ID");
@@ -234,12 +321,20 @@ router.get("/api/groups/:id/analytics/trend", requireAuth, async (req: any, res)
       for (const row of hourlyRows) {
         allEvents.push({ timestamp: new Date(row.hour_start * 1000), value: row.max_value ?? 0, cameraId: row.camera_id });
       }
-    }
 
-    for (const member of members) {
-      const events = await storage.getAnalyticsEvents(member.id, eventType, startDate, endDate);
-      for (const e of events) {
-        allEvents.push({ timestamp: new Date(e.timestamp), value: e.value, cameraId: e.cameraId });
+      const rawRows = sqlite.prepare(`
+        SELECT camera_id, timestamp, value, metadata
+        FROM analytics_events
+        WHERE camera_id IN (${placeholders}) AND event_type = ? AND timestamp >= ? AND timestamp <= ?
+      `).all(...memberIds, eventType, startDate.toISOString(), endDate.toISOString()) as Array<{
+        camera_id: string; timestamp: string; value: number; metadata: string | null;
+      }>;
+      for (const row of rawRows) {
+        allEvents.push({
+          timestamp: new Date(row.timestamp),
+          value: row.value ?? 0,
+          cameraId: row.camera_id,
+        });
       }
     }
 
@@ -276,6 +371,137 @@ router.get("/api/groups/:id/analytics/trend", requireAuth, async (req: any, res)
     console.error("Error fetching analytics trend:", error);
     sendError(res, 500, "Failed to fetch analytics trend");
   }
+});
+
+// Group-level SSE analytics stream
+router.get("/api/groups/:id/analytics/stream", requireApiKeyOrAuth, async (req: any, res) => {
+  const groupId = validateId(req.params.id);
+  if (!groupId) return sendError(res, 400, "Invalid group ID");
+
+  const userId = getUserId(req);
+  const group = await storage.getGroupById(groupId);
+  if (!group) return sendError(res, 404, "Group not found");
+  if (group.userId !== userId) return sendError(res, 403, "Forbidden");
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  res.flushHeaders();
+
+  // Per-camera aggregate state: cameraId -> { occupancy, in, out }
+  const cameraState = new Map<string, { occupancy: number; in: number; out: number }>();
+  // Active subscriptions: cameraId -> unsubscribe function
+  const subscriptions = new Map<string, () => void>();
+
+  function pushGroupEvent(seqId: number) {
+    const perCamera: Array<{ cameraId: string; occupancy: number; in: number; out: number }> = [];
+    let totalOccupancy = 0;
+    let totalIn = 0;
+    let totalOut = 0;
+    for (const [cameraId, state] of cameraState) {
+      perCamera.push({ cameraId, occupancy: state.occupancy, in: state.in, out: state.out });
+      totalOccupancy += state.occupancy;
+      totalIn += state.in;
+      totalOut += state.out;
+    }
+    const payload = {
+      groupId,
+      timestamp: new Date().toISOString(),
+      occupancy: totalOccupancy,
+      totalIn,
+      totalOut,
+      perCamera,
+    };
+    try {
+      res.write(`id: ${seqId}\ndata: ${JSON.stringify(payload)}\n\n`);
+    } catch { /* connection may be closed */ }
+  }
+
+  function applyEventToState(cameraId: string, events: Array<{ eventType: string; value: number }>) {
+    if (!cameraState.has(cameraId)) {
+      cameraState.set(cameraId, { occupancy: 0, in: 0, out: 0 });
+    }
+    const state = cameraState.get(cameraId)!;
+    for (const evt of events) {
+      if (evt.eventType === "occupancy") state.occupancy = evt.value;
+      else if (evt.eventType === "people_in") state.in = evt.value;
+      else if (evt.eventType === "people_out") state.out = evt.value;
+    }
+  }
+
+  function handleEvent(payload: { cameraId: string; events: Array<{ eventType: string; value: number }> }, seqId: number) {
+    applyEventToState(payload.cameraId, payload.events);
+    pushGroupEvent(seqId);
+  }
+
+  function subscribeToCameras(cameraIds: string[]) {
+    for (const cameraId of cameraIds) {
+      if (subscriptions.has(cameraId)) continue;
+      const unsub = analyticsBroadcaster.subscribe(cameraId, handleEvent);
+      subscriptions.set(cameraId, unsub);
+    }
+  }
+
+  function unsubscribeRemovedCameras(currentIds: Set<string>) {
+    for (const [cameraId, unsub] of subscriptions) {
+      if (!currentIds.has(cameraId)) {
+        unsub();
+        subscriptions.delete(cameraId);
+        cameraState.delete(cameraId);
+      }
+    }
+  }
+
+  // Initial subscription
+  const initialMembers = await storage.getGroupMembers(groupId);
+  const memberIdSet = new Set(initialMembers.map((m) => m.id));
+
+  // Replay missed events on reconnect (Last-Event-ID support)
+  const lastEventId = parseInt(req.headers['last-event-id'] as string);
+  if (!isNaN(lastEventId)) {
+    const missed = analyticsBroadcaster.getEventsSince(lastEventId);
+    if (missed) {
+      for (const event of missed) {
+        if (!memberIdSet.has(event.payload.cameraId)) continue;
+        applyEventToState(event.payload.cameraId, event.payload.events);
+      }
+      // After replaying state, push current aggregate with the latest replayed seqId
+      if (missed.length > 0) {
+        pushGroupEvent(missed[missed.length - 1].id);
+      }
+    } else {
+      res.write(`event: reset\ndata: {}\n\n`);
+    }
+  }
+
+  subscribeToCameras(initialMembers.map((m) => m.id));
+
+  // Refresh member list every 60s to handle membership changes
+  const refreshInterval = setInterval(async () => {
+    try {
+      const freshMembers = await storage.getGroupMembers(groupId);
+      const freshIds = new Set(freshMembers.map((m) => m.id));
+      unsubscribeRemovedCameras(freshIds);
+      subscribeToCameras(freshMembers.map((m) => m.id));
+    } catch { /* ignore refresh errors */ }
+  }, 60_000);
+
+  // 30s keepalive
+  const keepalive = setInterval(() => {
+    try {
+      res.write(": keepalive\n\n");
+    } catch { /* connection may be closed */ }
+  }, 30_000);
+
+  req.on("close", () => {
+    for (const unsub of subscriptions.values()) unsub();
+    subscriptions.clear();
+    cameraState.clear();
+    clearInterval(refreshInterval);
+    clearInterval(keepalive);
+  });
 });
 
 export default router;

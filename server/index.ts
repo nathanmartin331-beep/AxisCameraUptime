@@ -9,6 +9,7 @@ import { startCameraMonitoring } from "./cameraMonitor";
 import { startAnalyticsPolling } from "./services/analyticsPoller";
 import { startDataRetentionService } from "./services/dataRetention";
 import { startDataAggregationService } from "./services/dataAggregation";
+import { webhookDeliveryService } from "./services/webhookDelivery";
 import { ensureDefaultUser } from "./defaultUser";
 import { sqlite } from "./db";
 
@@ -152,6 +153,9 @@ app.use((req, res, next) => {
 
     // Start data aggregation service (hourly/daily rollups for scale)
     startDataAggregationService();
+
+    // Start webhook delivery service (forwards analytics + status events)
+    webhookDeliveryService.start();
   });
 
   // Graceful shutdown handlers

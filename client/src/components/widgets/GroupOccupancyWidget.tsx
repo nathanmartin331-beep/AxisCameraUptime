@@ -2,16 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Users } from "lucide-react";
+import { useGroupAnalyticsStream } from "@/hooks/useGroupAnalyticsStream";
 
 interface GroupInfo {
   id: string;
   name: string;
   memberCount: number;
-}
-
-interface OccupancyData {
-  total: number;
-  cameras: Array<{ id: string; name: string; occupancy: number }>;
 }
 
 export function GroupOccupancyWidget() {
@@ -20,20 +16,12 @@ export function GroupOccupancyWidget() {
     queryKey: ["/api/groups"],
   });
 
-  // Get occupancy for the first group that exists
   const firstGroup = groups?.[0];
-  const { data: occupancy, isLoading: occLoading } = useQuery<OccupancyData>({
-    queryKey: ["/api/groups", firstGroup?.id, "occupancy"],
-    queryFn: async () => {
-      const res = await fetch(`/api/groups/${firstGroup!.id}/occupancy`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
-    enabled: !!firstGroup,
-    refetchInterval: 10000,
-  });
 
-  if (groupsLoading || occLoading) {
+  // Live occupancy via SSE stream
+  const stream = useGroupAnalyticsStream(firstGroup?.id);
+
+  if (groupsLoading) {
     return (
       <Card className="h-full">
         <CardHeader className="pb-2">
@@ -71,9 +59,9 @@ export function GroupOccupancyWidget() {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="text-3xl font-bold">{occupancy?.total ?? 0}</div>
+        <div className="text-3xl font-bold">{stream.occupancy}</div>
         <p className="text-xs text-muted-foreground mt-1">
-          Current occupancy across {occupancy?.cameras?.length || 0} cameras
+          Current occupancy across {stream.perCamera.length || firstGroup.memberCount} cameras
         </p>
       </CardContent>
     </Card>
