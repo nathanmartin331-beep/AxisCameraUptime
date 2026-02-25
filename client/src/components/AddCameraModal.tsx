@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Info } from "lucide-react";
+import { Loader2, Info, Eye, EyeOff } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 interface AddCameraModalProps {
@@ -20,6 +20,7 @@ interface AddCameraModalProps {
   onSave?: (camera: CameraFormData) => void;
   initialData?: CameraFormData;
   mode?: "add" | "edit";
+  isPending?: boolean;
 }
 
 export interface CameraFormData {
@@ -51,10 +52,13 @@ export default function AddCameraModal({
   onOpenChange,
   onSave,
   initialData,
-  mode = "add"
+  mode = "add",
+  isPending = false,
 }: AddCameraModalProps) {
   const [formData, setFormData] = useState<CameraFormData>(emptyFormData);
   const [testing, setTesting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   const isEditMode = mode === "edit";
 
@@ -62,11 +66,28 @@ export default function AddCameraModal({
   useEffect(() => {
     if (open) {
       setFormData(initialData || emptyFormData);
+      setShowPassword(false);
+      setErrors({});
     }
   }, [open, initialData]);
 
+  const validate = (): boolean => {
+    const newErrors: Record<string, string> = {};
+    if (!formData.name.trim()) newErrors.name = "Camera name is required";
+    if (!formData.ipAddress.trim()) {
+      newErrors.ipAddress = "IP address is required";
+    } else if (!/^[\d.]+$|^[\da-fA-F:]+$|^[a-zA-Z0-9.-]+$/.test(formData.ipAddress.trim())) {
+      newErrors.ipAddress = "Invalid IP address or hostname";
+    }
+    if (!formData.username.trim()) newErrors.username = "Username is required";
+    if (!isEditMode && !formData.password) newErrors.password = "Password is required";
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!validate()) return;
     onSave?.(formData);
   };
 
@@ -101,10 +122,11 @@ export default function AddCameraModal({
                   id="name"
                   data-testid="input-camera-name"
                   value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  onChange={(e) => { setFormData({ ...formData, name: e.target.value }); setErrors(prev => ({ ...prev, name: "" })); }}
                   placeholder="e.g., Main Entrance"
-                  required
+                  className={errors.name ? "border-red-500" : ""}
                 />
+                {errors.name && <p className="text-xs text-red-500">{errors.name}</p>}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="ipAddress">IP Address *</Label>
@@ -112,13 +134,15 @@ export default function AddCameraModal({
                   id="ipAddress"
                   data-testid="input-ip-address"
                   value={formData.ipAddress}
-                  onChange={(e) => setFormData({ ...formData, ipAddress: e.target.value })}
+                  onChange={(e) => { setFormData({ ...formData, ipAddress: e.target.value }); setErrors(prev => ({ ...prev, ipAddress: "" })); }}
                   placeholder="192.168.1.100 or 203.0.113.50"
-                  required
+                  className={errors.ipAddress ? "border-red-500" : ""}
                 />
-                <p className="text-xs text-muted-foreground">
-                  Private or public IP address
-                </p>
+                {errors.ipAddress ? (
+                  <p className="text-xs text-red-500">{errors.ipAddress}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Private or public IP address</p>
+                )}
               </div>
             </div>
             <div className="grid grid-cols-3 gap-4">
@@ -183,29 +207,44 @@ export default function AddCameraModal({
                   id="username"
                   data-testid="input-username"
                   value={formData.username}
-                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                  onChange={(e) => { setFormData({ ...formData, username: e.target.value }); setErrors(prev => ({ ...prev, username: "" })); }}
                   placeholder="admin"
-                  required
+                  className={errors.username ? "border-red-500" : ""}
                 />
+                {errors.username && <p className="text-xs text-red-500">{errors.username}</p>}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="password">
                   Password {isEditMode ? "(leave blank to keep current)" : "*"}
                 </Label>
-                <Input
-                  id="password"
-                  type="password"
-                  data-testid="input-password"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  placeholder={isEditMode ? "Enter new password to change" : ""}
-                  required={!isEditMode}
-                />
-                {isEditMode && (
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    data-testid="input-password"
+                    value={formData.password}
+                    onChange={(e) => { setFormData({ ...formData, password: e.target.value }); setErrors(prev => ({ ...prev, password: "" })); }}
+                    placeholder={isEditMode ? "Enter new password to change" : ""}
+                    className={errors.password ? "border-red-500 pr-10" : "pr-10"}
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+                    onClick={() => setShowPassword(!showPassword)}
+                    tabIndex={-1}
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4 text-muted-foreground" /> : <Eye className="h-4 w-4 text-muted-foreground" />}
+                  </Button>
+                </div>
+                {errors.password ? (
+                  <p className="text-xs text-red-500">{errors.password}</p>
+                ) : isEditMode ? (
                   <p className="text-xs text-muted-foreground">
                     Only fill in if you want to change the password
                   </p>
-                )}
+                ) : null}
               </div>
             </div>
             <div className="space-y-2">
@@ -256,8 +295,9 @@ export default function AddCameraModal({
             >
               Cancel
             </Button>
-            <Button type="submit" data-testid="button-save">
-              {isEditMode ? "Update Camera" : "Save Camera"}
+            <Button type="submit" data-testid="button-save" disabled={isPending}>
+              {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {isPending ? "Saving..." : isEditMode ? "Update Camera" : "Save Camera"}
             </Button>
           </DialogFooter>
         </form>

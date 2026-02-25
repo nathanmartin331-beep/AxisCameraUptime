@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { Camera, Wifi, TrendingUp, Plus, Upload, Search as SearchIcon, AlertTriangle, Download, Filter, Users, ArrowUpDown, Volume2, Eye, EyeOff, Settings2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
@@ -157,7 +157,12 @@ export default function Dashboard() {
   const [editCameraId, setEditCameraId] = useState<string | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
+  // URL-persisted filters: read initial values from URL search params
+  const getInitialParam = (key: string, fallback: string) => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get(key) || fallback;
+  };
+  const [searchTerm, setSearchTermRaw] = useState(() => getInitialParam("q", ""));
   const [visibleSections, setVisibleSections] = useState<DashboardSections>(loadSectionVisibility);
 
   const toggleSection = (key: keyof DashboardSections) => {
@@ -167,8 +172,35 @@ export default function Dashboard() {
       return next;
     });
   };
-  const [locationFilter, setLocationFilter] = useState<string>("all");
-  const [videoFilter, setVideoFilter] = useState<string>("all");
+  const [locationFilter, setLocationFilterRaw] = useState<string>(() => getInitialParam("location", "all"));
+  const [videoFilter, setVideoFilterRaw] = useState<string>(() => getInitialParam("video", "all"));
+
+  // Sync filter state to URL search params (replaceState to avoid history spam)
+  const updateUrlParams = useCallback((q: string, loc: string, vid: string) => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (loc !== "all") params.set("location", loc);
+    if (vid !== "all") params.set("video", vid);
+    const search = params.toString();
+    const url = window.location.pathname + (search ? `?${search}` : "");
+    window.history.replaceState(null, "", url);
+  }, []);
+
+  const setSearchTerm = useCallback((val: string) => {
+    setSearchTermRaw(val);
+    updateUrlParams(val, locationFilter, videoFilter);
+  }, [locationFilter, videoFilter, updateUrlParams]);
+
+  const setLocationFilter = useCallback((val: string) => {
+    setLocationFilterRaw(val);
+    updateUrlParams(searchTerm, val, videoFilter);
+  }, [searchTerm, videoFilter, updateUrlParams]);
+
+  const setVideoFilter = useCallback((val: string) => {
+    setVideoFilterRaw(val);
+    updateUrlParams(searchTerm, locationFilter, val);
+  }, [searchTerm, locationFilter, updateUrlParams]);
+
   const { toast } = useToast();
   const [, setLocation] = useLocation();
 
@@ -771,6 +803,7 @@ Cameras matching filters: ${filteredCameras.length}
         onOpenChange={setAddCameraOpen}
         onSave={handleAddCamera}
         mode="add"
+        isPending={addMutation.isPending}
       />
 
       <AddCameraModal
@@ -785,6 +818,7 @@ Cameras matching filters: ${filteredCameras.length}
         onSave={handleEditSave}
         initialData={editCameraData}
         mode="edit"
+        isPending={editMutation.isPending}
       />
 
       <NetworkScanModal

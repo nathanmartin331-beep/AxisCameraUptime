@@ -4,13 +4,24 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useQuery } from "@tanstack/react-query";
-import { Plus, Search, Trash2, Eye, Upload, MapPin, Pencil, Lock, Unlock } from "lucide-react";
+import { Plus, Search, Trash2, Eye, Upload, MapPin, Pencil, Lock, Unlock, Loader2 } from "lucide-react";
 import { Link } from "wouter";
 import AddCameraModal, { CameraFormData } from "@/components/AddCameraModal";
 import CSVImportModal from "@/components/CSVImportModal";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useMutation } from "@tanstack/react-query";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Select,
   SelectContent,
@@ -37,6 +48,7 @@ export default function Cameras() {
   const [editCameraId, setEditCameraId] = useState<number | null>(null);
   const [editCameraData, setEditCameraData] = useState<CameraFormData | undefined>(undefined);
   const [showImportDialog, setShowImportDialog] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [locationFilter, setLocationFilter] = useState<string>("all");
   const [csvContent, setCsvContent] = useState("");
@@ -125,8 +137,7 @@ export default function Cameras() {
   });
 
   const handleDeleteCamera = (cameraId: number) => {
-    if (!confirm("Are you sure you want to delete this camera?")) return;
-    deleteMutation.mutate(cameraId);
+    setDeleteConfirmId(cameraId);
   };
 
   const handleAddCamera = (data: CameraFormData) => {
@@ -287,7 +298,24 @@ export default function Cameras() {
         </CardHeader>
         <CardContent>
           {isLoading ? (
-            <div className="text-center py-8 text-muted-foreground">Loading cameras...</div>
+            <div className="space-y-3">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="flex items-center justify-between p-4 rounded-lg border">
+                  <div className="flex items-center gap-4 flex-1">
+                    <div className="flex-1 space-y-2">
+                      <Skeleton className="h-4 w-40" />
+                      <Skeleton className="h-3 w-28" />
+                    </div>
+                    <Skeleton className="h-5 w-16 rounded-full" />
+                  </div>
+                  <div className="flex gap-2">
+                    <Skeleton className="h-8 w-8 rounded-md" />
+                    <Skeleton className="h-8 w-8 rounded-md" />
+                    <Skeleton className="h-8 w-8 rounded-md" />
+                  </div>
+                </div>
+              ))}
+            </div>
           ) : filteredCameras.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               {searchQuery || locationFilter !== "all" 
@@ -378,6 +406,7 @@ export default function Cameras() {
         onOpenChange={setShowAddDialog}
         onSave={handleAddCamera}
         mode="add"
+        isPending={addMutation.isPending}
       />
       <AddCameraModal
         open={showEditDialog}
@@ -391,6 +420,7 @@ export default function Cameras() {
         onSave={handleEditSave}
         initialData={editCameraData}
         mode="edit"
+        isPending={editMutation.isPending}
       />
       <CSVImportModal
         open={showImportDialog}
@@ -399,6 +429,34 @@ export default function Cameras() {
         csvContent={csvContent}
         onCsvContentChange={setCsvContent}
       />
+
+      <AlertDialog open={deleteConfirmId !== null} onOpenChange={(open) => { if (!open) setDeleteConfirmId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Camera</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete this camera and all its monitoring history. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteMutation.isPending}
+              onClick={() => {
+                if (deleteConfirmId !== null) {
+                  deleteMutation.mutate(deleteConfirmId, {
+                    onSuccess: () => setDeleteConfirmId(null),
+                  });
+                }
+              }}
+            >
+              {deleteMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
