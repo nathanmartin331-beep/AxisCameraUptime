@@ -57,7 +57,19 @@ router.get("/api/cameras/:id", requireApiKeyOrAuth, async (req: any, res) => {
     if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
 
     const { encryptedPassword, ...safeCamera } = camera;
-    res.json(safeCamera);
+
+    // Build data provenance metadata
+    const caps = camera.capabilities as any;
+    const earliest = await storage.getEarliestEvent(camera.id);
+    const dataProvenance = {
+      historyBackfilled: !!camera.historyBackfilled,
+      tvpcBackfilled: !!caps?.analytics?.tvpcHistoryBackfilled,
+      earliestDataDate: earliest?.timestamp
+        ? new Date(earliest.timestamp).toISOString()
+        : null,
+    };
+
+    res.json({ ...safeCamera, dataProvenance });
   } catch (error) {
     console.error("Error fetching camera:", error);
     sendError(res, 500, "Failed to fetch camera");

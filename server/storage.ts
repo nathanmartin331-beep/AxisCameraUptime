@@ -240,6 +240,7 @@ export interface IStorage {
     perCamera: Array<{ id: string; name: string; in: number; out: number; occupancy: number }>;
   }>;
   getGroupAnalyticsDailyTotals(memberIds: string[], eventType: string, days: number): Promise<Array<{ date: string; total: number }>>;
+  getGroupAnalyticsDailyTotalsPerCamera(memberIds: string[], eventType: string, days: number): Promise<Record<string, Array<{ date: string; total: number }>>>;
   getFleetAnalyticsSummary(userId: string): Promise<{
     groups: Array<{
       groupId: string;
@@ -1771,6 +1772,120 @@ export class DatabaseStorage implements IStorage {
     return Array.from(dailyMap.entries())
       .map(([date, total]) => ({ date, total }))
       .sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  async getGroupAnalyticsDailyTotalsPerCamera(
+    memberIds: string[],
+    eventType: string,
+    days: number
+  ): Promise<Record<string, Array<{ date: string; total: number }>>> {
+    if (memberIds.length === 0) return {};
+
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    startDate.setHours(0, 0, 0, 0);
+    const startTs = Math.floor(startDate.getTime() / 1000);
+    const endTs = Math.floor(endDate.getTime() / 1000);
+
+    // cameraId -> dateKey -> best total
+    const cameraDaily = new Map<string, Map<string, number>>();
+    const placeholders = memberIds.map(() => "?").join(",");
+    const toDateKey = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const ensure = (camId: string) => {
+      if (!cameraDaily.has(camId)) cameraDaily.set(camId, new Map());
+      return cameraDaily.get(camId)!;
+    };
+
+    // Tier 3: Daily summary per camera
+    const dailyRows = sqlite.prepare(`
+      SELECT camera_id, day_start, SUM(max_value) as total
+      FROM analytics_daily_summary
+      WHERE camera_id IN (${placeholders}) AND event_type = ? AND day_start >= ? AND day_start <= ?
+      GROUP BY camera_id, day_start
+    `).all(...memberIds, eventType, startTs, endTs) as Array<{ camera_id: string; day_start: number; total: number }>;
+
+    for (const row of dailyRows) {
+      const m = ensure(row.camera_id);
+      const dk = toDateKey(new Date(row.day_start * 1000));
+      m.set(dk, (m.get(dk) || 0) + (row.total ?? 0));
+    }
+
+    // Tier 2: Hourly summary per camera — max per day
+    const hourlyRows = sqlite.prepare(`
+      SELECT camera_id, hour_start, SUM(max_value) as total
+      FROM analytics_hourly_summary
+      WHERE camera_id IN (${placeholders}) AND event_type = ? AND hour_start >= ? AND hour_start <= ?
+      GROUP BY camera_id, hour_start
+    `).all(...memberIds, eventType, startTs, endTs) as Array<{ camera_id: string; hour_start: number; total: number }>;
+
+    const hourlyDayMax = new Map<string, Map<string, number>>(); // camId -> dateKey -> max
+    for (const row of hourlyRows) {
+      const dk = toDateKey(new Date(row.hour_start * 1000));
+      if (!hourlyDayMax.has(row.camera_id)) hourlyDayMax.set(row.camera_id, new Map());
+      const camMap = hourlyDayMax.get(row.camera_id)!;
+      const hourVal = row.total ?? 0;
+      const existing = camMap.get(dk);
+      if (existing === undefined || hourVal > existing) camMap.set(dk, hourVal);
+    }
+    for (const [camId, dayMaxMap] of hourlyDayMax) {
+      const m = ensure(camId);
+      for (const [dk, maxVal] of dayMaxMap) {
+        if (maxVal > (m.get(dk) || 0)) m.set(dk, maxVal);
+      }
+    }
+
+    // Tier 1: Raw events per camera — same dedup logic
+    const rawRows = sqlite.prepare(`
+      SELECT camera_id, timestamp, value, metadata
+      FROM analytics_events
+      WHERE camera_id IN (${placeholders}) AND event_type = ? AND timestamp >= ? AND timestamp <= ?
+    `).all(...memberIds, eventType, startDate.toISOString(), endDate.toISOString()) as Array<{
+      camera_id: string; timestamp: string; value: number; metadata: string | null;
+    }>;
+
+    const perCameraRaw = new Map<string, Map<string, Map<number, number>>>();
+    for (const row of rawRows) {
+      let meta: Record<string, any> | undefined;
+      if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
+      const scenario = meta?.scenario || "default";
+      const ts = new Date(row.timestamp).getTime();
+      if (!perCameraRaw.has(row.camera_id)) perCameraRaw.set(row.camera_id, new Map());
+      const scenarioMap = perCameraRaw.get(row.camera_id)!;
+      if (!scenarioMap.has(scenario)) scenarioMap.set(scenario, new Map());
+      const tsMap = scenarioMap.get(scenario)!;
+      const existing = tsMap.get(ts);
+      if (existing === undefined || row.value > existing) tsMap.set(ts, row.value);
+    }
+
+    for (const [camId, scenarioMap] of perCameraRaw) {
+      const cameraTimestampSums = new Map<number, number>();
+      for (const [, tsMap] of scenarioMap) {
+        for (const [ts, val] of tsMap) {
+          cameraTimestampSums.set(ts, (cameraTimestampSums.get(ts) || 0) + val);
+        }
+      }
+      const cameraDayMax = new Map<string, number>();
+      for (const [ts, sum] of cameraTimestampSums) {
+        const dk = toDateKey(new Date(ts));
+        const existing = cameraDayMax.get(dk);
+        if (existing === undefined || sum > existing) cameraDayMax.set(dk, sum);
+      }
+      const m = ensure(camId);
+      for (const [dk, dayMax] of cameraDayMax) {
+        if (dayMax > (m.get(dk) || 0)) m.set(dk, dayMax);
+      }
+    }
+
+    // Convert to result shape
+    const result: Record<string, Array<{ date: string; total: number }>> = {};
+    for (const [camId, dayMap] of cameraDaily) {
+      result[camId] = Array.from(dayMap.entries())
+        .map(([date, total]) => ({ date, total }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+    }
+    return result;
   }
 
   async getFleetAnalyticsSummary(userId: string): Promise<{

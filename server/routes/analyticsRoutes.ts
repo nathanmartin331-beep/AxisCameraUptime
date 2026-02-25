@@ -265,7 +265,12 @@ router.get("/api/groups/:id/analytics/daily", requireApiKeyOrAuth, async (req: a
     const memberIds = members.map((m) => m.id);
 
     const dailyTotals = await storage.getGroupAnalyticsDailyTotals(memberIds, eventType, days);
-    res.json({ groupId, eventType, days, dailyTotals });
+    if (req.query.perCamera === "true") {
+      const perCameraTotals = await storage.getGroupAnalyticsDailyTotalsPerCamera(memberIds, eventType, days);
+      res.json({ groupId, eventType, days, dailyTotals, perCamera: perCameraTotals });
+    } else {
+      res.json({ groupId, eventType, days, dailyTotals });
+    }
   } catch (error) {
     console.error("Error fetching group daily analytics:", error);
     sendError(res, 500, "Failed to fetch group daily analytics");

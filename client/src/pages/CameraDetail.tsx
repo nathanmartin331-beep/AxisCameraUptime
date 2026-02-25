@@ -6,6 +6,7 @@ import UptimeChart from "@/components/UptimeChart";
 import AddCameraModal, { CameraFormData } from "@/components/AddCameraModal";
 import AnalyticsSection from "@/components/analytics/AnalyticsSection";
 import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   AlertDialog,
@@ -23,6 +24,7 @@ import { apiRequest } from "@/lib/queryClient";
 import type { Camera, UptimeEvent } from "@shared/schema";
 import type { CameraStatus } from "@/components/StatusIndicator";
 import { useState } from "react";
+import { History } from "lucide-react";
 
 interface UptimeResponse {
   percentage: number;
@@ -482,11 +484,24 @@ export default function CameraDetail() {
       />
 
       {(hasOccupancy || hasCrossline) && (
-        <AnalyticsSection
-          cameraId={cameraId!}
-          hasOccupancy={!!hasOccupancy}
-          hasCrossline={!!hasCrossline}
-        />
+        <>
+          {(camera as any).dataProvenance?.earliestDataDate && (
+            ((camera as any).dataProvenance.tvpcBackfilled || (camera as any).dataProvenance.historyBackfilled) && (
+              <Badge variant="secondary" className="flex items-center gap-1.5 w-fit">
+                <History className="h-3 w-3" />
+                Historical data since{" "}
+                {new Date((camera as any).dataProvenance.earliestDataDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                {(camera as any).dataProvenance.tvpcBackfilled ? " (TVPC import)" : " (uptime backfill)"}
+              </Badge>
+            )
+          )}
+          <AnalyticsSection
+            cameraId={cameraId!}
+            hasOccupancy={!!hasOccupancy}
+            hasCrossline={!!hasCrossline}
+            dataProvenance={(camera as any).dataProvenance}
+          />
+        </>
       )}
 
       <AddCameraModal

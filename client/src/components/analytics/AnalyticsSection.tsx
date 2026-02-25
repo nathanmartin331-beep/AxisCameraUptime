@@ -36,13 +36,20 @@ function loadVisibility(): Record<AnalyticsCardKey, boolean> {
   return getDefaultVisibility();
 }
 
+interface DataProvenance {
+  historyBackfilled?: boolean;
+  tvpcBackfilled?: boolean;
+  earliestDataDate?: string;
+}
+
 interface AnalyticsSectionProps {
   cameraId: string;
   hasOccupancy: boolean;
   hasCrossline: boolean;
+  dataProvenance?: DataProvenance;
 }
 
-export default function AnalyticsSection({ cameraId, hasOccupancy, hasCrossline }: AnalyticsSectionProps) {
+export default function AnalyticsSection({ cameraId, hasOccupancy, hasCrossline, dataProvenance }: AnalyticsSectionProps) {
   const [cardVisibility, setCardVisibility] = useState<Record<AnalyticsCardKey, boolean>>(loadVisibility);
   const [trendDays, setTrendDays] = useState(7);
 
@@ -144,7 +151,14 @@ export default function AnalyticsSection({ cameraId, hasOccupancy, hasCrossline 
                   <BarChart3 className="h-5 w-5" />
                   Live Analytics
                 </CardTitle>
-                <CardDescription>Real-time analytics data from this camera (last 24h)</CardDescription>
+                <CardDescription>
+                  Real-time analytics data from this camera (last 24h)
+                  {dataProvenance?.earliestDataDate && (
+                    <span className="block text-xs text-muted-foreground mt-1">
+                      Data available since {new Date(dataProvenance.earliestDataDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                    </span>
+                  )}
+                </CardDescription>
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 {analyticsData?.latest && (

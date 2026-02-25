@@ -28,6 +28,7 @@ import {
 } from "recharts";
 import { ArrowLeft, Users, UserPlus, TrendingUp, TrendingDown } from "lucide-react";
 import { Link } from "wouter";
+import GroupDailyTrendsChart from "@/components/analytics/GroupDailyTrendsChart";
 
 interface GroupMember {
   id: string;
@@ -138,6 +139,17 @@ export default function GroupDetail() {
       return res.json();
     },
     enabled: !!groupId,
+  });
+
+  // Fetch daily totals for the bar chart (7d+)
+  const { data: dailyData } = useQuery<DailyData>({
+    queryKey: ["/api/groups", groupId, "daily-chart", trendDays, trendEventType],
+    queryFn: async () => {
+      const res = await fetch(`/api/groups/${groupId}/analytics/daily?eventType=${trendEventType}&days=${trendDays}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: !!groupId && trendDays >= 7,
   });
 
   // Fetch all cameras for manage members dialog
@@ -477,6 +489,15 @@ export default function GroupDetail() {
           )}
         </CardContent>
       </Card>
+
+      {/* Daily Totals Bar Chart */}
+      {dailyData?.dailyTotals && dailyData.dailyTotals.length > 0 && (
+        <GroupDailyTrendsChart
+          dailyTotals={dailyData.dailyTotals}
+          eventType={trendEventType}
+          groupColor={groupColor}
+        />
+      )}
 
       {/* Member Cameras Table */}
       <Card>
