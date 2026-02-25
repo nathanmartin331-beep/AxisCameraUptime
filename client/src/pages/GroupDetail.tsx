@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { useParams } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -159,13 +159,6 @@ export default function GroupDetail() {
     },
     enabled: !!groupId,
   });
-
-  // Auto-fallback: if occupancy trend returns empty, try line_crossing
-  useEffect(() => {
-    if (trendEventType === "occupancy" && trend && trend.trend.length === 0) {
-      setTrendEventType("line_crossing");
-    }
-  }, [trend, trendEventType]);
 
   // Fetch all cameras for manage members dialog
   const { data: allCameras } = useQuery<AllCamera[]>({
