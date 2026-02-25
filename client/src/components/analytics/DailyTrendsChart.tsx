@@ -112,7 +112,7 @@ export default function DailyTrendsChart({
                 <Bar key={name} dataKey={name} fill={SCENARIO_COLORS[i % SCENARIO_COLORS.length].hex} radius={[4, 4, 0, 0]} />
               ))}
               {lcScenarioNames.length > 1 && (
-                <Bar dataKey="_total" fill="#6b7280" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="_total" fill="#78716C" radius={[4, 4, 0, 0]} />
               )}
             </BarChart>
           </ResponsiveContainer>
@@ -187,8 +187,8 @@ export default function DailyTrendsChart({
                 ]}
               />
               <Legend formatter={(value) => value === "entering" ? "Entering" : "Exiting"} />
-              <Bar dataKey="entering" fill="#22c55e" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="exiting" fill="#ef4444" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="entering" fill="#E30613" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="exiting" fill="#374151" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </CardContent>
@@ -231,7 +231,7 @@ export default function DailyTrendsChart({
               formatter={(value: number) => [value.toLocaleString(), "Total Crossings"]}
             />
             <Legend formatter={() => "Total Crossings"} />
-            <Bar dataKey="crossings" fill="#a855f7" radius={[4, 4, 0, 0]} />
+            <Bar dataKey="crossings" fill="#C2185B" radius={[4, 4, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </CardContent>

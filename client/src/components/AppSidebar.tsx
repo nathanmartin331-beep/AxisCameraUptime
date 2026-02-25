@@ -85,12 +85,14 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader className="border-b px-6 py-4">
         <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <Camera className="h-5 w-5" />
-          </div>
+          <img
+            src="/4s-logo.webp"
+            alt="4S Security"
+            className="h-8 w-8 rounded object-cover object-left"
+          />
           <div>
-            <p className="text-sm font-semibold">Axis Monitor</p>
-            <p className="text-xs text-muted-foreground">Camera Uptime</p>
+            <p className="text-sm font-semibold">Axis Monitoring</p>
+            <p className="text-xs text-muted-foreground">Utility</p>
           </div>
         </div>
       </SidebarHeader>

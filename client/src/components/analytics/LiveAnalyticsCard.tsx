@@ -94,17 +94,17 @@ export function AnalyticsCard({
 
 // Scenario colors for per-scenario cards and chart bars
 export const SCENARIO_COLORS = [
-  { text: "text-blue-600",    bg: "bg-blue-50",    hex: "#2563eb" },
-  { text: "text-amber-600",   bg: "bg-amber-50",   hex: "#d97706" },
-  { text: "text-teal-600",    bg: "bg-teal-50",    hex: "#0d9488" },
-  { text: "text-pink-600",    bg: "bg-pink-50",    hex: "#db2777" },
-  { text: "text-indigo-600",  bg: "bg-indigo-50",  hex: "#4f46e5" },
-  { text: "text-orange-600",  bg: "bg-orange-50",  hex: "#ea580c" },
-  { text: "text-cyan-600",    bg: "bg-cyan-50",    hex: "#0891b2" },
-  { text: "text-rose-600",    bg: "bg-rose-50",    hex: "#e11d48" },
+  { text: "text-red-600",      bg: "bg-red-50",      hex: "#E30613" },
+  { text: "text-rose-700",    bg: "bg-rose-50",     hex: "#BE185D" },
+  { text: "text-orange-600",  bg: "bg-orange-50",   hex: "#EA580C" },
+  { text: "text-amber-700",   bg: "bg-amber-50",    hex: "#B45309" },
+  { text: "text-pink-700",    bg: "bg-pink-50",     hex: "#9F1239" },
+  { text: "text-red-800",     bg: "bg-red-100",     hex: "#991B1B" },
+  { text: "text-orange-800",  bg: "bg-orange-100",  hex: "#9A3412" },
+  { text: "text-rose-800",    bg: "bg-rose-100",    hex: "#881337" },
 ];
 
 export const SCENARIO_COLORS_LIGHT = [
-  "#93c5fd", "#fcd34d", "#5eead4", "#f9a8d4",
-  "#a5b4fc", "#fdba74", "#67e8f9", "#fda4af",
+  "#fca5a5", "#fda4af", "#fdba74", "#fcd34d",
+  "#f9a8d4", "#fecaca", "#fed7aa", "#fecdd3",
 ];

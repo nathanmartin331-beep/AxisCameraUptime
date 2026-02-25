@@ -10,11 +10,11 @@ interface UptimeData {
 }
 
 const BUCKETS = [
-  { label: "<90%", min: 0, max: 90, color: "#ef4444" },
-  { label: "90-95%", min: 90, max: 95, color: "#f97316" },
-  { label: "95-99%", min: 95, max: 99, color: "#eab308" },
-  { label: "99-99.9%", min: 99, max: 99.9, color: "#22c55e" },
-  { label: ">99.9%", min: 99.9, max: 101, color: "#16a34a" },
+  { label: "<90%", min: 0, max: 90, color: "#E30613" },
+  { label: "90-95%", min: 90, max: 95, color: "#C2185B" },
+  { label: "95-99%", min: 95, max: 99, color: "#AD1457" },
+  { label: "99-99.9%", min: 99, max: 99.9, color: "#880E4F" },
+  { label: ">99.9%", min: 99.9, max: 101, color: "#4A1C2A" },
 ];
 
 export function UptimeDistributionWidget() {
