@@ -6,6 +6,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/hooks/useAuth";
 import { Bell, Clock, Database, User, Lock, AlertTriangle, Loader2, Save, Shield } from "lucide-react";
+import ApiKeysSection from "@/components/settings/ApiKeysSection";
+import WebhooksSection from "@/components/settings/WebhooksSection";
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -424,6 +426,10 @@ export default function Settings() {
             )}
           </CardContent>
         </Card>
+
+        <ApiKeysSection />
+
+        <WebhooksSection />
 
         <Card>
           <CardHeader>
