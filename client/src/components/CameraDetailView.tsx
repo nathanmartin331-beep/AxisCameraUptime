@@ -1,9 +1,10 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import StatusIndicator, { CameraStatus } from "./StatusIndicator";
 import { Switch } from "@/components/ui/switch";
-import { Edit, Trash2, ArrowLeft, RefreshCw, Move, Mic, Camera as CameraIcon, Info, BarChart3, AlertTriangle, CheckCircle, Clock } from "lucide-react";
+import { Edit, Trash2, ArrowLeft, RefreshCw, Move, Mic, Camera as CameraIcon, Info, BarChart3, AlertTriangle, CheckCircle, Clock, ShieldAlert, Shield } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -25,7 +26,8 @@ interface CameraDetails {
   ipAddress: string;
   protocol?: string;
   port?: number;
-  verifySslCert?: boolean;
+  certValidationMode?: "none" | "tofu" | "ca";
+  certMismatch?: boolean;
   location: string;
   status: CameraStatus;
   currentUptime: string;
@@ -81,6 +83,7 @@ interface CameraDetailViewProps {
   onProbeAnalytics?: () => void;
   probingAnalytics?: boolean;
   onToggleAnalytic?: (key: string, enabled: boolean) => void;
+  onRepinCert?: () => void;
 }
 
 export default function CameraDetailView({
@@ -93,6 +96,7 @@ export default function CameraDetailView({
   onProbeAnalytics,
   probingAnalytics = false,
   onToggleAnalytic,
+  onRepinCert,
 }: CameraDetailViewProps) {
   return (
     <div className="space-y-6" data-testid="camera-detail-view">
@@ -132,6 +136,22 @@ export default function CameraDetailView({
           </Button>
         </div>
       </div>
+
+      {camera.certMismatch && (
+        <Alert variant="destructive" className="border-orange-500 bg-orange-50 dark:bg-orange-950/20">
+          <ShieldAlert className="h-4 w-4 text-orange-600" />
+          <AlertDescription className="flex items-center justify-between">
+            <span className="text-orange-800 dark:text-orange-200">
+              Certificate Mismatch Detected — The TLS certificate changed without a detected reboot.
+            </span>
+            {onRepinCert && (
+              <Button variant="outline" size="sm" onClick={onRepinCert} className="ml-4 shrink-0">
+                Re-pin Certificate
+              </Button>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Model Information Card */}
@@ -561,6 +581,24 @@ export default function CameraDetailView({
                 )}
               </span>
             </div>
+            {camera.protocol === 'https' && (
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-muted-foreground">Cert Validation</span>
+                <Badge
+                  variant="outline"
+                  className={
+                    camera.certValidationMode === "ca"
+                      ? "border-green-500 text-green-700 bg-green-50"
+                      : camera.certValidationMode === "tofu"
+                      ? "border-blue-500 text-blue-700 bg-blue-50"
+                      : "border-gray-400 text-gray-600 bg-gray-50"
+                  }
+                >
+                  <Shield className="mr-1 h-3 w-3" />
+                  {camera.certValidationMode === "ca" ? "CA Verified" : camera.certValidationMode === "tofu" ? "TOFU" : "None"}
+                </Badge>
+              </div>
+            )}
             {camera.sslFingerprint && (
               <TooltipProvider>
                 <div className="flex justify-between">

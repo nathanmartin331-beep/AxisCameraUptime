@@ -19,6 +19,9 @@ import type { InsertUptimeEvent } from "@shared/schema";
 const POLL_CONCURRENCY = parseInt(process.env.POLL_CONCURRENCY || "25", 10);
 const limit = pLimit(POLL_CONCURRENCY);
 
+// Per-user global CA cert cache (refreshed each poll cycle)
+const userCaCertCache = new Map<string, string | null>();
+
 // Cache the VAPIX protocol variant per camera IP to avoid redundant GET→POST retries.
 // "json" = modern JSON POST API, "legacy" = key=value GET, "param" = param.cgi fallback
 const protocolCache = new Map<string, "json" | "legacy" | "param">();
@@ -795,28 +798,33 @@ async function pollSingleCamera(camera: any, conn: CameraConnectionInfo): Promis
     });
   }
 
-  // TOFU SSL fingerprint capture/verification (HTTPS cameras only, fire-and-forget)
-  if (conn.protocol === "https") {
+  // Mode-gated TLS fingerprint capture/verification (HTTPS cameras only, fire-and-forget)
+  // "none" → skip entirely (no overhead)
+  // "ca"  → skip (CA handles trust)
+  // "tofu" → capture, pin on first use, enforce on subsequent connections
+  const certMode = conn.certValidationMode || "none";
+  if (conn.protocol === "https" && certMode === "tofu") {
     const port = conn.port || 443;
     captureSslFingerprint(camera.ipAddress, port).then(async (fingerprint) => {
       if (!fingerprint) return;
       const now = new Date();
 
       if (!camera.sslFingerprint) {
-        // First connection — trust on first use
+        // First connection — trust on first use, pin the cert
         await db.update(cameras)
           .set({
             sslFingerprint: fingerprint,
             sslFingerprintFirstSeen: now,
             sslFingerprintLastVerified: now,
+            certMismatch: false,
             updatedAt: now,
           })
           .where(eq(cameras.id, camera.id));
         console.log(`[Monitor] TOFU: pinned SSL cert for ${camera.name} (${fingerprint.substring(0, 16)}...)`);
       } else if (camera.sslFingerprint === fingerprint) {
-        // Same cert — update last verified timestamp
+        // Same cert — update last verified, clear any stale mismatch flag
         await db.update(cameras)
-          .set({ sslFingerprintLastVerified: now, updatedAt: now })
+          .set({ sslFingerprintLastVerified: now, certMismatch: false, updatedAt: now })
           .where(eq(cameras.id, camera.id));
       } else {
         // Fingerprint changed — check if camera rebooted (cert regenerated)
@@ -828,12 +836,16 @@ async function pollSingleCamera(camera: any, conn: CameraConnectionInfo): Promis
               sslFingerprint: fingerprint,
               sslFingerprintFirstSeen: now,
               sslFingerprintLastVerified: now,
+              certMismatch: false,
               updatedAt: now,
             })
             .where(eq(cameras.id, camera.id));
           console.log(`[Monitor] TOFU: cert changed after reboot for ${camera.name}, re-pinned (${fingerprint.substring(0, 16)}...)`);
         } else {
-          // Cert changed without reboot — potential MITM, log warning
+          // Cert changed without reboot — potential MITM, flag for UI
+          await db.update(cameras)
+            .set({ certMismatch: true, updatedAt: now })
+            .where(eq(cameras.id, camera.id));
           console.warn(
             `[Monitor] TOFU WARNING: SSL cert changed for ${camera.name} (${camera.ipAddress}) without reboot! ` +
             `Old: ${camera.sslFingerprint.substring(0, 16)}... New: ${fingerprint.substring(0, 16)}...`
@@ -879,6 +891,18 @@ async function pollCameraWithFallback(
   const startTime = Date.now();
   try {
     const conn = getConnectionInfo(camera);
+    // Inject global CA cert for cameras in "ca" mode
+    if (conn.certValidationMode === "ca" && camera.userId) {
+      if (!userCaCertCache.has(camera.userId)) {
+        try {
+          const settings = await storage.getUserSettings(camera.userId);
+          userCaCertCache.set(camera.userId, (settings as any).globalCaCert || null);
+        } catch {
+          userCaCertCache.set(camera.userId, null);
+        }
+      }
+      conn.caCert = userCaCertCache.get(camera.userId) || null;
+    }
     const result = await pollSingleCamera(camera, conn);
     pendingStatusUpdates.push(result.statusUpdate);
     pendingEvents.push(result.pendingEvent);
@@ -888,7 +912,7 @@ async function pollCameraWithFallback(
     // Auto-fallback: if camera is on HTTP and unreachable, try HTTPS
     if (conn.protocol === "http") {
       try {
-        const httpsConn: CameraConnectionInfo = { protocol: "https", port: 443, verifySslCert: false };
+        const httpsConn: CameraConnectionInfo = { protocol: "https", port: 443, verifySslCert: false, certValidationMode: conn.certValidationMode || "none" };
         const result = await pollSingleCamera(camera, httpsConn);
 
         if (result.pendingEvent.videoStatus === "video_ok" || result.pendingEvent.videoStatus === "not_applicable") {
@@ -912,7 +936,7 @@ async function pollCameraWithFallback(
     // Self-healing: if camera was auto-migrated to HTTPS but is now unreachable, try HTTP
     if (conn.protocol === "https") {
       try {
-        const httpConn: CameraConnectionInfo = { protocol: "http", port: 80, verifySslCert: false };
+        const httpConn: CameraConnectionInfo = { protocol: "http", port: 80, verifySslCert: false, certValidationMode: "none" };
         const result = await pollSingleCamera(camera, httpConn);
 
         if (result.pendingEvent.videoStatus === "video_ok" || result.pendingEvent.videoStatus === "not_applicable") {
@@ -972,6 +996,9 @@ function broadcastStatusChanges(
 
 async function checkAllCameras() {
   console.log("[Monitor] Starting camera polling cycle...");
+
+  // Clear per-user CA cert cache each cycle to pick up setting changes
+  userCaCertCache.clear();
 
   try {
     const allCameras = await db.select().from(cameras);

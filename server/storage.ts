@@ -237,7 +237,7 @@ export interface IStorage {
 
   // User settings operations
   getUserSettings(userId: string): Promise<UserSettings>;
-  updateUserSettings(userId: string, settings: Partial<Pick<UserSettings, 'pollingInterval' | 'dataRetentionDays' | 'emailNotifications'>>): Promise<UserSettings>;
+  updateUserSettings(userId: string, settings: Partial<Pick<UserSettings, 'pollingInterval' | 'dataRetentionDays' | 'emailNotifications' | 'defaultCertValidationMode' | 'globalCaCert'>>): Promise<UserSettings>;
 
   // Data retention cleanup
   deleteOldUptimeEvents(beforeDate: Date): Promise<number>;
@@ -1432,7 +1432,7 @@ export class DatabaseStorage implements IStorage {
 
   async updateUserSettings(
     userId: string,
-    settings: Partial<Pick<UserSettings, 'pollingInterval' | 'dataRetentionDays' | 'emailNotifications'>>
+    settings: Partial<Pick<UserSettings, 'pollingInterval' | 'dataRetentionDays' | 'emailNotifications' | 'defaultCertValidationMode' | 'globalCaCert'>>
   ): Promise<UserSettings> {
     // Ensure settings row exists
     await this.getUserSettings(userId);

@@ -17,7 +17,9 @@ import { readFileSync, existsSync } from "fs";
 export interface CameraConnectionInfo {
   protocol?: string;       // "http" | "https" (default: "http")
   port?: number;           // 80/443/custom (default: 80)
-  verifySslCert?: boolean; // false = accept self-signed (default: false)
+  verifySslCert?: boolean; // false = accept self-signed (default: false) — derived from certValidationMode
+  certValidationMode?: "none" | "tofu" | "ca"; // TLS validation strategy
+  caCert?: string | null;  // PEM from global settings, passed in by caller
 }
 
 /**
@@ -57,10 +59,9 @@ const agentCache = new Map<string, Agent>();
  * Get an undici Agent (dispatcher) for HTTPS connections.
  * Returns undefined for HTTP connections (no dispatcher needed).
  *
- * For HTTPS, creates and caches an Agent with the appropriate
- * rejectUnauthorized setting. Self-signed certs are accepted
- * by default (verifySslCert=false) since most Axis cameras
- * ship with self-signed certificates.
+ * Dispatchers are keyed by validation mode:
+ * - "none" / "tofu" → rejectUnauthorized: false (TOFU enforcement happens in monitor)
+ * - "ca" → rejectUnauthorized: true + ca cert (from conn.caCert, env var, or system)
  */
 export function getCameraDispatcher(
   conn?: CameraConnectionInfo
@@ -68,16 +69,29 @@ export function getCameraDispatcher(
   const protocol = conn?.protocol || "http";
   if (protocol !== "https") return undefined;
 
-  const verify = conn?.verifySslCert ?? false;
-  const key = `verify=${verify}`;
+  const mode = conn?.certValidationMode || "none";
+  const verify = mode === "ca";
+
+  // Build cache key: "none" or "ca:<prefix>" to bound cache size
+  let key: string;
+  if (mode === "ca" && conn?.caCert) {
+    const prefix = createHash("sha256").update(conn.caCert.substring(0, 64)).digest("hex").substring(0, 12);
+    key = `ca:${prefix}`;
+  } else if (mode === "ca") {
+    key = "ca:env";
+  } else {
+    key = "none";
+  }
 
   let agent = agentCache.get(key);
   if (!agent) {
     const connectOpts: Record<string, any> = {
       rejectUnauthorized: verify,
     };
-    // Inject custom CA if available (enterprise internal CAs)
-    if (customCaCert) {
+    // Inject CA cert: prefer conn.caCert (user-uploaded), then env var, then system default
+    if (mode === "ca" && conn?.caCert) {
+      connectOpts.ca = Buffer.from(conn.caCert);
+    } else if (customCaCert) {
       connectOpts.ca = customCaCert;
     }
     agent = new Agent({ connect: connectOpts });
@@ -87,18 +101,36 @@ export function getCameraDispatcher(
 }
 
 /**
+ * Clear the cached HTTPS agents. Call when global CA cert changes.
+ */
+export function clearAgentCache(): void {
+  for (const agent of agentCache.values()) {
+    agent.close();
+  }
+  agentCache.clear();
+}
+
+/**
  * Extract CameraConnectionInfo from a camera database record.
  * Provides safe defaults for cameras that predate the SSL fields.
+ */
+/**
+ * Extract CameraConnectionInfo from a camera database record.
+ * Provides safe defaults for cameras that predate the TLS cert validation fields.
+ * Derives verifySslCert from certValidationMode for backward compat.
  */
 export function getConnectionInfo(camera: {
   protocol?: string | null;
   port?: number | null;
   verifySslCert?: boolean | null;
+  certValidationMode?: string | null;
 }): CameraConnectionInfo {
+  const mode = (camera.certValidationMode as "none" | "tofu" | "ca") || "none";
   return {
     protocol: camera.protocol || "http",
     port: camera.port || (camera.protocol === "https" ? 443 : 80),
-    verifySslCert: camera.verifySslCert ?? false,
+    verifySslCert: mode === "ca",
+    certValidationMode: mode,
   };
 }
 

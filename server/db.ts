@@ -35,6 +35,15 @@ ensureColumn('analytics_daily_summary', 'scenario', "TEXT NOT NULL DEFAULT 'defa
 ensureColumn('cameras', 'ssl_fingerprint', 'TEXT');
 ensureColumn('cameras', 'ssl_fingerprint_first_seen', 'INTEGER');
 ensureColumn('cameras', 'ssl_fingerprint_last_verified', 'INTEGER');
+ensureColumn('cameras', 'cert_validation_mode', "TEXT NOT NULL DEFAULT 'none'");
+ensureColumn('cameras', 'cert_mismatch', "INTEGER NOT NULL DEFAULT 0");
+ensureColumn('user_settings', 'default_cert_validation_mode', "TEXT NOT NULL DEFAULT 'none'");
+ensureColumn('user_settings', 'global_ca_cert', 'TEXT');
+
+// Migrate existing cameras: verifySslCert=true → certValidationMode='ca'
+try {
+  sqlite.exec(`UPDATE cameras SET cert_validation_mode = 'ca' WHERE verify_ssl_cert = 1 AND cert_validation_mode = 'none'`);
+} catch { /* migration already done or column doesn't exist yet */ }
 
 // Migrate unique indexes to include scenario column
 // Drop old indexes (without scenario) and create new ones (with scenario)

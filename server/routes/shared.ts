@@ -70,5 +70,5 @@ export const createCameraSchema = insertCameraSchema
 export const ALLOWED_CAMERA_UPDATE_FIELDS = new Set([
   "name", "ipAddress", "username", "password", "location", "notes",
   "currentStatus", "videoStatus", "model", "series", "capabilities",
-  "protocol", "port", "verifySslCert",
+  "protocol", "port", "verifySslCert", "certValidationMode", "certMismatch",
 ]);

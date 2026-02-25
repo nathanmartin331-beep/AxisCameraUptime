@@ -33,7 +33,7 @@ export interface CameraFormData {
   notes: string;
   protocol: string;
   port: string;
-  verifySslCert: boolean;
+  certValidationMode: "none" | "tofu" | "ca";
 }
 
 const emptyFormData: CameraFormData = {
@@ -45,7 +45,7 @@ const emptyFormData: CameraFormData = {
   notes: "",
   protocol: "http",
   port: "",
-  verifySslCert: false,
+  certValidationMode: "none",
 };
 
 export default function AddCameraModal({
@@ -104,6 +104,7 @@ export default function AddCameraModal({
         password: formData.password,
         protocol: formData.protocol || "http",
         ...(formData.port ? { port: parseInt(formData.port, 10) } : {}),
+        certValidationMode: formData.certValidationMode || "none",
       });
       const data = await res.json();
       if (data.success) {
@@ -197,23 +198,21 @@ export default function AddCameraModal({
                 </p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="verifySslCert">SSL Verification</Label>
-                <div className="flex items-center gap-2 h-9">
-                  <input
-                    type="checkbox"
-                    id="verifySslCert"
-                    checked={formData.verifySslCert}
-                    onChange={(e) => setFormData({ ...formData, verifySslCert: e.target.checked })}
-                    className="h-4 w-4 rounded border-gray-300"
-                    disabled={formData.protocol !== "https"}
-                  />
-                  <Label htmlFor="verifySslCert" className="text-xs font-normal text-muted-foreground">
-                    Verify certificate
-                  </Label>
-                </div>
-                {formData.protocol === "https" && !formData.verifySslCert && (
-                  <p className="text-xs text-yellow-600">
-                    Self-signed certs accepted
+                <Label htmlFor="certValidationMode">Certificate Validation</Label>
+                <select
+                  id="certValidationMode"
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors"
+                  value={formData.certValidationMode}
+                  onChange={(e) => setFormData({ ...formData, certValidationMode: e.target.value as "none" | "tofu" | "ca" })}
+                  disabled={formData.protocol !== "https"}
+                >
+                  <option value="none">None</option>
+                  <option value="tofu">TOFU</option>
+                  <option value="ca">CA Certificate</option>
+                </select>
+                {formData.protocol === "https" && formData.certValidationMode === "ca" && (
+                  <p className="text-xs text-muted-foreground">
+                    Upload a CA cert in Settings
                   </p>
                 )}
               </div>

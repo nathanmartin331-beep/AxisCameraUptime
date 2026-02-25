@@ -113,12 +113,13 @@ describe('Camera URL Builder', () => {
       const info = getConnectionInfo({
         protocol: 'https',
         port: 8443,
-        verifySslCert: true,
+        certValidationMode: 'ca',
       });
 
       expect(info.protocol).toBe('https');
       expect(info.port).toBe(8443);
       expect(info.verifySslCert).toBe(true);
+      expect(info.certValidationMode).toBe('ca');
     });
 
     it('should default HTTPS port to 443 when protocol is https and port is null', () => {
@@ -182,8 +183,8 @@ describe('Camera URL Builder', () => {
     });
 
     it('should return different Agents for different verify settings', () => {
-      const dispatcherNoVerify = getCameraDispatcher({ protocol: 'https', verifySslCert: false });
-      const dispatcherVerify = getCameraDispatcher({ protocol: 'https', verifySslCert: true });
+      const dispatcherNoVerify = getCameraDispatcher({ protocol: 'https', certValidationMode: 'none' });
+      const dispatcherVerify = getCameraDispatcher({ protocol: 'https', certValidationMode: 'ca' });
       expect(dispatcherNoVerify).not.toBe(dispatcherVerify);
     });
   });

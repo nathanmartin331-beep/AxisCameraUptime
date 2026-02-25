@@ -3,6 +3,7 @@ import { storage } from "../storage";
 import { requireAuth, requireAdmin } from "../auth";
 import { z } from "zod";
 import { sendError, getUserId } from "./shared";
+import { clearAgentCache } from "../services/cameraUrl";
 
 const router = Router();
 
@@ -30,6 +31,8 @@ router.patch("/api/settings", requireAdmin, async (req: any, res) => {
       pollingInterval: z.number().int().min(1).max(60).optional(),
       dataRetentionDays: z.number().int().min(7).max(365).optional(),
       emailNotifications: z.boolean().optional(),
+      defaultCertValidationMode: z.enum(["none", "tofu", "ca"]).optional(),
+      globalCaCert: z.string().max(65536).nullable().optional(),
     });
 
     const validatedSettings = settingsSchema.parse(req.body);
@@ -37,7 +40,15 @@ router.patch("/api/settings", requireAdmin, async (req: any, res) => {
       return sendError(res, 400, "No valid settings to update");
     }
 
+    // Check if globalCaCert is changing so we can clear cached HTTPS agents
+    const caCertChanging = validatedSettings.globalCaCert !== undefined;
+
     const settings = await storage.updateUserSettings(userId, validatedSettings);
+
+    if (caCertChanging) {
+      clearAgentCache();
+    }
+
     res.json(settings);
   } catch (error: any) {
     if (error instanceof z.ZodError) return sendError(res, 400, error.errors[0].message);

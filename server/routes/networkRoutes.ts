@@ -3,7 +3,7 @@ import { storage } from "../storage";
 import { requireAuth, requireAdmin } from "../auth";
 import { encryptPassword } from "../encryption";
 import { checkAllCameras } from "../cameraMonitor";
-import { buildCameraUrl, getCameraDispatcher, getConnectionInfo } from "../services/cameraUrl";
+import { buildCameraUrl, getCameraDispatcher, getConnectionInfo, type CameraConnectionInfo } from "../services/cameraUrl";
 import type { Camera } from "@shared/schema";
 import { z } from "zod";
 import { validateId, sendError, getUserId } from "./shared";
@@ -360,11 +360,25 @@ router.post("/api/cameras/test-connection", requireAuth, async (req: any, res) =
       password: z.string().min(1),
       protocol: z.enum(["http", "https"]).default("http"),
       port: z.number().int().min(1).max(65535).optional(),
+      certValidationMode: z.enum(["none", "tofu", "ca"]).default("none"),
     });
-    const { ipAddress, username, password, protocol, port } = schema.parse(req.body);
+    const { ipAddress, username, password, protocol, port, certValidationMode } = schema.parse(req.body);
 
-    const conn = { protocol, port: port || (protocol === "https" ? 443 : 80), verifySslCert: false };
-    const dispatcher = getCameraDispatcher(conn as any);
+    const conn: CameraConnectionInfo = {
+      protocol,
+      port: port || (protocol === "https" ? 443 : 80),
+      verifySslCert: certValidationMode === "ca",
+      certValidationMode,
+    };
+
+    // Load global CA cert for "ca" mode
+    if (certValidationMode === "ca") {
+      const userId = getUserId(req);
+      const settings = await storage.getUserSettings(userId);
+      conn.caCert = (settings as any).globalCaCert || null;
+    }
+
+    const dispatcher = getCameraDispatcher(conn);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);

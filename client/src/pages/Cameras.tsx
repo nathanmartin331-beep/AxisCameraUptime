@@ -107,7 +107,7 @@ export default function Cameras() {
         notes: data.notes,
         protocol: data.protocol,
         port: data.port ? parseInt(data.port, 10) : undefined,
-        verifySslCert: data.verifySslCert,
+        certValidationMode: data.certValidationMode,
       };
       return await apiRequest("POST", "/api/cameras", payload);
     },
@@ -171,7 +171,7 @@ export default function Cameras() {
         notes: data.notes,
         protocol: data.protocol,
         port: data.port ? parseInt(data.port, 10) : undefined,
-        verifySslCert: data.verifySslCert,
+        certValidationMode: data.certValidationMode,
       };
       if (data.password) {
         payload.password = data.password;
@@ -208,7 +208,7 @@ export default function Cameras() {
       notes: camera.notes || "",
       protocol: (camera as any).protocol || "http",
       port: (camera as any).port ? String((camera as any).port) : "",
-      verifySslCert: (camera as any).verifySslCert ?? false,
+      certValidationMode: (camera as any).certValidationMode || ((camera as any).verifySslCert ? "ca" : "none"),
     });
     setShowEditDialog(true);
   };

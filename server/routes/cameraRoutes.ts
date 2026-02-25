@@ -361,6 +361,39 @@ router.post("/api/cameras/:id/check", cameraWriteLimiter, requireAuth, async (re
   }
 });
 
+// Re-pin TOFU certificate (user explicitly trusts the current cert)
+router.post("/api/cameras/:id/repin-cert", cameraWriteLimiter, requireAdmin, async (req: any, res) => {
+  try {
+    const cameraId = validateId(req.params.id);
+    if (!cameraId) return sendError(res, 400, "Invalid camera ID");
+
+    const camera = await storage.getCameraById(cameraId);
+    if (!camera) return sendError(res, 404, "Camera not found");
+    if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
+
+    const { captureSslFingerprint } = await import("../services/cameraUrl");
+    const port = (camera as any).port || 443;
+    const fingerprint = await captureSslFingerprint(camera.ipAddress, port);
+
+    if (!fingerprint) {
+      return sendError(res, 502, "Could not capture certificate from camera");
+    }
+
+    const now = new Date();
+    await storage.updateCamera(cameraId, {
+      sslFingerprint: fingerprint,
+      sslFingerprintFirstSeen: now,
+      sslFingerprintLastVerified: now,
+      certMismatch: false,
+    } as any);
+
+    res.json({ success: true, fingerprint, pinnedAt: now.toISOString() });
+  } catch (error: any) {
+    console.error("Error re-pinning cert:", error);
+    sendError(res, 500, error.message || "Failed to re-pin certificate");
+  }
+});
+
 // Model Management Endpoints
 router.post("/api/cameras/:id/detect-model", requireAdmin, async (req: any, res) => {
   try {

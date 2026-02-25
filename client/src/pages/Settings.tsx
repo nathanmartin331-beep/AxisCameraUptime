@@ -5,13 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/hooks/useAuth";
-import { Bell, Clock, Database, User, Lock, AlertTriangle, Loader2, Save } from "lucide-react";
+import { Bell, Clock, Database, User, Lock, AlertTriangle, Loader2, Save, Shield } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
 
 interface UserSettingsData {
   id: string;
@@ -19,6 +20,8 @@ interface UserSettingsData {
   pollingInterval: number | null;
   dataRetentionDays: number | null;
   emailNotifications: boolean | null;
+  defaultCertValidationMode: string | null;
+  globalCaCert: string | null;
 }
 
 export default function Settings() {
@@ -29,6 +32,8 @@ export default function Settings() {
   const [dataRetention, setDataRetention] = useState("90");
   const [isSaving, setIsSaving] = useState(false);
   const [isCleaningUp, setIsCleaningUp] = useState(false);
+  const [defaultCertMode, setDefaultCertMode] = useState("none");
+  const [globalCaCert, setGlobalCaCert] = useState("");
 
   // Profile editing state
   const [firstName, setFirstName] = useState("");
@@ -52,6 +57,8 @@ export default function Settings() {
       setPollingInterval(String(settings.pollingInterval ?? 5));
       setEmailNotifications(settings.emailNotifications ?? false);
       setDataRetention(String(settings.dataRetentionDays ?? 90));
+      setDefaultCertMode(settings.defaultCertValidationMode ?? "none");
+      setGlobalCaCert(settings.globalCaCert ?? "");
     }
   }, [settings]);
 
@@ -93,6 +100,8 @@ export default function Settings() {
         pollingInterval: parseInt(pollingInterval),
         dataRetentionDays: parseInt(dataRetention),
         emailNotifications,
+        defaultCertValidationMode: defaultCertMode,
+        globalCaCert: globalCaCert || null,
       });
       await queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
       toast({
@@ -358,6 +367,61 @@ export default function Settings() {
                 data-testid="switch-email-notifications"
               />
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Shield className="w-5 h-5" />
+              <CardTitle>Certificate Validation</CardTitle>
+            </div>
+            <CardDescription>Configure TLS certificate validation for camera connections</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="default-cert-mode">Default Mode for New Cameras</Label>
+              <Select value={defaultCertMode} onValueChange={setDefaultCertMode} disabled={settingsLoading}>
+                <SelectTrigger id="default-cert-mode">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None — Accept any certificate</SelectItem>
+                  <SelectItem value="tofu">TOFU — Pin on first connect, alert on change</SelectItem>
+                  <SelectItem value="ca">CA Certificate — Validate against trusted CA</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Applied to newly added HTTPS cameras
+              </p>
+            </div>
+
+            {(defaultCertMode === "ca" || globalCaCert) && (
+              <div className="space-y-2">
+                <Label htmlFor="global-ca-cert">CA Certificate (PEM)</Label>
+                <Textarea
+                  id="global-ca-cert"
+                  value={globalCaCert}
+                  onChange={(e) => setGlobalCaCert(e.target.value)}
+                  placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"
+                  rows={6}
+                  className="font-mono text-xs"
+                  disabled={settingsLoading}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Used for cameras set to CA validation mode
+                </p>
+                {globalCaCert && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setGlobalCaCert("")}
+                  >
+                    Clear Certificate
+                  </Button>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
 

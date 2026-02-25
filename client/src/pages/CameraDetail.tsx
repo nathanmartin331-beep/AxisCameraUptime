@@ -66,12 +66,15 @@ export default function CameraDetail() {
 
   const editMutation = useMutation({
     mutationFn: async (data: CameraFormData) => {
-      const payload: Record<string, string> = {
+      const payload: Record<string, any> = {
         name: data.name,
         ipAddress: data.ipAddress,
         username: data.username,
         location: data.location,
         notes: data.notes,
+        protocol: data.protocol,
+        ...(data.port ? { port: parseInt(data.port, 10) } : {}),
+        certValidationMode: data.certValidationMode,
       };
       if (data.password) payload.password = data.password;
       await apiRequest("PATCH", `/api/cameras/${cameraId}`, payload);
@@ -358,6 +361,28 @@ export default function CameraDetail() {
     }
   };
 
+  const handleRepinCert = async () => {
+    if (!cameraId) return;
+    try {
+      const response = await fetch(`/api/cameras/${cameraId}/repin-cert`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to re-pin certificate");
+      await queryClient.invalidateQueries({ queryKey: ["/api/cameras", cameraId] });
+      toast({
+        title: "Certificate Re-pinned",
+        description: "The current certificate has been trusted.",
+      });
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Re-pin Failed",
+        description: "Could not re-pin the certificate.",
+      });
+    }
+  };
+
   const handleToggleAnalytic = async (key: string, enabled: boolean) => {
     if (!cameraId) return;
     try {
@@ -404,7 +429,8 @@ export default function CameraDetail() {
     detectedAt: camera.detectedAt ? new Date(camera.detectedAt).toISOString() : undefined,
     protocol: (camera as any).protocol ?? undefined,
     port: (camera as any).port ?? undefined,
-    verifySslCert: (camera as any).verifySslCert ?? undefined,
+    certValidationMode: (camera as any).certValidationMode || ((camera as any).verifySslCert ? "ca" : "none"),
+    certMismatch: (camera as any).certMismatch ?? false,
     sslFingerprint: (camera as any).sslFingerprint ?? undefined,
     sslFingerprintFirstSeen: (camera as any).sslFingerprintFirstSeen ?? undefined,
     sslFingerprintLastVerified: (camera as any).sslFingerprintLastVerified ?? undefined,
@@ -445,6 +471,7 @@ export default function CameraDetail() {
         onProbeAnalytics={handleProbeAnalytics}
         probingAnalytics={probingAnalytics}
         onToggleAnalytic={handleToggleAnalytic}
+        onRepinCert={handleRepinCert}
       />
 
       <UptimeChart
@@ -475,7 +502,7 @@ export default function CameraDetail() {
           notes: (camera as any).notes || "",
           protocol: (camera as any).protocol || "http",
           port: (camera as any).port?.toString() || "",
-          verifySslCert: (camera as any).verifySslCert ?? false,
+          certValidationMode: (camera as any).certValidationMode || ((camera as any).verifySslCert ? "ca" : "none"),
         }}
         mode="edit"
       />

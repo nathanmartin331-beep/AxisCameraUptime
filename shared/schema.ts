@@ -191,6 +191,10 @@ export const cameras = sqliteTable(
     // Historical uptime backfill tracking
     lastBootAt: integer("last_boot_at", { mode: "timestamp" }),
     historyBackfilled: integer("history_backfilled", { mode: "boolean" }).default(false),
+
+    // TLS certificate validation mode: "none" | "tofu" | "ca"
+    certValidationMode: text("cert_validation_mode").default("none"),
+    certMismatch: integer("cert_mismatch", { mode: "boolean" }).default(false),
   },
   (table) => ({
     userIdIdx: index("idx_cameras_user_id").on(table.userId),
@@ -470,6 +474,8 @@ export const userSettings = sqliteTable("user_settings", {
   pollingInterval: integer("polling_interval").default(5),
   dataRetentionDays: integer("data_retention_days").default(90),
   emailNotifications: integer("email_notifications", { mode: "boolean" }).default(false),
+  defaultCertValidationMode: text("default_cert_validation_mode").default("none"),
+  globalCaCert: text("global_ca_cert"),
   createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
   updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });

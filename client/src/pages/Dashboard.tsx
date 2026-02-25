@@ -390,12 +390,15 @@ export default function Dashboard() {
 
   const editMutation = useAuthMutation({
     mutationFn: async ({ id, data }: { id: string; data: CameraFormData }) => {
-      const payload: Record<string, string> = {
+      const payload: Record<string, any> = {
         name: data.name,
         ipAddress: data.ipAddress,
         username: data.username,
         location: data.location,
         notes: data.notes,
+        protocol: data.protocol,
+        ...(data.port ? { port: parseInt(data.port, 10) } : {}),
+        certValidationMode: data.certValidationMode,
       };
       if (data.password) payload.password = data.password;
       await apiRequest("PATCH", `/api/cameras/${id}`, payload);
@@ -424,7 +427,7 @@ export default function Dashboard() {
       notes: apiCamera?.notes || "",
       protocol: (apiCamera as any)?.protocol || "http",
       port: (apiCamera as any)?.port?.toString() || "",
-      verifySslCert: (apiCamera as any)?.verifySslCert ?? false,
+      certValidationMode: (apiCamera as any)?.certValidationMode || ((apiCamera as any)?.verifySslCert ? "ca" : "none"),
     });
     setEditCameraOpen(true);
   };
