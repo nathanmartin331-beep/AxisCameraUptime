@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -53,6 +53,23 @@ export default function Cameras() {
   const [locationFilter, setLocationFilter] = useState<string>("all");
   const [csvContent, setCsvContent] = useState("");
   const { toast } = useToast();
+
+  // Keyboard shortcuts: / to focus search, n to open add camera
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "/" && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        document.querySelector<HTMLInputElement>('[data-testid="input-search-cameras"]')?.focus();
+      } else if (e.key === "n" && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        setShowAddDialog(true);
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, []);
 
   const { data: cameras = [], isLoading } = useQuery<Camera[]>({
     queryKey: ["/api/cameras"],
@@ -317,10 +334,26 @@ export default function Cameras() {
               ))}
             </div>
           ) : filteredCameras.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              {searchQuery || locationFilter !== "all" 
-                ? "No cameras match your filters" 
-                : "No cameras yet. Add your first camera to get started."}
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              {searchQuery || locationFilter !== "all" ? (
+                <p className="text-muted-foreground">No cameras match your filters</p>
+              ) : (
+                <>
+                  <Eye className="w-12 h-12 text-muted-foreground mb-4" />
+                  <h3 className="text-lg font-medium mb-1">No cameras yet</h3>
+                  <p className="text-sm text-muted-foreground mb-4">Add your first camera to start monitoring uptime.</p>
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => setShowImportDialog(true)}>
+                      <Upload className="w-4 h-4 mr-2" />
+                      Import CSV
+                    </Button>
+                    <Button onClick={() => setShowAddDialog(true)}>
+                      <Plus className="w-4 h-4 mr-2" />
+                      Add Camera
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
           ) : (
             <div className="space-y-2">

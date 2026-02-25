@@ -11,8 +11,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Info, Eye, EyeOff } from "lucide-react";
+import { Loader2, Info, Eye, EyeOff, CheckCircle, XCircle } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { apiRequest } from "@/lib/queryClient";
 
 interface AddCameraModalProps {
   open: boolean;
@@ -57,6 +58,7 @@ export default function AddCameraModal({
 }: AddCameraModalProps) {
   const [formData, setFormData] = useState<CameraFormData>(emptyFormData);
   const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -68,6 +70,7 @@ export default function AddCameraModal({
       setFormData(initialData || emptyFormData);
       setShowPassword(false);
       setErrors({});
+      setTestResult(null);
     }
   }, [open, initialData]);
 
@@ -91,13 +94,28 @@ export default function AddCameraModal({
     onSave?.(formData);
   };
 
-  const handleTestConnection = () => {
+  const handleTestConnection = async () => {
     setTesting(true);
-    console.log("Testing connection to:", formData.ipAddress);
-    setTimeout(() => {
+    setTestResult(null);
+    try {
+      const res = await apiRequest("POST", "/api/cameras/test-connection", {
+        ipAddress: formData.ipAddress.trim(),
+        username: formData.username.trim(),
+        password: formData.password,
+        protocol: formData.protocol || "http",
+        ...(formData.port ? { port: parseInt(formData.port, 10) } : {}),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestResult({ success: true, message: `Connected in ${data.responseTime}ms${data.isAxisCamera ? " (Axis camera detected)" : ""}` });
+      } else {
+        setTestResult({ success: false, message: data.error || "Connection failed" });
+      }
+    } catch (err: any) {
+      setTestResult({ success: false, message: err.message || "Connection test failed" });
+    } finally {
       setTesting(false);
-      alert("Connection test successful!");
-    }, 1500);
+    }
   };
 
   return (
@@ -275,17 +293,23 @@ export default function AddCameraModal({
                 AXIS OS 13+ cameras default to HTTPS only.
               </AlertDescription>
             </Alert>
+            {testResult && (
+              <p className={`text-xs ${testResult.success ? "text-green-600" : "text-red-600"}`}>
+                {testResult.message}
+              </p>
+            )}
           </div>
           <DialogFooter className="gap-2">
             <Button
               type="button"
               variant="outline"
               onClick={handleTestConnection}
-              disabled={testing || !formData.ipAddress}
+              disabled={testing || !formData.ipAddress || !formData.username || !formData.password}
               data-testid="button-test-connection"
             >
               {testing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Test Connection
+              {testResult ? (testResult.success ? <CheckCircle className="mr-2 h-4 w-4 text-green-600" /> : <XCircle className="mr-2 h-4 w-4 text-red-600" />) : null}
+              {testResult ? (testResult.success ? "Connected" : "Failed") : "Test Connection"}
             </Button>
             <Button
               type="button"

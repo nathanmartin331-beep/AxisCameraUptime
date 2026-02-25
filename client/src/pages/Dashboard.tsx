@@ -204,6 +204,23 @@ export default function Dashboard() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
 
+  // Keyboard shortcuts: / to focus search, n to open add camera
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "/" && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        document.querySelector<HTMLInputElement>('[data-testid="input-search"]')?.focus();
+      } else if (e.key === "n" && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        setAddCameraOpen(true);
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, []);
+
   const { data: summary, isLoading: summaryLoading } = useQuery<DashboardSummary>({
     queryKey: ["/api/dashboard/summary"],
     refetchInterval: 30000, // Refresh every 30s (camera polling is every 5 min)
@@ -226,11 +243,24 @@ export default function Dashboard() {
     mutationFn: async (cameraId: string) => {
       await apiRequest("DELETE", `/api/cameras/${cameraId}`);
     },
+    onMutate: async (cameraId: string) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/cameras"] });
+      const previous = queryClient.getQueryData<ApiCamera[]>(["/api/cameras"]);
+      queryClient.setQueryData<ApiCamera[]>(["/api/cameras"], (old) =>
+        old ? old.filter((c) => c.id !== cameraId) : []
+      );
+      return { previous };
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/cameras"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/summary"] });
       toast({ title: "Success", description: "Camera deleted successfully" });
       setDeleteConfirmCamera(null);
+    },
+    onError: (err: Error, _id: string, context: any) => {
+      if (context?.previous) {
+        queryClient.setQueryData(["/api/cameras"], context.previous);
+      }
     },
     errorMessage: "Failed to delete camera",
   });

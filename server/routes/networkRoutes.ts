@@ -351,4 +351,60 @@ router.post("/api/cameras/:id/test-connection", requireAuth, async (req: any, re
   }
 });
 
+// Generic test-connection (no camera ID required, accepts inline credentials)
+router.post("/api/cameras/test-connection", requireAuth, async (req: any, res) => {
+  try {
+    const schema = z.object({
+      ipAddress: z.string().min(1),
+      username: z.string().min(1),
+      password: z.string().min(1),
+      protocol: z.enum(["http", "https"]).default("http"),
+      port: z.number().int().min(1).max(65535).optional(),
+    });
+    const { ipAddress, username, password, protocol, port } = schema.parse(req.body);
+
+    const conn = { protocol, port: port || (protocol === "https" ? 443 : 80), verifySslCert: false };
+    const dispatcher = getCameraDispatcher(conn as any);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    try {
+      const url = buildCameraUrl(ipAddress, "/axis-cgi/systemready.cgi", conn as any);
+      const startTime = Date.now();
+      const fetchOpts: any = {
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "AxisCameraMonitor/2.0",
+          Authorization: "Basic " + Buffer.from(`${username}:${password}`).toString("base64"),
+        },
+      };
+      if (dispatcher) fetchOpts.dispatcher = dispatcher;
+      const response = await fetch(url, fetchOpts);
+      clearTimeout(timeoutId);
+      const responseTime = Date.now() - startTime;
+      const rawText = await response.text();
+
+      const isAxisFormat = rawText.includes("systemready=");
+      res.json({
+        success: response.ok || isAxisFormat,
+        responseTime,
+        httpStatus: response.status,
+        isAxisCamera: isAxisFormat,
+      });
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      throw err;
+    }
+  } catch (error: any) {
+    if (error.name === "AbortError") {
+      return res.json({ success: false, error: "Timeout - camera did not respond within 10 seconds" });
+    }
+    if (error instanceof z.ZodError) {
+      return sendError(res, 400, error.errors[0].message);
+    }
+    res.json({ success: false, error: error.message || "Failed to connect" });
+  }
+});
+
 export default router;

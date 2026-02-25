@@ -411,7 +411,11 @@ export default function CameraDetail() {
   };
 
   const handleBack = () => {
-    setLocation("/");
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      setLocation("/");
+    }
   };
 
   const handleEdit = () => {
@@ -424,6 +428,13 @@ export default function CameraDetail() {
 
   return (
     <div className="space-y-6" data-testid="page-camera-detail">
+      <nav className="flex items-center text-sm text-muted-foreground" aria-label="Breadcrumb">
+        <a href="/" className="hover:text-foreground transition-colors" onClick={(e) => { e.preventDefault(); setLocation("/"); }}>Dashboard</a>
+        <span className="mx-2">/</span>
+        <a href="/cameras" className="hover:text-foreground transition-colors" onClick={(e) => { e.preventDefault(); setLocation("/cameras"); }}>Cameras</a>
+        <span className="mx-2">/</span>
+        <span className="text-foreground font-medium truncate max-w-[200px]">{camera.name}</span>
+      </nav>
       <CameraDetailView
         camera={cameraDetails}
         onBack={handleBack}

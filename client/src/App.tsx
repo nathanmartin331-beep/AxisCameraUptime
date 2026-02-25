@@ -130,7 +130,7 @@ function AppContent() {
                   {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
                 </Button>
                 <NotificationBell />
-                <span className="text-sm text-muted-foreground">
+                <span className="text-sm text-muted-foreground hidden sm:inline">
                   {(user as any)?.firstName || (user as any)?.email || "User"}
                 </span>
                 <Button
@@ -143,12 +143,12 @@ function AppContent() {
                   }}
                   data-testid="button-logout"
                 >
-                  <LogOut className="w-4 h-4 mr-2" />
-                  Logout
+                  <LogOut className="w-4 h-4 sm:mr-2" />
+                  <span className="hidden sm:inline">Logout</span>
                 </Button>
               </div>
             </header>
-            <main className="flex-1 overflow-auto p-8">
+            <main className="flex-1 overflow-auto p-4 sm:p-8">
               <ErrorBoundary>
                 <AppRouter />
               </ErrorBoundary>
