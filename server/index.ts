@@ -12,6 +12,7 @@ import { startDataAggregationService } from "./services/dataAggregation";
 import { webhookDeliveryService } from "./services/webhookDelivery";
 import { ensureDefaultUser } from "./defaultUser";
 import { sqlite } from "./db";
+import { getSessionSecret } from "./sessionSecret";
 
 const app = express();
 const BetterSqlite3Store = SqliteStore(session);
@@ -30,7 +31,7 @@ app.use(
         intervalMs: 15 * 60 * 1000, // Clean expired sessions every 15 min
       },
     }),
-    secret: process.env.SESSION_SECRET || "your-secret-key-change-in-production",
+    secret: getSessionSecret(),
     resave: false,
     saveUninitialized: false,
     cookie: {

@@ -1,15 +1,11 @@
 import crypto from "crypto";
+import { getSessionSecret } from "./sessionSecret";
 
 // AES-256-GCM requires a 32-byte key. Derive one from the session secret.
-const SECRET = process.env.SESSION_SECRET || "your-secret-key-change-in-production";
+const SECRET = getSessionSecret();
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 16;
 const AUTH_TAG_LENGTH = 16;
-
-// Warn if SESSION_SECRET is not properly configured
-if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET === "your-secret-key-change-in-production") {
-  console.warn("[SECURITY WARNING] SESSION_SECRET is not set or is using the default value. Camera passwords are NOT securely encrypted.");
-}
 
 // Cache the derived key so scryptSync is not called on every encrypt/decrypt
 let _cachedKey: Buffer | null = null;
