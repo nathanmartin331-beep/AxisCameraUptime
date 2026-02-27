@@ -140,12 +140,6 @@ export default function AnalyticsSection({ cameraId, hasOccupancy, hasCrossline,
 
   const hasLiveData = analyticsData?.latest || peopleInData?.latest || peopleOutData?.latest || lineCrossingData?.latest;
 
-  // Show line crossing cards only when there's actual crossing data (total > 0).
-  // When line_crossing exists but is 0, prefer showing people_in/people_out cards
-  // from the People Counter ACAP which may have real data.
-  const lcTotal = lineCrossingData?.total ?? lineCrossingData?.latest?.value ?? 0;
-  const showLineCrossing = !!lineCrossingData?.latest && lcTotal > 0;
-
   return (
     <>
       {hasLiveData && (
@@ -173,26 +167,23 @@ export default function AnalyticsSection({ cameraId, hasOccupancy, hasCrossline,
                     <Label htmlFor="toggle-occupancy" className="text-xs text-muted-foreground cursor-pointer">Occupancy</Label>
                   </div>
                 )}
-                {showLineCrossing ? (
+                {peopleInData?.latest && (
+                  <div className="flex items-center gap-1.5">
+                    <Switch id="toggle-entering" checked={cardVisibility.entering} onCheckedChange={() => toggleCard("entering")} className="scale-75" />
+                    <Label htmlFor="toggle-entering" className="text-xs text-muted-foreground cursor-pointer">Entering</Label>
+                  </div>
+                )}
+                {peopleOutData?.latest && (
+                  <div className="flex items-center gap-1.5">
+                    <Switch id="toggle-exiting" checked={cardVisibility.exiting} onCheckedChange={() => toggleCard("exiting")} className="scale-75" />
+                    <Label htmlFor="toggle-exiting" className="text-xs text-muted-foreground cursor-pointer">Exiting</Label>
+                  </div>
+                )}
+                {lineCrossingData?.latest && (
                   <div className="flex items-center gap-1.5">
                     <Switch id="toggle-linecrossing" checked={cardVisibility.lineCrossing} onCheckedChange={() => toggleCard("lineCrossing")} className="scale-75" />
                     <Label htmlFor="toggle-linecrossing" className="text-xs text-muted-foreground cursor-pointer">Crossings</Label>
                   </div>
-                ) : (
-                  <>
-                    {peopleInData?.latest && (
-                      <div className="flex items-center gap-1.5">
-                        <Switch id="toggle-entering" checked={cardVisibility.entering} onCheckedChange={() => toggleCard("entering")} className="scale-75" />
-                        <Label htmlFor="toggle-entering" className="text-xs text-muted-foreground cursor-pointer">Entering</Label>
-                      </div>
-                    )}
-                    {peopleOutData?.latest && (
-                      <div className="flex items-center gap-1.5">
-                        <Switch id="toggle-exiting" checked={cardVisibility.exiting} onCheckedChange={() => toggleCard("exiting")} className="scale-75" />
-                        <Label htmlFor="toggle-exiting" className="text-xs text-muted-foreground cursor-pointer">Exiting</Label>
-                      </div>
-                    )}
-                  </>
                 )}
               </div>
             </div>
@@ -233,8 +224,8 @@ export default function AnalyticsSection({ cameraId, hasOccupancy, hasCrossline,
                 );
               })()}
 
-              {/* Entering/Exiting — show when line_crossing is absent or zero */}
-              {!showLineCrossing && peopleInData?.latest && cardVisibility.entering && (
+              {/* Entering/Exiting */}
+              {peopleInData?.latest && cardVisibility.entering && (
                 <AnalyticsCard
                   icon={ArrowDownToLine}
                   iconColor="text-green-600"
@@ -246,7 +237,7 @@ export default function AnalyticsSection({ cameraId, hasOccupancy, hasCrossline,
                   showVehicles
                 />
               )}
-              {!showLineCrossing && peopleOutData?.latest && cardVisibility.exiting && (
+              {peopleOutData?.latest && cardVisibility.exiting && (
                 <AnalyticsCard
                   icon={ArrowUpFromLine}
                   iconColor="text-red-600"
@@ -259,8 +250,8 @@ export default function AnalyticsSection({ cameraId, hasOccupancy, hasCrossline,
                 />
               )}
 
-              {/* Line Crossings — only when total > 0 */}
-              {showLineCrossing && cardVisibility.lineCrossing && (() => {
+              {/* Line Crossings */}
+              {lineCrossingData?.latest && cardVisibility.lineCrossing && (() => {
                 const scenarios = lineCrossingData.scenarios;
                 const hasMultiple = scenarios && scenarios.length > 1;
                 return (

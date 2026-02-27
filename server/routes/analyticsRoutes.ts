@@ -43,7 +43,7 @@ router.get("/api/cameras/:id/analytics", requireApiKeyOrAuth, async (req: any, r
     startDate.setDate(startDate.getDate() - daysResult);
 
     const events = await storage.getAnalyticsEvents(cameraId, eventType, startDate, endDate);
-    const latest = await storage.getLatestAnalyticsEvent(cameraId, eventType);
+    let latest = await storage.getLatestAnalyticsEvent(cameraId, eventType);
 
     const scenarioEvents = await storage.getLatestAnalyticsEventsByScenario(cameraId, eventType);
     const scenarioMap = new Map<string, { scenario: string; value: number; metadata?: Record<string, any> | null }>();
@@ -55,7 +55,26 @@ router.get("/api/cameras/:id/analytics", requireApiKeyOrAuth, async (req: any, r
       }
     }
     const scenarios = Array.from(scenarioMap.values());
-    const total = scenarios.reduce((sum, s) => sum + s.value, 0);
+    let total = scenarios.reduce((sum, s) => sum + s.value, 0);
+
+    // If raw events were rolled up by the aggregation service, fall back
+    // to today's total from the 3-tier merge (daily + hourly + raw summaries)
+    // so the live card matches what the daily trends chart shows.
+    if (!latest && total === 0) {
+      const todayTotals = await storage.getAnalyticsDailyTotals(cameraId, eventType, 1);
+      if (todayTotals.length > 0) {
+        const today = todayTotals[todayTotals.length - 1];
+        total = today.total;
+        latest = {
+          id: "from-summary",
+          cameraId,
+          eventType,
+          value: today.total,
+          timestamp: new Date(),
+          metadata: today.metadata || null,
+        } as any;
+      }
+    }
 
     res.json({
       cameraId,
