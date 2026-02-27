@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
-import { Camera, Wifi, TrendingUp, Plus, Upload, Search as SearchIcon, AlertTriangle, Download, Filter, Users, ArrowDownToLine, ArrowUpFromLine, Volume2, Eye, EyeOff, Settings2 } from "lucide-react";
+import { Camera, Wifi, TrendingUp, Plus, Upload, Search as SearchIcon, AlertTriangle, Download, Filter, Users, ArrowDownToLine, ArrowUpFromLine, GitBranchPlus, Volume2, Eye, EyeOff, Settings2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useAuthMutation } from "@/hooks/useAuthMutation";
@@ -47,6 +47,7 @@ interface DashboardSummary {
   avgUptime: number;
   totalPeopleIn: number;
   totalPeopleOut: number;
+  totalCrossings: number;
   currentOccupancy: number;
   totalOccupancy: number;
   analyticsEnabled: number;
@@ -664,27 +665,34 @@ Cameras matching filters: ${filteredCameras.length}
 
       {/* Analytics metrics row - shown when any cameras have analytics enabled and section is visible */}
       {visibleSections.analytics && summary && summary.analyticsEnabled > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <MetricCard
-            title="Current Occupancy"
-            value={summary.currentOccupancy}
-            subtitle={`${summary.analyticsEnabled} cameras with analytics`}
-            icon={Users}
-            accentColor="blue"
-          />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
           <MetricCard
             title="Total Entering"
             value={summary.totalPeopleIn}
-            subtitle="Cumulative entries (people + vehicles)"
+            subtitle="Cumulative entries today"
             icon={ArrowDownToLine}
             accentColor="green"
           />
           <MetricCard
             title="Total Exiting"
             value={summary.totalPeopleOut}
-            subtitle="Cumulative exits (people + vehicles)"
+            subtitle="Cumulative exits today"
             icon={ArrowUpFromLine}
             accentColor="amber"
+          />
+          <MetricCard
+            title="Total Crossings"
+            value={summary.totalCrossings}
+            subtitle="All line crossings today"
+            icon={GitBranchPlus}
+            accentColor="blue"
+          />
+          <MetricCard
+            title="Current Occupancy"
+            value={summary.currentOccupancy}
+            subtitle={`${summary.analyticsEnabled} cameras with analytics`}
+            icon={Users}
+            accentColor="blue"
           />
           <MetricCard
             title="Total Occupancy"

@@ -60,37 +60,65 @@ router.get("/api/dashboard/summary", requireAuth, async (req: any, res) => {
 
     let totalPeopleIn = 0;
     let totalPeopleOut = 0;
+    let totalCrossings = 0;
     let currentOccupancy = 0;
     let analyticsEnabled = 0;
 
+    // Use the same filter as getAnalyticsCameraList in analyticsPoller:
+    // a camera has analytics if caps.analytics reports a capability AND
+    // enabledAnalytics doesn't explicitly disable it (undefined = allowed).
     const analyticsCameras = cameras.filter(c => {
       const caps = c.capabilities as any;
+      const analytics = caps?.analytics;
       const enabled = caps?.enabledAnalytics;
-      return enabled && Object.values(enabled).some(Boolean);
+      return (
+        (analytics?.peopleCount === true && enabled?.peopleCount !== false) ||
+        (analytics?.occupancyEstimation === true && enabled?.occupancyEstimation !== false) ||
+        (analytics?.objectAnalytics === true && !!analytics?.objectAnalyticsApiPath && enabled?.objectAnalytics !== false) ||
+        (analytics?.tvpcAvailable === true && enabled?.tvpc !== false)
+      );
     });
 
     if (analyticsCameras.length > 0) {
       analyticsEnabled = analyticsCameras.length;
       const analyticsCamIds = analyticsCameras.map(c => c.id);
 
-      // Use the same 3-tier merged daily totals that the per-camera live
-      // analytics endpoint uses.  getAnalyticsDailyTotals merges
-      // daily_summary + hourly_summary + raw analytics_events, so data
-      // survives the 6-hour raw-event rollup that previously caused 0s.
+      // Mirror the per-camera live endpoint: get both raw latest events AND
+      // 3-tier daily totals, then take whichever is higher per metric.
+      // This ensures the dashboard matches the camera cards exactly.
+      const latestByCamera = await storage.getLatestAnalyticsPerCamera(
+        analyticsCamIds,
+        ["people_in", "people_out", "occupancy", "line_crossing"]
+      );
+
       for (const camId of analyticsCamIds) {
-        // --- people_in ---
-        let camIn = 0;
+        const camData = latestByCamera.get(camId);
+
+        // --- people_in / people_out ---
+        // Start with raw latest values
+        let camIn = camData?.get("people_in")?.value ?? 0;
+        let camOut = camData?.get("people_out")?.value ?? 0;
+
+        // Crossline cameras may only report via line_crossing metadata
+        if (camIn === 0 && camOut === 0) {
+          const lcData = camData?.get("line_crossing");
+          if (lcData?.metadata) {
+            if (lcData.metadata.in !== undefined) camIn = Number(lcData.metadata.in);
+            if (lcData.metadata.out !== undefined) camOut = Number(lcData.metadata.out);
+          }
+        }
+
+        // Compare with 3-tier daily totals and take whichever is higher
         const inTotals = await storage.getAnalyticsDailyTotals(camId, "people_in", 1);
-        if (inTotals.length > 0) camIn = inTotals[inTotals.length - 1].total;
-
-        // --- people_out ---
-        let camOut = 0;
+        if (inTotals.length > 0 && inTotals[inTotals.length - 1].total > camIn) {
+          camIn = inTotals[inTotals.length - 1].total;
+        }
         const outTotals = await storage.getAnalyticsDailyTotals(camId, "people_out", 1);
-        if (outTotals.length > 0) camOut = outTotals[outTotals.length - 1].total;
+        if (outTotals.length > 0 && outTotals[outTotals.length - 1].total > camOut) {
+          camOut = outTotals[outTotals.length - 1].total;
+        }
 
-        // Crossline cameras may only have line_crossing (no people_in/out).
-        // Extract in/out from line_crossing metadata — same pattern used in
-        // group analytics (storage.ts getGroupAnalyticsSummary).
+        // If still 0, check line_crossing daily totals for in/out metadata
         if (camIn === 0 && camOut === 0) {
           const lcTotals = await storage.getAnalyticsDailyTotals(camId, "line_crossing", 1);
           if (lcTotals.length > 0) {
@@ -103,9 +131,21 @@ router.get("/api/dashboard/summary", requireAuth, async (req: any, res) => {
         totalPeopleIn += camIn;
         totalPeopleOut += camOut;
 
+        // --- line_crossing total ---
+        let camLc = camData?.get("line_crossing")?.value ?? 0;
+        const lcTotals = await storage.getAnalyticsDailyTotals(camId, "line_crossing", 1);
+        if (lcTotals.length > 0 && lcTotals[lcTotals.length - 1].total > camLc) {
+          camLc = lcTotals[lcTotals.length - 1].total;
+        }
+        totalCrossings += camLc;
+
         // --- occupancy ---
+        let camOcc = camData?.get("occupancy")?.value ?? 0;
         const occTotals = await storage.getAnalyticsDailyTotals(camId, "occupancy", 1);
-        if (occTotals.length > 0) currentOccupancy += occTotals[occTotals.length - 1].total;
+        if (occTotals.length > 0 && occTotals[occTotals.length - 1].total > camOcc) {
+          camOcc = occTotals[occTotals.length - 1].total;
+        }
+        currentOccupancy += camOcc;
       }
     }
 
@@ -122,6 +162,7 @@ router.get("/api/dashboard/summary", requireAuth, async (req: any, res) => {
       avgUptime: Math.round(avgUptime * 100) / 100,
       totalPeopleIn,
       totalPeopleOut,
+      totalCrossings,
       currentOccupancy,
       totalOccupancy,
       analyticsEnabled,
