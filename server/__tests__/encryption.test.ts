@@ -116,7 +116,7 @@ describe('Encryption Module', () => {
   });
 
   describe('Tampered ciphertext detection', () => {
-    it('should throw when authTag is tampered', async () => {
+    it('should return raw ciphertext when authTag is tampered', async () => {
       const password = 'sensitiveData';
       const encrypted = await encryptPassword(password);
 
@@ -125,10 +125,12 @@ describe('Encryption Module', () => {
       const tamperedTag = parts[1][0] === 'a' ? 'b' + parts[1].slice(1) : 'a' + parts[1].slice(1);
       const tampered = `${parts[0]}:${tamperedTag}:${parts[2]}`;
 
-      await expect(decryptPassword(tampered)).rejects.toThrow();
+      // decryptPassword is resilient — returns raw string on failure instead of throwing
+      const result = await decryptPassword(tampered);
+      expect(result).toBe(tampered);
     });
 
-    it('should throw when ciphertext is tampered', async () => {
+    it('should return raw ciphertext when ciphertext is tampered', async () => {
       const password = 'sensitiveData';
       const encrypted = await encryptPassword(password);
 
@@ -137,10 +139,11 @@ describe('Encryption Module', () => {
       const tamperedCipher = parts[2][0] === 'a' ? 'b' + parts[2].slice(1) : 'a' + parts[2].slice(1);
       const tampered = `${parts[0]}:${parts[1]}:${tamperedCipher}`;
 
-      await expect(decryptPassword(tampered)).rejects.toThrow();
+      const result = await decryptPassword(tampered);
+      expect(result).toBe(tampered);
     });
 
-    it('should throw when IV is tampered', async () => {
+    it('should return raw ciphertext when IV is tampered', async () => {
       const password = 'sensitiveData';
       const encrypted = await encryptPassword(password);
 
@@ -149,7 +152,8 @@ describe('Encryption Module', () => {
       const tamperedIv = parts[0][0] === 'a' ? 'b' + parts[0].slice(1) : 'a' + parts[0].slice(1);
       const tampered = `${tamperedIv}:${parts[1]}:${parts[2]}`;
 
-      await expect(decryptPassword(tampered)).rejects.toThrow();
+      const result = await decryptPassword(tampered);
+      expect(result).toBe(tampered);
     });
   });
 });

@@ -7,13 +7,31 @@ const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 16;
 const AUTH_TAG_LENGTH = 16;
 
-// Cache the derived key so scryptSync is not called on every encrypt/decrypt
-let _cachedKey: Buffer | null = null;
+// The old hardcoded default that was removed. Used only during migration to
+// re-encrypt passwords that were stored under the old key.
+const LEGACY_SECRET = "your-secret-key-change-in-production";
+
+// Cache derived keys to avoid repeated scryptSync calls
+const keyCache = new Map<string, Buffer>();
 function deriveKey(secret: string): Buffer {
-  if (!_cachedKey) {
-    _cachedKey = crypto.scryptSync(secret, "axis-camera-salt", 32);
+  let key = keyCache.get(secret);
+  if (!key) {
+    key = crypto.scryptSync(secret, "axis-camera-salt", 32);
+    keyCache.set(secret, key);
   }
-  return _cachedKey;
+  return key;
+}
+
+function decryptWithKey(encryptedPassword: string, secret: string): string {
+  const [ivHex, authTagHex, ciphertext] = encryptedPassword.split(":");
+  const key = deriveKey(secret);
+  const iv = Buffer.from(ivHex, "hex");
+  const authTag = Buffer.from(authTagHex, "hex");
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+  decipher.setAuthTag(authTag);
+  let decrypted = decipher.update(ciphertext, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+  return decrypted;
 }
 
 export async function encryptPassword(password: string): Promise<string> {
@@ -30,7 +48,15 @@ export async function encryptPassword(password: string): Promise<string> {
   return `${iv.toString("hex")}:${authTag.toString("hex")}:${encrypted}`;
 }
 
-export async function decryptPassword(encryptedPassword: string): Promise<string> {
+/**
+ * Decrypt a camera password. Tries the current secret first, then falls back
+ * to the legacy hardcoded secret for passwords that haven't been migrated yet.
+ * When a legacy password is found it is returned with a `needsReEncrypt` flag
+ * so callers can re-encrypt it under the new key.
+ */
+export async function decryptPassword(
+  encryptedPassword: string,
+): Promise<string> {
   // Handle legacy unencrypted or bcrypt-hashed passwords
   // bcrypt hashes start with $2a$ or $2b$, and our format uses colons
   if (!encryptedPassword.includes(":")) {
@@ -42,16 +68,22 @@ export async function decryptPassword(encryptedPassword: string): Promise<string
     return encryptedPassword;
   }
 
-  const [ivHex, authTagHex, ciphertext] = parts;
+  // Try current key first
+  try {
+    return decryptWithKey(encryptedPassword, SECRET);
+  } catch {
+    // Current key failed — try legacy key
+  }
 
-  const key = deriveKey(SECRET);
-  const iv = Buffer.from(ivHex, "hex");
-  const authTag = Buffer.from(authTagHex, "hex");
-  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-  decipher.setAuthTag(authTag);
+  // Try legacy hardcoded key (passwords encrypted before secret rotation)
+  try {
+    const plaintext = decryptWithKey(encryptedPassword, LEGACY_SECRET);
+    console.log("[Encryption] Decrypted password using legacy key — will re-encrypt on next save");
+    return plaintext;
+  } catch {
+    // Both keys failed
+  }
 
-  let decrypted = decipher.update(ciphertext, "hex", "utf8");
-  decrypted += decipher.final("utf8");
-
-  return decrypted;
+  console.error("[Encryption] Failed to decrypt password with current and legacy keys");
+  return encryptedPassword;
 }

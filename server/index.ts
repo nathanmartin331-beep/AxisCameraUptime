@@ -13,6 +13,7 @@ import { webhookDeliveryService } from "./services/webhookDelivery";
 import { ensureDefaultUser } from "./defaultUser";
 import { sqlite } from "./db";
 import { getSessionSecret } from "./sessionSecret";
+import { migrateEncryptionKeys } from "./migrateEncryption";
 
 const app = express();
 const BetterSqlite3Store = SqliteStore(session);
@@ -142,6 +143,9 @@ app.use((req, res, next) => {
 
     // Ensure default user exists for auto-login
     await ensureDefaultUser();
+
+    // Re-encrypt camera passwords from legacy key to current key (one-time)
+    await migrateEncryptionKeys();
 
     // Start camera monitoring service
     startCameraMonitoring();
