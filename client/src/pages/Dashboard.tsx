@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
-import { Camera, Wifi, TrendingUp, Plus, Upload, Search as SearchIcon, AlertTriangle, Download, Filter, Users, ArrowUpDown, Volume2, Eye, EyeOff, Settings2 } from "lucide-react";
+import { Camera, Wifi, TrendingUp, Plus, Upload, Search as SearchIcon, AlertTriangle, Download, Filter, Users, ArrowDownToLine, ArrowUpFromLine, Volume2, Eye, EyeOff, Settings2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useAuthMutation } from "@/hooks/useAuthMutation";
@@ -676,14 +676,14 @@ Cameras matching filters: ${filteredCameras.length}
             title="Total Entering"
             value={summary.totalPeopleIn}
             subtitle="Cumulative entries (people + vehicles)"
-            icon={ArrowUpDown}
+            icon={ArrowDownToLine}
             accentColor="green"
           />
           <MetricCard
             title="Total Exiting"
             value={summary.totalPeopleOut}
             subtitle="Cumulative exits (people + vehicles)"
-            icon={ArrowUpDown}
+            icon={ArrowUpFromLine}
             accentColor="amber"
           />
           <MetricCard
