@@ -12,9 +12,9 @@
   --background: 220 5% 98.5%;
   --foreground: 220 13% 10%;
   --border: 220 8% 90%;
-  --card: 220 5% 97%;
+  --card: 220 5% 96%;
   --card-foreground: 220 13% 10%;
-  --card-border: 220 8% 89%;
+  --card-border: 220 8% 90%;
   --sidebar: 220 5% 96%;
   --sidebar-foreground: 220 13% 10%;
   --sidebar-border: 220 8% 90%;
@@ -96,9 +96,9 @@
   --background: 220 20% 7%;
   --foreground: 0 0% 93%;
   --border: 220 16% 16%;
-  --card: 220 20% 9%;
+  --card: 220 22% 5%;
   --card-foreground: 0 0% 93%;
-  --card-border: 220 16% 13%;
+  --card-border: 220 18% 10%;
   --sidebar: 220 22% 5%;
   --sidebar-foreground: 0 0% 90%;
   --sidebar-border: 220 18% 10%;
