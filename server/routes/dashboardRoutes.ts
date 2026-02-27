@@ -72,17 +72,80 @@ router.get("/api/dashboard/summary", requireAuth, async (req: any, res) => {
     if (analyticsCameras.length > 0) {
       analyticsEnabled = analyticsCameras.length;
       const analyticsCamIds = analyticsCameras.map(c => c.id);
+
+      // Start with raw events (latest per camera), include line_crossing
+      // since crossline cameras report in/out via line_crossing metadata
       const latestByCamera = await storage.getLatestAnalyticsPerCamera(
         analyticsCamIds,
-        ["people_in", "people_out", "occupancy"]
+        ["people_in", "people_out", "occupancy", "line_crossing"]
       );
 
       for (const camId of analyticsCamIds) {
         const camData = latestByCamera.get(camId);
         if (!camData) continue;
-        totalPeopleIn += camData.get("people_in")?.value ?? 0;
-        totalPeopleOut += camData.get("people_out")?.value ?? 0;
+        let camIn = camData.get("people_in")?.value ?? 0;
+        let camOut = camData.get("people_out")?.value ?? 0;
+
+        // Crossline cameras may only report via line_crossing metadata
+        if (camIn === 0 && camOut === 0) {
+          const lcData = camData.get("line_crossing");
+          if (lcData?.metadata) {
+            if (lcData.metadata.in !== undefined) camIn += Number(lcData.metadata.in);
+            if (lcData.metadata.out !== undefined) camOut += Number(lcData.metadata.out);
+          }
+        }
+
+        totalPeopleIn += camIn;
+        totalPeopleOut += camOut;
         currentOccupancy += camData.get("occupancy")?.value ?? 0;
+      }
+
+      // Fall back to 3-tier merged totals independently per metric when
+      // raw events show 0 (rolled up by aggregation service).
+      if (totalPeopleIn === 0) {
+        for (const camId of analyticsCamIds) {
+          const inTotals = await storage.getAnalyticsDailyTotals(camId, "people_in", 1);
+          if (inTotals.length > 0) totalPeopleIn += inTotals[inTotals.length - 1].total;
+        }
+        // Also check line_crossing daily totals for in metadata
+        if (totalPeopleIn === 0) {
+          for (const camId of analyticsCamIds) {
+            const lcTotals = await storage.getAnalyticsDailyTotals(camId, "line_crossing", 1);
+            if (lcTotals.length > 0 && lcTotals[lcTotals.length - 1].metadata?.in !== undefined) {
+              totalPeopleIn += Number(lcTotals[lcTotals.length - 1].metadata!.in);
+            }
+          }
+        }
+      }
+      if (totalPeopleOut === 0) {
+        for (const camId of analyticsCamIds) {
+          const outTotals = await storage.getAnalyticsDailyTotals(camId, "people_out", 1);
+          if (outTotals.length > 0) totalPeopleOut += outTotals[outTotals.length - 1].total;
+        }
+        if (totalPeopleOut === 0) {
+          for (const camId of analyticsCamIds) {
+            const lcTotals = await storage.getAnalyticsDailyTotals(camId, "line_crossing", 1);
+            if (lcTotals.length > 0 && lcTotals[lcTotals.length - 1].metadata?.out !== undefined) {
+              totalPeopleOut += Number(lcTotals[lcTotals.length - 1].metadata!.out);
+            }
+          }
+        }
+      }
+      if (currentOccupancy === 0) {
+        for (const camId of analyticsCamIds) {
+          const occTotals = await storage.getAnalyticsDailyTotals(camId, "occupancy", 1);
+          if (occTotals.length > 0) currentOccupancy += occTotals[occTotals.length - 1].total;
+        }
+      }
+    }
+
+    // Total occupancy across all analytics cameras (sum of per-camera occupancy)
+    let totalOccupancy = currentOccupancy;
+    if (totalOccupancy === 0 && analyticsCameras.length > 0) {
+      const analyticsCamIds = analyticsCameras.map(c => c.id);
+      for (const camId of analyticsCamIds) {
+        const occTotals = await storage.getAnalyticsDailyTotals(camId, "occupancy", 1);
+        if (occTotals.length > 0) totalOccupancy += occTotals[occTotals.length - 1].total;
       }
     }
 
@@ -98,6 +161,7 @@ router.get("/api/dashboard/summary", requireAuth, async (req: any, res) => {
       totalPeopleIn,
       totalPeopleOut,
       currentOccupancy,
+      totalOccupancy,
       analyticsEnabled,
       speakerTotal,
       speakerOnline,

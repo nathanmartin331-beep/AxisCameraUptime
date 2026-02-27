@@ -48,6 +48,7 @@ interface DashboardSummary {
   totalPeopleIn: number;
   totalPeopleOut: number;
   currentOccupancy: number;
+  totalOccupancy: number;
   analyticsEnabled: number;
   speakerTotal: number;
   speakerOnline: number;
@@ -551,7 +552,7 @@ Cameras matching filters: ${filteredCameras.length}
         <div>
           <h1 className="text-3xl font-semibold">Dashboard</h1>
           <p className="text-muted-foreground mt-1">
-            Monitor your Axis camera network uptime and availability
+            Monitor your Axis device network uptime and availability
           </p>
         </div>
         <Popover>
@@ -603,30 +604,30 @@ Cameras matching filters: ${filteredCameras.length}
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             <MetricCard
-              title="Total Cameras"
+              title="Axis Devices"
               value={filteredMetrics.total}
-              subtitle={locationFilter !== "all" ? locationFilter : "Across all locations"}
+              subtitle={`${filteredMetrics.total - filteredMetrics.speakerCount} camera${filteredMetrics.total - filteredMetrics.speakerCount !== 1 ? 's' : ''}, ${filteredMetrics.speakerCount} speaker${filteredMetrics.speakerCount !== 1 ? 's' : ''}`}
               icon={Camera}
               accentColor="blue"
             />
             <MetricCard
-              title="Online Cameras"
+              title="Cameras Online"
               value={filteredMetrics.online}
-              subtitle={`${filteredMetrics.avgUptime.toFixed(1)}% avg uptime`}
+              subtitle={`${filteredMetrics.online} of ${filteredMetrics.total - filteredMetrics.speakerCount} cameras`}
               icon={Wifi}
               accentColor="green"
             />
             <MetricCard
               title="Video Issues"
               value={filteredMetrics.videoFailed}
-              subtitle={`${filteredMetrics.videoOk} streaming${filteredMetrics.speakerCount > 0 ? `, ${filteredMetrics.speakerCount} speaker${filteredMetrics.speakerCount !== 1 ? 's' : ''}` : ''}`}
+              subtitle={`${filteredMetrics.videoOk} cameras healthy`}
               icon={AlertTriangle}
               accentColor={filteredMetrics.videoFailed > 0 ? "amber" : "green"}
             />
             <MetricCard
               title="System Uptime"
               value={`${filteredMetrics.avgUptime.toFixed(1)}%`}
-              subtitle="Filtered cameras"
+              subtitle="30-day average"
               icon={TrendingUp}
               accentColor="green"
             />
@@ -663,7 +664,7 @@ Cameras matching filters: ${filteredCameras.length}
 
       {/* Analytics metrics row - shown when any cameras have analytics enabled and section is visible */}
       {visibleSections.analytics && summary && summary.analyticsEnabled > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <MetricCard
             title="Current Occupancy"
             value={summary.currentOccupancy}
@@ -684,6 +685,13 @@ Cameras matching filters: ${filteredCameras.length}
             subtitle="Cumulative exits (people + vehicles)"
             icon={ArrowUpDown}
             accentColor="amber"
+          />
+          <MetricCard
+            title="Total Occupancy"
+            value={summary.totalOccupancy}
+            subtitle="Combined across all cameras"
+            icon={Users}
+            accentColor="green"
           />
         </div>
       )}
