@@ -59,8 +59,9 @@ router.get("/api/cameras/:id/analytics", requireApiKeyOrAuth, async (req: any, r
 
     // The poller may write 0-value events after a counter reset, while
     // earlier non-zero data lives in hourly/daily summaries.  Always check
-    // today's 3-tier merged total and use whichever is higher so the live
-    // card stays consistent with the daily trends chart.
+    // today's 3-tier merged totals (overall + per-scenario) and use
+    // whichever is higher so the live cards stay consistent with the daily
+    // trends chart.
     const todayTotals = await storage.getAnalyticsDailyTotals(cameraId, eventType, 1);
     if (todayTotals.length > 0) {
       const today = todayTotals[todayTotals.length - 1];
@@ -76,14 +77,39 @@ router.get("/api/cameras/:id/analytics", requireApiKeyOrAuth, async (req: any, r
             metadata: today.metadata || null,
           } as any;
         }
+
+        // Also backfill per-scenario values from the daily summary so
+        // individual scenario cards (e.g. "EnteringRight: 1") don't
+        // show 0 while the Total card shows a higher number.
+        try {
+          const scenarioDaily = await storage.getAnalyticsDailyTotalsByScenario(cameraId, eventType, 1);
+          const todayKey = today.date; // YYYY-MM-DD
+          for (const [scenarioName, days] of Object.entries(scenarioDaily)) {
+            if (scenarioName === "default") continue;
+            const todayEntry = days.find(d => d.date === todayKey);
+            if (!todayEntry || todayEntry.total === 0) continue;
+            const existing = scenarioMap.get(scenarioName);
+            if (!existing || todayEntry.total > existing.value) {
+              scenarioMap.set(scenarioName, {
+                scenario: scenarioName,
+                value: todayEntry.total,
+                metadata: existing?.metadata ?? todayEntry.metadata ?? null,
+              });
+            }
+          }
+        } catch (err) {
+          // Non-fatal — per-scenario backfill is best-effort
+        }
       }
     }
+    // Rebuild scenarios array after possible backfill
+    const finalScenarios = Array.from(scenarioMap.values());
 
     res.json({
       cameraId,
       eventType,
       latest: latest || null,
-      scenarios: scenarios.length > 0 ? scenarios : undefined,
+      scenarios: finalScenarios.length > 0 ? finalScenarios : undefined,
       total: total || (latest?.value ?? null),
       events,
     });
