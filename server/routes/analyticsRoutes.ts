@@ -57,22 +57,25 @@ router.get("/api/cameras/:id/analytics", requireApiKeyOrAuth, async (req: any, r
     const scenarios = Array.from(scenarioMap.values());
     let total = scenarios.reduce((sum, s) => sum + s.value, 0);
 
-    // If raw events were rolled up by the aggregation service, fall back
-    // to today's total from the 3-tier merge (daily + hourly + raw summaries)
-    // so the live card matches what the daily trends chart shows.
-    if (!latest && total === 0) {
-      const todayTotals = await storage.getAnalyticsDailyTotals(cameraId, eventType, 1);
-      if (todayTotals.length > 0) {
-        const today = todayTotals[todayTotals.length - 1];
+    // The poller may write 0-value events after a counter reset, while
+    // earlier non-zero data lives in hourly/daily summaries.  Always check
+    // today's 3-tier merged total and use whichever is higher so the live
+    // card stays consistent with the daily trends chart.
+    const todayTotals = await storage.getAnalyticsDailyTotals(cameraId, eventType, 1);
+    if (todayTotals.length > 0) {
+      const today = todayTotals[todayTotals.length - 1];
+      if (today.total > total) {
         total = today.total;
-        latest = {
-          id: "from-summary",
-          cameraId,
-          eventType,
-          value: today.total,
-          timestamp: new Date(),
-          metadata: today.metadata || null,
-        } as any;
+        if (!latest) {
+          latest = {
+            id: "from-summary",
+            cameraId,
+            eventType,
+            value: today.total,
+            timestamp: new Date(),
+            metadata: today.metadata || null,
+          } as any;
+        }
       }
     }
 
