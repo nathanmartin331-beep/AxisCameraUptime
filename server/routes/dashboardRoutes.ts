@@ -83,48 +83,31 @@ router.get("/api/dashboard/summary", requireAuth, async (req: any, res) => {
       analyticsEnabled = analyticsCameras.length;
       const analyticsCamIds = analyticsCameras.map(c => c.id);
 
-      // Mirror the per-camera live endpoint: get both raw latest events AND
-      // 3-tier daily totals, then take whichever is higher per metric.
-      // This ensures the dashboard matches the camera cards exactly.
-      const latestByCamera = await storage.getLatestAnalyticsPerCamera(
-        analyticsCamIds,
-        ["people_in", "people_out", "occupancy", "line_crossing"]
-      );
+      // Today's date key (YYYY-MM-DD) — all counters reset at midnight.
+      const now = new Date();
+      const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
+      // Helper: get today-only value from 3-tier daily totals.
+      // getAnalyticsDailyTotals(camId, type, 1) returns yesterday + today;
+      // we only want the entry whose date matches today.
+      const getTodayTotal = (
+        totals: Array<{ date: string; total: number; metadata?: Record<string, any> }>
+      ) => totals.find(t => t.date === todayKey) ?? null;
 
       for (const camId of analyticsCamIds) {
-        const camData = latestByCamera.get(camId);
-
         // --- people_in / people_out ---
-        // Start with raw latest values
-        let camIn = camData?.get("people_in")?.value ?? 0;
-        let camOut = camData?.get("people_out")?.value ?? 0;
+        const inEntry = getTodayTotal(await storage.getAnalyticsDailyTotals(camId, "people_in", 1));
+        const outEntry = getTodayTotal(await storage.getAnalyticsDailyTotals(camId, "people_out", 1));
+        let camIn = inEntry?.total ?? 0;
+        let camOut = outEntry?.total ?? 0;
 
-        // Crossline cameras may only report via line_crossing metadata
+        // Crossline cameras may only have line_crossing (no people_in/out).
+        // Extract in/out from line_crossing metadata.
         if (camIn === 0 && camOut === 0) {
-          const lcData = camData?.get("line_crossing");
-          if (lcData?.metadata) {
-            if (lcData.metadata.in !== undefined) camIn = Number(lcData.metadata.in);
-            if (lcData.metadata.out !== undefined) camOut = Number(lcData.metadata.out);
-          }
-        }
-
-        // Compare with 3-tier daily totals and take whichever is higher
-        const inTotals = await storage.getAnalyticsDailyTotals(camId, "people_in", 1);
-        if (inTotals.length > 0 && inTotals[inTotals.length - 1].total > camIn) {
-          camIn = inTotals[inTotals.length - 1].total;
-        }
-        const outTotals = await storage.getAnalyticsDailyTotals(camId, "people_out", 1);
-        if (outTotals.length > 0 && outTotals[outTotals.length - 1].total > camOut) {
-          camOut = outTotals[outTotals.length - 1].total;
-        }
-
-        // If still 0, check line_crossing daily totals for in/out metadata
-        if (camIn === 0 && camOut === 0) {
-          const lcTotals = await storage.getAnalyticsDailyTotals(camId, "line_crossing", 1);
-          if (lcTotals.length > 0) {
-            const lc = lcTotals[lcTotals.length - 1];
-            if (lc.metadata?.in !== undefined) camIn = Number(lc.metadata.in);
-            if (lc.metadata?.out !== undefined) camOut = Number(lc.metadata.out);
+          const lcEntry = getTodayTotal(await storage.getAnalyticsDailyTotals(camId, "line_crossing", 1));
+          if (lcEntry?.metadata) {
+            if (lcEntry.metadata.in !== undefined) camIn = Number(lcEntry.metadata.in);
+            if (lcEntry.metadata.out !== undefined) camOut = Number(lcEntry.metadata.out);
           }
         }
 
@@ -132,20 +115,12 @@ router.get("/api/dashboard/summary", requireAuth, async (req: any, res) => {
         totalPeopleOut += camOut;
 
         // --- line_crossing total ---
-        let camLc = camData?.get("line_crossing")?.value ?? 0;
-        const lcTotals = await storage.getAnalyticsDailyTotals(camId, "line_crossing", 1);
-        if (lcTotals.length > 0 && lcTotals[lcTotals.length - 1].total > camLc) {
-          camLc = lcTotals[lcTotals.length - 1].total;
-        }
-        totalCrossings += camLc;
+        const lcEntry = getTodayTotal(await storage.getAnalyticsDailyTotals(camId, "line_crossing", 1));
+        totalCrossings += lcEntry?.total ?? 0;
 
         // --- occupancy ---
-        let camOcc = camData?.get("occupancy")?.value ?? 0;
-        const occTotals = await storage.getAnalyticsDailyTotals(camId, "occupancy", 1);
-        if (occTotals.length > 0 && occTotals[occTotals.length - 1].total > camOcc) {
-          camOcc = occTotals[occTotals.length - 1].total;
-        }
-        currentOccupancy += camOcc;
+        const occEntry = getTodayTotal(await storage.getAnalyticsDailyTotals(camId, "occupancy", 1));
+        currentOccupancy += occEntry?.total ?? 0;
       }
     }
 
