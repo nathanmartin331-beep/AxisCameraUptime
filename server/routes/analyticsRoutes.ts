@@ -345,26 +345,20 @@ router.get("/api/groups/:id/analytics/trend", requireApiKeyOrAuth, async (req: a
 
     allEvents.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
+    // Per-camera bucketing prevents double-counting across daily/hourly/raw
+    // tiers. Events are sorted by timestamp so raw (most granular) data
+    // naturally overwrites coarser-tier data for the same camera+hour.
     const buckets: Record<string, number> = {};
-    if (eventType === "occupancy") {
-      const perCameraBuckets: Record<string, Record<string, number>> = {};
-      for (const event of allEvents) {
-        const hour = new Date(event.timestamp);
-        hour.setMinutes(0, 0, 0);
-        const key = hour.toISOString();
-        if (!perCameraBuckets[key]) perCameraBuckets[key] = {};
-        perCameraBuckets[key][event.cameraId] = event.value;
-      }
-      for (const [key, cameraValues] of Object.entries(perCameraBuckets)) {
-        buckets[key] = Object.values(cameraValues).reduce((sum, v) => sum + v, 0);
-      }
-    } else {
-      for (const event of allEvents) {
-        const hour = new Date(event.timestamp);
-        hour.setMinutes(0, 0, 0);
-        const key = hour.toISOString();
-        buckets[key] = (buckets[key] || 0) + event.value;
-      }
+    const perCameraBuckets: Record<string, Record<string, number>> = {};
+    for (const event of allEvents) {
+      const hour = new Date(event.timestamp);
+      hour.setMinutes(0, 0, 0);
+      const key = hour.toISOString();
+      if (!perCameraBuckets[key]) perCameraBuckets[key] = {};
+      perCameraBuckets[key][event.cameraId] = event.value;
+    }
+    for (const [key, cameraValues] of Object.entries(perCameraBuckets)) {
+      buckets[key] = Object.values(cameraValues).reduce((sum, v) => sum + v, 0);
     }
 
     const trend = Object.entries(buckets)
@@ -482,6 +476,22 @@ router.get("/api/groups/:id/analytics/stream", requireApiKeyOrAuth, async (req: 
   }
 
   subscribeToCameras(initialMembers.map((m) => m.id));
+
+  // Seed initial state so clients see current values immediately
+  // instead of zeros until the next poll cycle.
+  try {
+    const liveEnd = new Date();
+    const liveStart = new Date(liveEnd.getTime() - 60_000);
+    const seed = await storage.getGroupAnalyticsSummary(groupId, liveStart, liveEnd);
+    for (const cam of seed.perCamera) {
+      applyEventToState(cam.id, [
+        { eventType: "occupancy", value: cam.occupancy },
+        { eventType: "people_in", value: cam.in },
+        { eventType: "people_out", value: cam.out },
+      ]);
+    }
+    pushGroupEvent(0);
+  } catch { /* ignore seed errors */ }
 
   // Refresh member list every 60s to handle membership changes
   const refreshInterval = setInterval(async () => {

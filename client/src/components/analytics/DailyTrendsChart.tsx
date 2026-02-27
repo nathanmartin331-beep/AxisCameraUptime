@@ -41,12 +41,17 @@ export default function DailyTrendsChart({
   );
 
   // Priority 1: Line crossing with per-scenario breakdown
+  // Only use line crossing when scenarios have actual non-zero data;
+  // otherwise fall through to entering/exiting which may have real counts.
   const lcScenarios = dailyLineCrossing?.scenarioTotals;
   const lcScenarioNames = lcScenarios
     ? Object.keys(lcScenarios).filter(s => s !== "default")
     : [];
+  const lcHasNonZeroData = lcScenarioNames.some(name =>
+    (lcScenarios![name] || []).some(d => d.total > 0)
+  );
 
-  if (lcScenarioNames.length > 0) {
+  if (lcScenarioNames.length > 0 && lcHasNonZeroData) {
     const crossingDateMap = new Map<string, Record<string, any>>();
 
     for (const name of lcScenarioNames) {
@@ -196,15 +201,16 @@ export default function DailyTrendsChart({
     );
   }
 
-  // Priority 3: Line crossings combined
+  // Priority 3: Line crossings combined — only if there's actual non-zero data
   const crossingData = (dailyLineCrossing?.dailyTotals || [])
     .sort((a, b) => a.date.localeCompare(b.date))
     .map(d => ({
       crossings: d.total,
       date: new Date(d.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }),
     }));
+  const crossingHasNonZero = crossingData.some(d => d.crossings > 0);
 
-  if (crossingData.length === 0) return null;
+  if (crossingData.length === 0 || !crossingHasNonZero) return null;
 
   return (
     <Card>
