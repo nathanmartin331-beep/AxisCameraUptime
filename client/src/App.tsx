@@ -20,6 +20,7 @@ import CustomizableDashboard from "@/pages/CustomizableDashboard";
 import Groups from "@/pages/Groups";
 import GroupDetail from "@/pages/GroupDetail";
 import Users from "@/pages/Users";
+import Login from "@/pages/Login";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -98,18 +99,21 @@ function AppContent() {
     "--sidebar-width": "16rem",
   };
 
-  // Show loading spinner while authentication is in progress
-  if (isLoading || !isAuthenticated) {
+  // Show loading spinner while initial auth check is in progress
+  if (isLoading) {
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="text-center">
           <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-muted-foreground">
-            {isLoading ? "Initializing..." : "Authenticating..."}
-          </p>
+          <p className="text-muted-foreground">Initializing...</p>
         </div>
       </div>
     );
+  }
+
+  // Show login page when not authenticated
+  if (!isAuthenticated) {
+    return <Login />;
   }
 
   return (
