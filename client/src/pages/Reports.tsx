@@ -87,11 +87,28 @@ export default function Reports() {
     [filteredCameras],
   );
 
+  // Resolve the active scope for analytics reports based on the dropdowns.
+  // Specific camera wins; otherwise location filter; otherwise all cameras.
+  const reportCameraIds = useMemo<string[] | null>(() => {
+    if (selectedCamera !== "all") return [selectedCamera];
+    if (locationFilter !== "all") return filteredCameraIds;
+    return null;
+  }, [selectedCamera, locationFilter, filteredCameraIds]);
+
+  const reportScopeLabel = useMemo(() => {
+    if (selectedCamera !== "all") {
+      const cam = cameras.find((c) => String(c.id) === selectedCamera);
+      return cam ? `"${cam.name}"` : "the selected camera";
+    }
+    if (locationFilter !== "all") return `cameras in "${locationFilter}"`;
+    return "all cameras";
+  }, [selectedCamera, locationFilter, cameras]);
+
   const handleAnalyticsExport = async () => {
     const params = new URLSearchParams();
     params.set("range", timeRange);
-    if (locationFilter !== "all" && filteredCameraIds.length > 0) {
-      params.set("cameraIds", filteredCameraIds.join(","));
+    if (reportCameraIds && reportCameraIds.length > 0) {
+      params.set("cameraIds", reportCameraIds.join(","));
     }
     try {
       const res = await fetch(`/api/reports/analytics/export?${params.toString()}`, {
@@ -116,8 +133,8 @@ export default function Reports() {
   const emailAnalyticsMutation = useMutation({
     mutationFn: async () => {
       const body: Record<string, unknown> = { range: parseInt(timeRange, 10) };
-      if (locationFilter !== "all" && filteredCameraIds.length > 0) {
-        body.cameraIds = filteredCameraIds;
+      if (reportCameraIds && reportCameraIds.length > 0) {
+        body.cameraIds = reportCameraIds;
       }
       const res = await apiRequest("POST", "/api/reports/analytics/email", body);
       return (await res.json()) as { message: string; rowCount: number };
@@ -319,8 +336,7 @@ export default function Reports() {
           </div>
           <CardDescription>
             Daily line-crossing, occupancy, and people-counting totals — one row per camera, day, and scenario.
-            Uses the time range selected above
-            {locationFilter !== "all" ? `, filtered to "${locationFilter}"` : " across all cameras"}.
+            Uses the time range selected above, scoped to {reportScopeLabel}.
           </CardDescription>
         </CardHeader>
         <CardContent>

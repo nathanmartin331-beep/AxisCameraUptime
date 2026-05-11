@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -11,8 +11,18 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Checkbox } from "@/components/ui/checkbox";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Calendar, Loader2, Plus, Play, Trash2, Pencil, AlertTriangle } from "lucide-react";
 import { format } from "date-fns";
+
+interface CameraLite {
+  id: string;
+  name: string;
+  ipAddress: string;
+  location?: string | null;
+}
 
 interface Schedule {
   id: string;
@@ -51,6 +61,8 @@ interface FormState {
   hourLocal: number;
   timezone: string;
   active: boolean;
+  cameraScope: "all" | "specific";
+  cameraIds: string[];
 }
 
 function defaultForm(): FormState {
@@ -63,6 +75,8 @@ function defaultForm(): FormState {
     hourLocal: 9,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
     active: true,
+    cameraScope: "all",
+    cameraIds: [],
   };
 }
 
@@ -88,6 +102,31 @@ export default function ScheduledReportsSection() {
     queryKey: ["/api/reports/schedules"],
   });
 
+  const { data: allCameras = [] } = useQuery<CameraLite[]>({
+    queryKey: ["/api/cameras"],
+  });
+
+  const [cameraFilter, setCameraFilter] = useState("");
+  const visibleCameras = useMemo(() => {
+    const q = cameraFilter.trim().toLowerCase();
+    if (!q) return allCameras;
+    return allCameras.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.ipAddress.toLowerCase().includes(q) ||
+        (c.location ?? "").toLowerCase().includes(q),
+    );
+  }, [allCameras, cameraFilter]);
+
+  function toggleCamera(id: string) {
+    setForm((f) => {
+      const set = new Set(f.cameraIds);
+      if (set.has(id)) set.delete(id);
+      else set.add(id);
+      return { ...f, cameraIds: Array.from(set) };
+    });
+  }
+
   useEffect(() => {
     if (editing) {
       setForm({
@@ -99,10 +138,13 @@ export default function ScheduledReportsSection() {
         hourLocal: editing.hourLocal,
         timezone: editing.timezone,
         active: editing.active,
+        cameraScope: editing.cameraIds && editing.cameraIds.length > 0 ? "specific" : "all",
+        cameraIds: editing.cameraIds ?? [],
       });
     } else {
       setForm(defaultForm());
     }
+    setCameraFilter("");
   }, [editing, dialogOpen]);
 
   const saveMutation = useMutation({
@@ -114,6 +156,7 @@ export default function ScheduledReportsSection() {
         hourLocal: form.hourLocal,
         timezone: form.timezone,
         active: form.active,
+        cameraIds: form.cameraScope === "specific" ? form.cameraIds : null,
       };
       if (form.frequency === "weekly") body.dayOfWeek = form.dayOfWeek;
       if (form.frequency === "monthly") body.dayOfMonth = form.dayOfMonth;
@@ -204,7 +247,7 @@ export default function ScheduledReportsSection() {
                 <Plus className="w-4 h-4 mr-2" /> New schedule
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-md">
+            <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>{editing ? "Edit schedule" : "New scheduled report"}</DialogTitle>
               </DialogHeader>
@@ -314,6 +357,81 @@ export default function ScheduledReportsSection() {
                   </div>
                 </div>
 
+                <div className="space-y-2">
+                  <Label>Cameras</Label>
+                  <RadioGroup
+                    value={form.cameraScope}
+                    onValueChange={(v) => setForm({ ...form, cameraScope: v as "all" | "specific" })}
+                    className="flex gap-4"
+                  >
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <RadioGroupItem value="all" />
+                      <span className="text-sm">All cameras</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <RadioGroupItem value="specific" />
+                      <span className="text-sm">Selected cameras</span>
+                    </label>
+                  </RadioGroup>
+
+                  {form.cameraScope === "specific" && (
+                    <div className="rounded border p-2 space-y-2">
+                      <div className="flex gap-2 items-center">
+                        <Input
+                          value={cameraFilter}
+                          onChange={(e) => setCameraFilter(e.target.value)}
+                          placeholder="Filter by name, IP, location..."
+                          className="h-8"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs"
+                          onClick={() => setForm({ ...form, cameraIds: visibleCameras.map((c) => c.id) })}
+                        >
+                          Select all
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs"
+                          onClick={() => setForm({ ...form, cameraIds: [] })}
+                        >
+                          Clear
+                        </Button>
+                      </div>
+                      <ScrollArea className="h-40 rounded border bg-muted/30">
+                        <div className="p-2 space-y-1">
+                          {visibleCameras.length === 0 ? (
+                            <div className="text-xs text-muted-foreground py-4 text-center">
+                              No cameras match
+                            </div>
+                          ) : (
+                            visibleCameras.map((c) => (
+                              <label
+                                key={c.id}
+                                className="flex items-center gap-2 py-1 px-1 rounded hover:bg-muted/60 cursor-pointer"
+                              >
+                                <Checkbox
+                                  checked={form.cameraIds.includes(c.id)}
+                                  onCheckedChange={() => toggleCamera(c.id)}
+                                />
+                                <span className="text-sm truncate">{c.name}</span>
+                                <span className="text-xs text-muted-foreground ml-auto">{c.ipAddress}</span>
+                              </label>
+                            ))
+                          )}
+                        </div>
+                      </ScrollArea>
+                      <div className="text-xs text-muted-foreground">
+                        {form.cameraIds.length} selected
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <div className="flex items-center justify-between rounded border p-3">
                   <div className="text-sm font-medium">Active</div>
                   <Switch
@@ -325,7 +443,11 @@ export default function ScheduledReportsSection() {
               <DialogFooter>
                 <Button
                   onClick={() => saveMutation.mutate()}
-                  disabled={saveMutation.isPending || !form.name.trim()}
+                  disabled={
+                    saveMutation.isPending ||
+                    !form.name.trim() ||
+                    (form.cameraScope === "specific" && form.cameraIds.length === 0)
+                  }
                 >
                   {saveMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                   {editing ? "Save changes" : "Create schedule"}
@@ -361,6 +483,11 @@ export default function ScheduledReportsSection() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <div className="font-medium truncate">{s.name}</div>
                     <Badge variant="outline">{RANGE_OPTIONS.find(r => r.value === s.rangeDays)?.label ?? `${s.rangeDays}d`}</Badge>
+                    <Badge variant="outline">
+                      {s.cameraIds && s.cameraIds.length > 0
+                        ? `${s.cameraIds.length} camera${s.cameraIds.length === 1 ? "" : "s"}`
+                        : "All cameras"}
+                    </Badge>
                     {!s.active && <Badge variant="secondary">Paused</Badge>}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">{cadenceLabel(s)}</div>
