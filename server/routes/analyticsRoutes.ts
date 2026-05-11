@@ -36,7 +36,6 @@ router.get("/api/cameras/:id/analytics", requireApiKeyOrAuth, async (req: any, r
 
     const camera = await storage.getCameraById(cameraId);
     if (!camera) return sendError(res, 404, "Camera not found");
-    if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
 
     const endDate = new Date();
     const startDate = new Date();
@@ -134,7 +133,6 @@ router.get("/api/cameras/:id/analytics/daily", requireApiKeyOrAuth, async (req: 
 
     const camera = await storage.getCameraById(cameraId);
     if (!camera) return sendError(res, 404, "Camera not found");
-    if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
 
     const dailyTotals = await storage.getAnalyticsDailyTotals(cameraId, eventType, days);
     let scenarioTotals: Record<string, Array<{ date: string; total: number; metadata?: Record<string, any> }>> | undefined;
@@ -160,8 +158,8 @@ router.get("/api/analytics/stream", requireApiKeyOrAuth, async (req: any, res) =
 
   if (filterCameraId) {
     const camera = await storage.getCameraById(filterCameraId);
-    if (!camera || camera.userId !== userId) {
-      return sendError(res, 403, "Camera not found or not owned by you");
+    if (!camera) {
+      return sendError(res, 404, "Camera not found");
     }
   }
 
@@ -172,9 +170,9 @@ router.get("/api/analytics/stream", requireApiKeyOrAuth, async (req: any, res) =
   });
   res.flushHeaders();
 
-  // Build a set of the user's camera IDs to filter events by ownership
-  const userCameras = await storage.getCamerasByUserId(userId);
-  let userCameraIds = new Set(userCameras.map((c) => c.id));
+  // Build a set of all camera IDs (cameras are shared across users)
+  const allCams = await storage.getAllCameras();
+  let userCameraIds = new Set(allCams.map((c) => c.id));
 
   // Replay missed events on reconnect (Last-Event-ID support)
   const lastEventId = parseInt(req.headers['last-event-id'] as string);
@@ -204,10 +202,10 @@ router.get("/api/analytics/stream", requireApiKeyOrAuth, async (req: any, res) =
         res.write(`id: ${seqId}\ndata: ${JSON.stringify(payload)}\n\n`);
       });
 
-  // Refresh camera ownership periodically for long-lived connections
+  // Refresh camera set periodically for long-lived connections (handles new cameras added)
   const refreshInterval = setInterval(async () => {
     try {
-      const fresh = await storage.getCamerasByUserId(userId);
+      const fresh = await storage.getAllCameras();
       userCameraIds = new Set(fresh.map((c) => c.id));
     } catch {}
   }, 60_000);
@@ -230,7 +228,6 @@ router.get("/api/cameras/:id/analytics/stream", requireApiKeyOrAuth, async (req:
 
   const camera = await storage.getCameraById(cameraId);
   if (!camera) return sendError(res, 404, "Camera not found");
-  if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream",

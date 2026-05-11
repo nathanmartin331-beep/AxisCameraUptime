@@ -84,5 +84,43 @@ sqlite.exec(`
   )
 `);
 
+// Instance-wide app settings (singleton row, id = 'default')
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS app_settings (
+    id TEXT PRIMARY KEY,
+    sendgrid_api_key TEXT,
+    sendgrid_api_key_prefix TEXT,
+    from_email TEXT,
+    from_name TEXT,
+    email_enabled INTEGER DEFAULT 0,
+    updated_at INTEGER
+  )
+`);
+
+// Per-user scheduled report deliveries
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS report_schedules (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    report_type TEXT NOT NULL DEFAULT 'analytics',
+    range_days INTEGER NOT NULL,
+    camera_ids TEXT,
+    frequency TEXT NOT NULL,
+    day_of_week INTEGER,
+    day_of_month INTEGER,
+    hour_local INTEGER NOT NULL,
+    timezone TEXT NOT NULL DEFAULT 'UTC',
+    active INTEGER NOT NULL DEFAULT 1,
+    last_run_at INTEGER,
+    next_run_at INTEGER,
+    last_error TEXT,
+    created_at INTEGER,
+    updated_at INTEGER
+  )
+`);
+sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_report_schedules_user ON report_schedules(user_id)`);
+sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_report_schedules_next_run ON report_schedules(next_run_at, active)`);
+
 export const db = drizzle(sqlite, { schema });
 export { sqlite };

@@ -519,3 +519,45 @@ export const webhooks = sqliteTable("webhooks", {
 });
 
 export type Webhook = typeof webhooks.$inferSelect;
+
+// Instance-wide app settings (singleton row, id = "default")
+export const appSettings = sqliteTable("app_settings", {
+  id: text("id").primaryKey(),
+  sendgridApiKey: text("sendgrid_api_key"),
+  sendgridApiKeyPrefix: text("sendgrid_api_key_prefix"),
+  fromEmail: text("from_email"),
+  fromName: text("from_name"),
+  emailEnabled: integer("email_enabled", { mode: "boolean" }).default(false),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+});
+
+export type AppSettings = typeof appSettings.$inferSelect;
+
+// Per-user scheduled report deliveries
+export const reportSchedules = sqliteTable("report_schedules", {
+  id: text("id").primaryKey().$defaultFn(generateId),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  reportType: text("report_type").notNull().default("analytics"),
+  rangeDays: integer("range_days").notNull(),
+  cameraIds: text("camera_ids", { mode: "json" }).$type<string[] | null>(),
+  frequency: text("frequency").notNull(),
+  dayOfWeek: integer("day_of_week"),
+  dayOfMonth: integer("day_of_month"),
+  hourLocal: integer("hour_local").notNull(),
+  timezone: text("timezone").notNull().default("UTC"),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  lastRunAt: integer("last_run_at", { mode: "timestamp" }),
+  nextRunAt: integer("next_run_at", { mode: "timestamp" }),
+  lastError: text("last_error"),
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+}, (table) => ({
+  userIdx: index("idx_report_schedules_user").on(table.userId),
+  nextRunIdx: index("idx_report_schedules_next_run").on(table.nextRunAt, table.active),
+}));
+
+export type ReportSchedule = typeof reportSchedules.$inferSelect;
+export type InsertReportSchedule = typeof reportSchedules.$inferInsert;

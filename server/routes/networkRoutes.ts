@@ -180,8 +180,7 @@ router.post("/api/cameras/discover", scanLimiter, requireAdmin, async (req: any,
     const { discoverCameras } = await import("../networkScanner");
     const results = await discoverCameras(subnet, { bonjour, ssdp, httpScan });
 
-    const userId = getUserId(req);
-    const existingCameras = await storage.getCamerasByUserId(userId);
+    const existingCameras = await storage.getAllCameras();
     const existingIPs = new Set(existingCameras.map((c: Camera) => c.ipAddress.trim().toLowerCase()));
 
     const cameras = results.map(r => ({
@@ -221,7 +220,7 @@ router.post("/api/cameras/bulk-add", bulkAddLimiter, requireAdmin, async (req: a
     const { cameras } = bulkAddSchema.parse(req.body);
     const userId = getUserId(req);
 
-    const existingCameras = await storage.getCamerasByUserId(userId);
+    const existingCameras = await storage.getAllCameras();
     const existingIPs = new Set(existingCameras.map((c: Camera) => c.ipAddress.trim().toLowerCase()));
 
     const added: string[] = [];
@@ -270,11 +269,9 @@ router.post("/api/cameras/:id/test-connection", requireAuth, async (req: any, re
     const cameraId = validateId(req.params.id);
     if (!cameraId) return sendError(res, 400, "Invalid camera ID");
 
-    const userId = getUserId(req);
     const camera = await storage.getCameraById(cameraId);
 
     if (!camera) return res.status(404).json({ success: false, error: "Camera not found" });
-    if (camera.userId !== userId) return res.status(403).json({ success: false, error: "Forbidden - you don't own this camera" });
 
     const { decryptPassword } = await import("../encryption");
     const decryptedPassword = await decryptPassword(camera.encryptedPassword);

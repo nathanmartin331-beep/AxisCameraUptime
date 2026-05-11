@@ -33,7 +33,7 @@ router.post("/api/cameras/import", requireAdmin, async (req: any, res) => {
     const skipped = [];
     const errors = [];
 
-    const existingCameras = await storage.getCamerasByUserId(userId);
+    const existingCameras = await storage.getAllCameras();
     const normalizeIP = (ip: string) => ip.trim().toLowerCase();
     const existingIPs = new Set(existingCameras.map((c: Camera) => normalizeIP(c.ipAddress)));
     const processedIPs = new Set<string>();
@@ -113,8 +113,7 @@ router.post("/api/cameras/import", requireAdmin, async (req: any, res) => {
 // CSV export
 router.get("/api/cameras/export", requireAuth, async (req: any, res) => {
   try {
-    const userId = getUserId(req);
-    const cameras = await storage.getCamerasByUserId(userId);
+    const cameras = await storage.getAllCameras();
     const { generateCameraCSV } = await import("../csvUtils");
     const csv = generateCameraCSV(cameras);
 
@@ -130,8 +129,7 @@ router.get("/api/cameras/export", requireAuth, async (req: any, res) => {
 // Uptime report export
 router.get("/api/cameras/export/uptime", requireAuth, async (req: any, res) => {
   try {
-    const userId = getUserId(req);
-    const cameras = await storage.getCamerasByUserId(userId);
+    const cameras = await storage.getAllCameras();
 
     const uptimeMap = await storage.calculateBatchUptimePercentage(cameras.map(c => c.id), 30);
     const cameraData = cameras.map(camera => ({

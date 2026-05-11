@@ -5,6 +5,8 @@ import { requireAuth, requireAdmin } from "../auth";
 import { z } from "zod";
 import { sendError, getUserId } from "./shared";
 import { clearAgentCache } from "../services/cameraUrl";
+import { encryptPassword } from "../encryption";
+import { sendMail, EmailNotConfiguredError } from "../services/email";
 
 const router = Router();
 
@@ -272,6 +274,90 @@ router.post("/api/settings/webhooks/:id/test", requireAuth, async (req: any, res
   } catch (error: any) {
     console.error("Error testing webhook:", error);
     sendError(res, 500, `Webhook test failed: ${error.message || "Unknown error"}`);
+  }
+});
+
+// === Email Delivery (SendGrid) ===
+
+// GET /api/settings/email — masked email config
+router.get("/api/settings/email", requireAdmin, async (_req: any, res) => {
+  try {
+    const cfg = await storage.getAppSettings();
+    res.json({
+      fromEmail: cfg.fromEmail,
+      fromName: cfg.fromName,
+      emailEnabled: cfg.emailEnabled ?? false,
+      apiKeyPrefix: cfg.sendgridApiKeyPrefix,
+      isConfigured: !!cfg.sendgridApiKey,
+    });
+  } catch (error) {
+    console.error("Error fetching email settings:", error);
+    sendError(res, 500, "Failed to fetch email settings");
+  }
+});
+
+// PATCH /api/settings/email — update email config
+router.patch("/api/settings/email", requireAdmin, async (req: any, res) => {
+  try {
+    if (!req.body || typeof req.body !== "object") {
+      return sendError(res, 400, "Request body is required");
+    }
+
+    const bodySchema = z.object({
+      apiKey: z.string().min(1).max(500).optional(),
+      fromEmail: z.string().email().max(254).optional(),
+      fromName: z.string().min(1).max(100).optional(),
+      emailEnabled: z.boolean().optional(),
+    });
+
+    const body = bodySchema.parse(req.body);
+
+    const patch: Parameters<typeof storage.updateAppSettings>[0] = {};
+    if (body.fromEmail !== undefined) patch.fromEmail = body.fromEmail;
+    if (body.fromName !== undefined) patch.fromName = body.fromName;
+    if (body.emailEnabled !== undefined) patch.emailEnabled = body.emailEnabled;
+
+    if (body.apiKey !== undefined) {
+      patch.sendgridApiKey = await encryptPassword(body.apiKey);
+      patch.sendgridApiKeyPrefix = body.apiKey.slice(0, 7);
+    }
+
+    const updated = await storage.updateAppSettings(patch);
+    res.json({
+      fromEmail: updated.fromEmail,
+      fromName: updated.fromName,
+      emailEnabled: updated.emailEnabled ?? false,
+      apiKeyPrefix: updated.sendgridApiKeyPrefix,
+      isConfigured: !!updated.sendgridApiKey,
+    });
+  } catch (error: any) {
+    if (error instanceof z.ZodError) return sendError(res, 400, error.errors[0].message);
+    console.error("Error updating email settings:", error);
+    sendError(res, 500, "Failed to update email settings");
+  }
+});
+
+// POST /api/settings/email/test — send a test email to the requesting user
+router.post("/api/settings/email/test", requireAdmin, async (req: any, res) => {
+  try {
+    const userEmail = req.user?.email;
+    if (!userEmail) return sendError(res, 400, "Your account has no email address on file");
+
+    await sendMail({
+      to: userEmail,
+      subject: "Axis Camera Uptime — test email",
+      html: `<p>This is a test email from your Axis Camera Uptime instance.</p>
+             <p>If you can read this, SendGrid is configured correctly.</p>`,
+    });
+
+    res.json({ message: `Test email sent to ${userEmail}` });
+  } catch (error: any) {
+    if (error instanceof EmailNotConfiguredError) {
+      return sendError(res, 400, error.message);
+    }
+    const sgMessage = error?.response?.body?.errors?.[0]?.message;
+    console.error("Error sending test email:", sgMessage || error?.message || error);
+    sendError(res, 500, sgMessage ? `SendGrid: ${sgMessage}` : "Failed to send test email");
   }
 });
 

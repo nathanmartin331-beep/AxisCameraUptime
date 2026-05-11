@@ -8,6 +8,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Bell, Clock, Database, User, Lock, AlertTriangle, Loader2, Save, Shield } from "lucide-react";
 import ApiKeysSection from "@/components/settings/ApiKeysSection";
 import WebhooksSection from "@/components/settings/WebhooksSection";
+import EmailDeliverySection from "@/components/settings/EmailDeliverySection";
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -426,6 +427,8 @@ export default function Settings() {
             )}
           </CardContent>
         </Card>
+
+        <EmailDeliverySection />
 
         <ApiKeysSection />
 

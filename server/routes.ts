@@ -12,6 +12,7 @@ import groupRoutes from "./routes/groupRoutes";
 import analyticsRoutes from "./routes/analyticsRoutes";
 import settingsRoutes from "./routes/settingsRoutes";
 import notificationRoutes from "./routes/notificationRoutes";
+import reportsRoutes from "./routes/reportsRoutes";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Mount all route modules
@@ -23,6 +24,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(analyticsRoutes);
   app.use(settingsRoutes);
   app.use(notificationRoutes);
+  app.use(reportsRoutes);
 
   // Create HTTPS server if SSL certificate and key are provided via environment variables.
   const sslCertPath = process.env.SSL_CERT_PATH;

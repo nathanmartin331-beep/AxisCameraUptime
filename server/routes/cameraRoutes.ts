@@ -25,18 +25,17 @@ const cameraWriteLimiter = rateLimit({
 // Camera CRUD routes
 router.get("/api/cameras", requireApiKeyOrAuth, async (req: any, res) => {
   try {
-    const userId = getUserId(req);
     const { model, hasPTZ, hasAudio } = req.query;
 
     let cameras;
     if (model && typeof model === 'string') {
-      cameras = await storage.getCamerasByModel(model, userId);
+      cameras = await storage.getCamerasByModel(model);
     } else if (hasPTZ === 'true') {
-      cameras = await storage.getCamerasByCapability('hasPTZ', undefined, userId);
+      cameras = await storage.getCamerasByCapability('hasPTZ');
     } else if (hasAudio === 'true') {
-      cameras = await storage.getCamerasByCapability('hasAudio', undefined, userId);
+      cameras = await storage.getCamerasByCapability('hasAudio');
     } else {
-      cameras = await storage.getCamerasByUserId(userId);
+      cameras = await storage.getAllCameras();
     }
 
     const safeCameras = cameras.map(({ encryptedPassword, ...camera }) => camera);
@@ -54,7 +53,6 @@ router.get("/api/cameras/:id", requireApiKeyOrAuth, async (req: any, res) => {
 
     const camera = await storage.getCameraById(cameraId);
     if (!camera) return sendError(res, 404, "Camera not found");
-    if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
 
     const { encryptedPassword, ...safeCamera } = camera;
 
@@ -117,7 +115,6 @@ router.patch("/api/cameras/:id", cameraWriteLimiter, requireAdmin, async (req: a
 
     const camera = await storage.getCameraById(cameraId);
     if (!camera) return sendError(res, 404, "Camera not found");
-    if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
 
     const updates: Record<string, any> = {};
     for (const key of Object.keys(req.body)) {
@@ -155,7 +152,6 @@ router.delete("/api/cameras/:id", cameraWriteLimiter, requireAdmin, async (req: 
 
     const camera = await storage.getCameraById(cameraId);
     if (!camera) return sendError(res, 404, "Camera not found");
-    if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
 
     await storage.deleteCamera(cameraId);
     dashboardCache.delete(`dashboard:${getUserId(req)}`);
@@ -177,7 +173,6 @@ router.get("/api/cameras/:id/events", requireAuth, async (req: any, res) => {
 
     const camera = await storage.getCameraById(cameraId);
     if (!camera) return sendError(res, 404, "Camera not found");
-    if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
 
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - daysResult);
@@ -192,11 +187,10 @@ router.get("/api/cameras/:id/events", requireAuth, async (req: any, res) => {
 
 router.get("/api/cameras/uptime/batch", requireAuth, async (req: any, res) => {
   try {
-    const userId = getUserId(req);
     const daysResult = validateDays(req.query.days);
     if (typeof daysResult === "object") return sendError(res, 400, daysResult.error);
 
-    const cameras = await storage.getCamerasByUserId(userId);
+    const cameras = await storage.getAllCameras();
     const uptimeMap = await storage.calculateBatchUptimePercentage(cameras.map(c => c.id), daysResult);
     const uptimeData = cameras.map(camera => ({
       cameraId: camera.id,
@@ -213,11 +207,10 @@ router.get("/api/cameras/uptime/batch", requireAuth, async (req: any, res) => {
 
 router.get("/api/uptime/events", requireAuth, async (req: any, res) => {
   try {
-    const userId = getUserId(req);
     const daysResult = validateDays(req.query.days);
     if (typeof daysResult === "object") return sendError(res, 400, daysResult.error);
 
-    const cameras = await storage.getCamerasByUserId(userId);
+    const cameras = await storage.getAllCameras();
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - daysResult);
 
@@ -241,7 +234,6 @@ router.get("/api/uptime/events", requireAuth, async (req: any, res) => {
 // Daily uptime percentages for the chart
 router.get("/api/uptime/daily", requireAuth, async (req: any, res) => {
   try {
-    const userId = getUserId(req);
     const daysResult = validateDays(req.query.days);
     if (typeof daysResult === "object") return sendError(res, 400, daysResult.error);
     const days = daysResult;
@@ -254,10 +246,9 @@ router.get("/api/uptime/daily", requireAuth, async (req: any, res) => {
       if (!camId) return sendError(res, 400, "Invalid camera ID");
       const camera = await storage.getCameraById(camId);
       if (!camera) return sendError(res, 404, "Camera not found");
-      if (camera.userId !== userId) return sendError(res, 403, "Forbidden");
-      cameraIds = [camera.id];
+        cameraIds = [camera.id];
     } else {
-      const cameras = await storage.getCamerasByUserId(userId);
+      const cameras = await storage.getAllCameras();
       cameraIds = cameras.map(c => c.id);
     }
 
@@ -281,7 +272,6 @@ router.get("/api/cameras/:id/uptime", requireAuth, async (req: any, res) => {
 
     const camera = await storage.getCameraById(cameraId);
     if (!camera) return sendError(res, 404, "Camera not found");
-    if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
 
     const result = await storage.calculateUptimePercentage(cameraId, daysResult);
     res.json({ percentage: result.percentage, days: daysResult, monitoredDays: result.monitoredDays });
@@ -299,7 +289,6 @@ router.post("/api/cameras/:id/check", cameraWriteLimiter, requireAuth, async (re
 
     const camera = await storage.getCameraById(cameraId);
     if (!camera) return sendError(res, 404, "Camera not found");
-    if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
 
     // Run the check asynchronously — respond immediately
     res.json({ message: "Camera check queued" });
@@ -320,7 +309,6 @@ router.post("/api/cameras/:id/repin-cert", cameraWriteLimiter, requireAdmin, asy
 
     const camera = await storage.getCameraById(cameraId);
     if (!camera) return sendError(res, 404, "Camera not found");
-    if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
 
     const { captureSslFingerprint } = await import("../services/cameraUrl");
     const port = (camera as any).port || 443;
@@ -354,7 +342,6 @@ router.post("/api/cameras/:id/detect-model", requireAdmin, async (req: any, res)
 
     const camera = await storage.getCameraById(cameraId);
     if (!camera) return sendError(res, 404, "Camera not found");
-    if (camera.userId !== userId) return sendError(res, 403, "Forbidden");
 
     const { decryptPassword } = await import("../encryption");
     const password = await decryptPassword(camera.encryptedPassword);
@@ -407,7 +394,6 @@ router.get("/api/cameras/:id/lifecycle", requireAuth, async (req: any, res) => {
 
     const camera = await storage.getCameraById(cameraId);
     if (!camera) return sendError(res, 404, "Camera not found");
-    if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
 
     const cached = (camera.capabilities as any)?.lifecycle;
     if (cached?.lastChecked) {
@@ -444,7 +430,6 @@ router.post("/api/cameras/:id/probe-analytics", requireAdmin, async (req: any, r
 
     const camera = await storage.getCameraById(cameraId);
     if (!camera) return sendError(res, 404, "Camera not found");
-    if (camera.userId !== userId) return sendError(res, 403, "Forbidden");
 
     const { decryptPassword } = await import("../encryption");
     const password = await decryptPassword(camera.encryptedPassword);
@@ -490,7 +475,6 @@ router.patch("/api/cameras/:id/analytics-config", requireAdmin, async (req: any,
 
     const camera = await storage.getCameraById(cameraId);
     if (!camera) return sendError(res, 404, "Camera not found");
-    if (camera.userId !== userId) return sendError(res, 403, "Forbidden");
 
     const configSchema = z.object({
       peopleCount: z.boolean().optional(),
@@ -522,7 +506,6 @@ router.get("/api/cameras/:id/capabilities", requireAuth, async (req: any, res) =
 
     const camera = await storage.getCameraById(cameraId);
     if (!camera) return sendError(res, 404, "Camera not found");
-    if (camera.userId !== userId) return sendError(res, 403, "Forbidden");
 
     const model = await storage.getCameraModel(cameraId);
     if (!model) return sendError(res, 404, "Camera model not detected yet");
@@ -555,8 +538,7 @@ router.get("/api/models", requireAuth, async (req: any, res) => {
 
 router.get("/api/cameras/stats/models", requireAuth, async (req: any, res) => {
   try {
-    const userId = getUserId(req);
-    const allCameras = await storage.getCamerasByUserId(userId);
+    const allCameras = await storage.getAllCameras();
 
     const modelCounts: Record<string, number> = {};
     const seriesCounts: Record<string, number> = { P: 0, Q: 0, M: 0, F: 0 };

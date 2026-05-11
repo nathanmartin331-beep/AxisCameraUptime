@@ -9,6 +9,8 @@ import {
   userSettings,
   apiKeys,
   webhooks,
+  appSettings,
+  reportSchedules,
   type User,
   type InsertUser,
   type Camera,
@@ -24,6 +26,9 @@ import {
   type UserSettings,
   type ApiKey,
   type Webhook,
+  type AppSettings,
+  type ReportSchedule,
+  type InsertReportSchedule,
 } from "@shared/schema";
 import { db, sqlite } from "./db";
 import { eq, and, desc, gte, lte, sql, isNull } from "drizzle-orm";
@@ -277,6 +282,18 @@ export interface IStorage {
   deleteWebhook(id: string, userId: string): Promise<void>;
   getActiveWebhooksByEvent(eventType: string): Promise<Webhook[]>;
   updateWebhookAfterDelivery(id: string, success: boolean): Promise<void>;
+
+  // App-wide settings (singleton)
+  getAppSettings(): Promise<AppSettings>;
+  updateAppSettings(patch: Partial<Pick<AppSettings, 'sendgridApiKey' | 'sendgridApiKeyPrefix' | 'fromEmail' | 'fromName' | 'emailEnabled'>>): Promise<AppSettings>;
+
+  // Report schedules
+  listReportSchedulesByUser(userId: string): Promise<ReportSchedule[]>;
+  getReportSchedule(id: string): Promise<ReportSchedule | undefined>;
+  createReportSchedule(data: InsertReportSchedule): Promise<ReportSchedule>;
+  updateReportSchedule(id: string, patch: Partial<ReportSchedule>): Promise<ReportSchedule | undefined>;
+  deleteReportSchedule(id: string, userId: string): Promise<void>;
+  listDueReportSchedules(now: Date): Promise<ReportSchedule[]>;
 
   // Data retention cleanup
   deleteOldUptimeEvents(beforeDate: Date): Promise<number>;
@@ -2011,8 +2028,77 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async getAppSettings(): Promise<AppSettings> {
+    const [existing] = await db.select().from(appSettings).where(eq(appSettings.id, 'default'));
+    if (existing) return existing;
+
+    const [created] = await db
+      .insert(appSettings)
+      .values({ id: 'default', emailEnabled: false })
+      .returning();
+    return created;
+  }
+
+  async updateAppSettings(
+    patch: Partial<Pick<AppSettings, 'sendgridApiKey' | 'sendgridApiKeyPrefix' | 'fromEmail' | 'fromName' | 'emailEnabled'>>
+  ): Promise<AppSettings> {
+    await this.getAppSettings();
+    const [updated] = await db
+      .update(appSettings)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(eq(appSettings.id, 'default'))
+      .returning();
+    return updated;
+  }
+
   async getAllCameras(): Promise<Camera[]> {
     return db.select().from(cameras);
+  }
+
+  // === Report schedules ===
+  async listReportSchedulesByUser(userId: string): Promise<ReportSchedule[]> {
+    return db
+      .select()
+      .from(reportSchedules)
+      .where(eq(reportSchedules.userId, userId))
+      .orderBy(desc(reportSchedules.createdAt));
+  }
+
+  async getReportSchedule(id: string): Promise<ReportSchedule | undefined> {
+    const [row] = await db.select().from(reportSchedules).where(eq(reportSchedules.id, id));
+    return row;
+  }
+
+  async createReportSchedule(data: InsertReportSchedule): Promise<ReportSchedule> {
+    const [row] = await db.insert(reportSchedules).values(data).returning();
+    return row;
+  }
+
+  async updateReportSchedule(id: string, patch: Partial<ReportSchedule>): Promise<ReportSchedule | undefined> {
+    const [row] = await db
+      .update(reportSchedules)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(eq(reportSchedules.id, id))
+      .returning();
+    return row;
+  }
+
+  async deleteReportSchedule(id: string, userId: string): Promise<void> {
+    await db
+      .delete(reportSchedules)
+      .where(and(eq(reportSchedules.id, id), eq(reportSchedules.userId, userId)));
+  }
+
+  async listDueReportSchedules(now: Date): Promise<ReportSchedule[]> {
+    return db
+      .select()
+      .from(reportSchedules)
+      .where(
+        and(
+          eq(reportSchedules.active, true),
+          lte(reportSchedules.nextRunAt, now),
+        ),
+      );
   }
 
   // API key operations

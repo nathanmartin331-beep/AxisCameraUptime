@@ -3,10 +3,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useQuery } from "@tanstack/react-query";
-import { Download, FileText, TrendingUp, TrendingDown, MapPin } from "lucide-react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { Download, FileText, TrendingUp, TrendingDown, MapPin, BarChart3, Mail, Loader2, Send } from "lucide-react";
 import { format } from "date-fns";
 import UptimeChart from "@/components/UptimeChart";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
+import ScheduledReportsSection from "@/components/reports/ScheduledReportsSection";
 
 interface Camera {
   id: number;
@@ -17,6 +20,7 @@ interface Camera {
 }
 
 export default function Reports() {
+  const { toast } = useToast();
   const [timeRange, setTimeRange] = useState("30");
   const [selectedCamera, setSelectedCamera] = useState<string>("all");
   const [locationFilter, setLocationFilter] = useState<string>("all");
@@ -76,6 +80,55 @@ export default function Reports() {
     }
     return map;
   }, [uptimeData]);
+
+  // Camera IDs that match the current location filter (used for analytics report scoping)
+  const filteredCameraIds = useMemo(
+    () => filteredCameras.map((c) => String(c.id)),
+    [filteredCameras],
+  );
+
+  const handleAnalyticsExport = async () => {
+    const params = new URLSearchParams();
+    params.set("range", timeRange);
+    if (locationFilter !== "all" && filteredCameraIds.length > 0) {
+      params.set("cameraIds", filteredCameraIds.join(","));
+    }
+    try {
+      const res = await fetch(`/api/reports/analytics/export?${params.toString()}`, {
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Download failed" }));
+        throw new Error(err.message || "Download failed");
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `analytics-${timeRange}d-${format(new Date(), "yyyy-MM-dd")}.csv`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Export failed", description: e.message });
+    }
+  };
+
+  const emailAnalyticsMutation = useMutation({
+    mutationFn: async () => {
+      const body: Record<string, unknown> = { range: parseInt(timeRange, 10) };
+      if (locationFilter !== "all" && filteredCameraIds.length > 0) {
+        body.cameraIds = filteredCameraIds;
+      }
+      const res = await apiRequest("POST", "/api/reports/analytics/email", body);
+      return (await res.json()) as { message: string; rowCount: number };
+    },
+    onSuccess: (data) => {
+      toast({ title: "Report sent", description: `${data.message} (${data.rowCount} rows)` });
+    },
+    onError: (error: Error) => {
+      toast({ variant: "destructive", title: "Email failed", description: error.message });
+    },
+  });
 
   const handleExportCSV = () => {
     // Export only filtered cameras
@@ -234,6 +287,7 @@ export default function Reports() {
                   <SelectValue placeholder="Time range" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="1">Today</SelectItem>
                   <SelectItem value="7">7 Days</SelectItem>
                   <SelectItem value="30">30 Days</SelectItem>
                   <SelectItem value="90">90 Days</SelectItem>
@@ -249,13 +303,57 @@ export default function Reports() {
             days={parseInt(timeRange)}
             title={`${timeRange}-Day Uptime Trend`}
             description={
-              selectedCamera === "all" 
+              selectedCamera === "all"
                 ? `${filteredCameras.length} camera${filteredCameras.length !== 1 ? 's' : ''}${locationFilter !== "all" ? ` in ${locationFilter}` : ''}`
                 : filteredCameras.find(c => c.id.toString() === selectedCamera)?.name
             }
           />
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <BarChart3 className="w-5 h-5" />
+            <CardTitle>Analytics Report</CardTitle>
+          </div>
+          <CardDescription>
+            Daily line-crossing, occupancy, and people-counting totals — one row per camera, day, and scenario.
+            Uses the time range selected above
+            {locationFilter !== "all" ? `, filtered to "${locationFilter}"` : " across all cameras"}.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              onClick={handleAnalyticsExport}
+              variant="outline"
+              data-testid="button-export-analytics-csv"
+            >
+              <Download className="w-4 h-4 mr-2" />
+              Download CSV
+            </Button>
+            <Button
+              onClick={() => emailAnalyticsMutation.mutate()}
+              disabled={emailAnalyticsMutation.isPending}
+              data-testid="button-email-analytics"
+            >
+              {emailAnalyticsMutation.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4 mr-2" />
+              )}
+              Email to me
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground mt-3">
+            <Mail className="w-3 h-3 inline mr-1" />
+            Email requires SendGrid to be configured in Settings &gt; Email Delivery.
+          </p>
+        </CardContent>
+      </Card>
+
+      <ScheduledReportsSection />
     </div>
   );
 }

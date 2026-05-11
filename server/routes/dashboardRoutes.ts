@@ -18,7 +18,7 @@ router.get("/api/dashboard/summary", requireAuth, async (req: any, res) => {
     const cached = dashboardCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return res.json(cached.data);
 
-    const cameras = await storage.getCamerasByUserId(userId);
+    const cameras = await storage.getAllCameras();
     const videoCameras = cameras.filter(c => c.series !== 'C');
     const speakers = cameras.filter(c => c.series === 'C');
 
@@ -167,7 +167,6 @@ router.get("/api/metrics/camera/:id", requireAuth, async (req: any, res) => {
 
     const camera = await storage.getCameraById(cameraId);
     if (!camera) return sendError(res, 404, "Camera not found");
-    if (camera.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
 
     const { calculateCameraMetrics } = await import("../reliabilityMetrics");
     res.json(await calculateCameraMetrics(cameraId, daysResult));

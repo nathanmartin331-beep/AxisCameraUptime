@@ -134,10 +134,9 @@ router.post("/api/groups/:id/members", requireAdmin, async (req: any, res) => {
       if (!validateId(camId)) return sendError(res, 400, `Invalid camera ID format: ${camId.substring(0, 20)}`);
     }
 
-    const userId = getUserId(req);
     for (const camId of cameraIds) {
       const camera = await storage.getCameraById(camId);
-      if (!camera || camera.userId !== userId) return sendError(res, 400, `Camera ${camId} not found or not owned by you`);
+      if (!camera) return sendError(res, 400, `Camera ${camId} not found`);
     }
 
     for (const camId of cameraIds) {
