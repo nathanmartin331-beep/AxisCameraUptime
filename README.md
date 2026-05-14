@@ -1,611 +1,471 @@
 # Axis Camera Uptime Monitor
 
-> A comprehensive monitoring and reporting system for Axis network cameras with real-time uptime tracking, reliability metrics, and intelligent alerting.
+> Self-hosted monitoring, analytics, and reporting for Axis network cameras: real-time uptime tracking, reliability metrics, people/occupancy analytics, scheduled email reports, and webhook delivery for downstream systems.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue.svg)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-18.3-61dafb.svg)](https://reactjs.org/)
 [![Express](https://img.shields.io/badge/Express-4.21-000000.svg)](https://expressjs.com/)
 
-## 📋 Table of Contents
+## Table of Contents
 
-- [Features](#-features)
-- [Tech Stack](#-tech-stack)
-- [Quick Start](#-quick-start)
-- [Installation](#-installation)
-- [Usage](#-usage)
-- [Project Structure](#-project-structure)
-- [API Documentation](#-api-documentation)
-- [Development](#-development)
-- [Contributing](#-contributing)
-- [License](#-license)
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Building for Production](#building-for-production)
+- [Deployment](#deployment)
+  - [Windows Service (NSSM)](#windows-service-nssm)
+  - [Linux systemd](#linux-systemd)
+  - [HTTPS / TLS](#https--tls)
+  - [Default Admin Credentials](#default-admin-credentials)
+- [Project Structure](#project-structure)
+- [API Reference](#api-reference)
+- [Email & SendGrid](#email--sendgrid)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
 
-## ✨ Features
+## Features
 
-### Core Functionality
-- **Real-Time Monitoring** - Continuous camera uptime tracking with configurable check intervals
-- **Multi-Camera Dashboard** - Monitor multiple Axis cameras from a centralized interface
-- **Reliability Metrics** - MTBF, MTTR, availability percentage, and failure rate analysis
-- **Location-Based Filtering** - Organize and filter cameras by physical location
-- **Network Discovery** - Automatic camera detection via network scanning
-- **CSV Import/Export** - Bulk camera management and data export capabilities
+### Monitoring
+- Real-time uptime tracking with per-user polling intervals
+- VAPIX-based health checks (HTTP/HTTPS), TOFU certificate pinning, and per-camera cert validation modes (`none`, `pinned`, `ca`)
+- ICMP/HTTP/TCP probes, response-time tracking, daily and hourly rollups for fleets of 2,500+ cameras
+- Reliability metrics: MTBF, MTTR, availability %, failure rate
 
-### Advanced Features
-- **Intelligent Alerting** - Automated notifications for camera downtime and failures
-- **Historical Reporting** - Detailed uptime reports with customizable date ranges
-- **Camera Model Detection** - Automatic identification of Axis camera models
-- **Product Lifecycle Tracking** - EOL/EOS status from Axis Communications
-- **Customizable Dashboard** - Drag-and-drop widget arrangement with grid layout
-- **Camera Groups** - Organize cameras into logical groups
-- **User Management** - Role-based access control with Admin and Viewer roles
-- **Session Management** - Secure local authentication with Passport.js
+### Camera Management
+- Manual entry, CSV import/export, bulk add (≤50 per request)
+- Network discovery: subnet scan, CIDR scan, Bonjour, SSDP, HTTP probing
+- Camera model auto-detection
+- Camera groups with member rosters and admin-only mutations
 
-### Monitoring Capabilities
-- **Ping Monitoring** - ICMP-based health checks
-- **HTTP/HTTPS Monitoring** - Application-level availability testing
-- **Response Time Tracking** - Latency and performance metrics
-- **Uptime Percentage** - Calculate and display availability over time
-- **Status History** - Track camera status changes and patterns
+### Analytics
+- People-in / people-out / occupancy / line-crossing / average dwell time
+- Per-scenario breakdowns and daily history
+- Fleet-wide summary endpoint
 
-## 🛠 Tech Stack
+### Reporting
+- CSV export of cameras, uptime, and analytics
+- On-demand emailed analytics report (`POST /api/reports/analytics/email`)
+- **Scheduled email reports** (daily/weekly/monthly) per user, dispatched by a cron job at :05 every hour
+
+### Integrations
+- **SendGrid** for outbound email (API key stored encrypted in the database, configurable from the Settings UI)
+- **API keys** (`X-API-Key`) for read-only programmatic access to cameras and analytics
+- **Webhook subscriptions** with HMAC-signed deliveries for camera status and analytics events
+- **Server-Sent Events** stream for live status changes (`GET /api/notifications/stream`)
+
+### Security
+- Local email/password auth via Passport.js, bcrypt password hashing
+- SQLite-backed session store (avoids the Windows EPERM issues that file-based stores hit)
+- Helmet-style security headers; HSTS automatically enabled when HTTPS is on
+- Rate limiting on auth, scan, and bulk-add endpoints
+- Role-based access (`admin`, `viewer`); admin-only routes for all destructive actions
+
+## Tech Stack
 
 ### Frontend
-- **Framework**: React 18.3 with TypeScript
-- **Build Tool**: Vite 5.4
-- **Routing**: Wouter 3.3
-- **State Management**: TanStack Query 5.60
-- **UI Components**: Radix UI primitives
-- **Styling**: Tailwind CSS 3.4 with custom animations
-- **Charts**: Recharts 2.15
-- **Forms**: React Hook Form 7.55 with Zod validation
+- React 18.3 + TypeScript, Vite 5.4
+- Wouter for routing, TanStack Query for server state
+- Radix UI + Tailwind CSS, Recharts for charts, React Hook Form + Zod for forms
 
 ### Backend
-- **Runtime**: Node.js with TypeScript
-- **Framework**: Express 4.21
-- **Database**: SQLite with Drizzle ORM 0.39
-- **Authentication**: Passport.js with Local Strategy (email/password)
-- **Session Store**: SQLite-based sessions with express-session
-- **Security**: Helmet, bcrypt for password hashing, rate limiting
+- Node.js + TypeScript (ESM, esbuild bundle)
+- Express 4.21, Passport.js (local strategy)
+- SQLite via Drizzle ORM 0.39 and `better-sqlite3` (WAL mode, 256MB mmap, 64MB cache)
+- `better-sqlite3-session-store` for sessions
+- `@sendgrid/mail` for email, `node-cron` for the report scheduler
 
-### Development & Quality
-- **Testing**: Vitest 4.0 with UI
-- **Type Checking**: TypeScript 5.6
-- **Code Quality**: ESLint + Prettier
+### Testing / Build
+- Vitest 4.0 + Supertest
+- TypeScript 5.6, esbuild for server, Vite for client
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
-- Node.js 18+ installed
-- npm or yarn package manager
+- Node.js 18 or later
+- npm
 
-### Installation
+### Setup
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/<your-username>/AxisCameraUptime.git
-   cd AxisCameraUptime
+```bash
+git clone https://github.com/4S-Security-LLC/AxisUptimeUtility.git
+cd AxisUptimeUtility
+npm install
+cp .env.example .env       # then edit .env (see Configuration below)
+npm run db:push            # initialize schema in the SQLite file
+npm run dev                # start dev server on http://localhost:5000
+```
+
+The first run creates a default admin user. In development the password is printed to the console; in production you **must** set `DEFAULT_ADMIN_EMAIL` and `DEFAULT_ADMIN_PASSWORD` in `.env` or startup will fail (see [Default Admin Credentials](#default-admin-credentials)).
+
+## Configuration
+
+All configuration is via environment variables loaded from `.env` (which is gitignored — never commit it).
+
+### Required
+
+| Variable | Purpose |
+|---|---|
+| `NODE_ENV` | `development` or `production` |
+| `SESSION_SECRET` | Long random string used to sign session cookies. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `DEFAULT_ADMIN_EMAIL` | **Required in production** — startup throws otherwise |
+| `DEFAULT_ADMIN_PASSWORD` | **Required in production** — startup throws otherwise |
+
+### Optional
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `5000` | TCP port to listen on (binds `0.0.0.0`) |
+| `DATABASE_URL` | `./data/camera-uptime.db` | SQLite file path. Supports a `sqlite:` prefix which is stripped. |
+| `DEFAULT_ADMIN_FIRSTNAME` | `Admin` | Default admin first name |
+| `DEFAULT_ADMIN_LASTNAME` | `User` | Default admin last name |
+| `SSL_CERT_PATH` | — | PEM certificate for HTTPS. If set together with `SSL_KEY_PATH`, the server starts in HTTPS mode and sets `secure` session cookies + HSTS. |
+| `SSL_KEY_PATH` | — | PEM private key for HTTPS |
+| `SSL_CA_PATH` | — | Optional CA bundle for intermediate certs |
+| `POLL_CONCURRENCY` | `25` | Max concurrent camera polls |
+| `ANALYTICS_POLL_INTERVAL` | `1` | Minutes between analytics polls |
+| `CAMERA_CA_PATH` | — | CA bundle used to validate camera HTTPS endpoints when a camera uses `ca` cert validation mode |
+
+> **Note:** A number of variables that appeared in older `.env.example` files (`DEFAULT_CHECK_INTERVAL`, `DEFAULT_TIMEOUT`, `BCRYPT_ROUNDS`, `RATE_LIMIT_*`, `SMTP_*`, `ENABLE_*`, `REPLIT_DOMAINS`, etc.) are **not** read by the current code. They have been removed from `.env.example`. SMTP is replaced by SendGrid configured via the Settings UI (see [Email & SendGrid](#email--sendgrid)).
+
+## Building for Production
+
+```bash
+npm run build       # vite build (client) + esbuild bundle (server) → dist/
+npm run check       # TypeScript type check
+npm test            # Vitest run
+npm start           # cross-env NODE_ENV=production node --env-file-if-exists=.env dist/index.js
+```
+
+The `start` script loads `.env` automatically via Node's `--env-file-if-exists` flag. The server binds `0.0.0.0:$PORT` (default `5000`).
+
+## Deployment
+
+### Windows Service (NSSM)
+
+This is the recommended way to run the app persistently on Windows. [NSSM](https://nssm.cc/) (Non-Sucking Service Manager) wraps the Node process so it restarts on failure and starts at boot.
+
+1. **Build the app** in your working directory:
+   ```powershell
+   npm run build
    ```
 
-2. **Install dependencies**
-   ```bash
-   npm install
+2. **Install NSSM** somewhere on disk (e.g. `C:\Tools\nssm\nssm-2.24\win64\nssm.exe`).
+
+3. **Create the service from an elevated PowerShell:**
+   ```powershell
+   $nssm = "C:\Tools\nssm\nssm-2.24\win64\nssm.exe"
+   $dir  = "C:\path\to\AxisUptimeUtility"
+   $node = "C:\Program Files\nodejs\node.exe"   # or wherever node lives
+
+   & $nssm install AxisCameraUptime $node "--env-file-if-exists=.env dist/index.js"
+   & $nssm set AxisCameraUptime AppDirectory $dir
+   & $nssm set AxisCameraUptime AppEnvironmentExtra "NODE_ENV=production"
+   & $nssm set AxisCameraUptime AppStdout "$dir\logs\stdout.log"
+   & $nssm set AxisCameraUptime AppStderr "$dir\logs\stderr.log"
+   & $nssm set AxisCameraUptime Start SERVICE_AUTO_START
+   & $nssm start AxisCameraUptime
    ```
 
-3. **Set up environment variables**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your configuration
+4. **Verify it's running:**
+   ```powershell
+   sc.exe queryex AxisCameraUptime
    ```
+   You want `STATE : 4 RUNNING`. If you see `7 PAUSED`, NSSM is throttling because the child keeps crashing — read `logs\stderr.log` for the actual error.
 
-4. **Initialize the database**
-   ```bash
-   npm run db:push
-   ```
+**Caveats:**
+- NSSM sets `NODE_ENV=production` via `AppEnvironmentExtra`, which **overrides** any `NODE_ENV` in `.env`. The production-only check in `server/defaultUser.ts` fires under the service, so `DEFAULT_ADMIN_EMAIL` and `DEFAULT_ADMIN_PASSWORD` must be set in `.env`.
+- NSSM commands require an Administrator PowerShell. A non-elevated shell returns `OpenService(): Access is denied.`
+- If you run `npm run dev` while the service is up, both will try to bind port 5000. Stop the service first (`nssm stop AxisCameraUptime`) or run dev on a different `PORT`.
+- The service runs as `LocalSystem` by default. For tighter isolation, change the identity with `nssm set AxisCameraUptime ObjectName .\<user> <password>` and make sure that user can read the project directory.
 
-5. **Start development server**
-   ```bash
-   npm run dev
-   ```
+### Linux systemd
 
-6. **Access the application**
-   ```
-   Open http://localhost:5000 in your browser
-   ```
+```ini
+# /etc/systemd/system/axis-camera-uptime.service
+[Unit]
+Description=Axis Camera Uptime Monitor
+After=network.target
 
-## 📖 Usage
+[Service]
+Type=simple
+User=axis
+WorkingDirectory=/opt/AxisUptimeUtility
+ExecStart=/usr/bin/node --env-file-if-exists=.env dist/index.js
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+StandardOutput=append:/var/log/axis-camera-uptime/stdout.log
+StandardError=append:/var/log/axis-camera-uptime/stderr.log
 
-### Adding Cameras
+[Install]
+WantedBy=multi-user.target
+```
 
-**Manual Entry**:
-1. Navigate to Cameras page
-2. Click "Add Camera" button
-3. Enter camera details (IP, name, location, model)
-4. Save and start monitoring
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now axis-camera-uptime
+sudo journalctl -u axis-camera-uptime -f
+```
 
-**Network Scan**:
-1. Go to Network Scan page
-2. Enter IP range (e.g., 192.168.1.0/24)
-3. Click "Scan Network"
-4. Select discovered cameras to add
+### HTTPS / TLS
 
-**CSV Import**:
-1. Prepare CSV file with columns: name, ip_address, location, model
-2. Click "Import CSV" on Cameras page
-3. Upload file and review cameras
-4. Confirm import
+Set `SSL_CERT_PATH` and `SSL_KEY_PATH` to PEM files in `.env`. Optionally set `SSL_CA_PATH` for intermediate certificates. When both cert and key are present and readable, the server starts an HTTPS listener (instead of HTTP), enables `Secure` session cookies, and emits an HSTS header.
 
-### Monitoring Dashboard
+```env
+SSL_CERT_PATH=C:\certs\camera-uptime.crt
+SSL_KEY_PATH=C:\certs\camera-uptime.key
+SSL_CA_PATH=C:\certs\ca-bundle.crt
+```
 
-The dashboard provides real-time overview of all cameras:
-- **Overall Uptime** - Aggregated availability percentage
-- **Active Cameras** - Currently online camera count
-- **Alerts** - Recent downtime incidents
-- **Uptime Trend** - 7-day uptime chart
+### Default Admin Credentials
 
-### Viewing Camera Details
+On first startup, if no user exists with `DEFAULT_ADMIN_EMAIL`, the app creates one as an admin.
 
-Click on any camera to view:
-- Current status and response time
-- Uptime history chart
-- Reliability metrics (MTBF, MTTR, failure rate)
-- Recent status changes
-- Configuration details
+- **Development** (`NODE_ENV=development`): if `DEFAULT_ADMIN_PASSWORD` is unset, a random 16-byte hex password is generated and **printed to the console**. Watch the dev server output on first run.
+- **Production** (`NODE_ENV=production`): startup **throws** with `SECURITY ERROR: DEFAULT_ADMIN_EMAIL and DEFAULT_ADMIN_PASSWORD must be set in production environment` if either variable is missing. Set both in `.env` before starting the service.
 
-### Generating Reports
+Change the password from the Settings page after first login. The default user's role is upgraded to `admin` automatically if it isn't already.
 
-1. Navigate to Reports page
-2. Select date range
-3. Choose cameras (or all)
-4. Filter by location (optional)
-5. Export as CSV or view in-app
-
-### Configuration
-
-Access Settings page to configure:
-- **Profile** - Update your name (first/last)
-- **Password** - Change your account password
-- **Monitoring Interval** - How often to check cameras (default: 5 minutes)
-- **Email Notifications** - Toggle downtime alerts
-- **Data Retention** - How long to keep historical data
-
-### User Management (Admin Only)
-
-Navigate to the Users page to:
-- View all registered users
-- Create new users with Admin or Viewer roles
-- Edit user details and change roles
-- Delete users (with confirmation)
-
-**Roles**:
-- **Admin** - Full access: manage cameras, groups, users, settings, and scans
-- **Viewer** - Read-only access: view dashboards, cameras, and reports
-
-## 📁 Project Structure
+## Project Structure
 
 ```
-AxisCameraUptime/
-├── client/                    # Frontend React application
+AxisUptimeUtility/
+├── client/                          # React + Vite frontend
 │   ├── src/
-│   │   ├── components/       # Reusable UI components
-│   │   │   ├── ui/          # Base UI components (Radix)
-│   │   │   ├── AddCameraModal.tsx
-│   │   │   ├── CameraTable.tsx
-│   │   │   ├── CameraDetailView.tsx
-│   │   │   ├── CSVImportModal.tsx
-│   │   │   └── UptimeChart.tsx
-│   │   ├── pages/           # Page components
-│   │   │   ├── Dashboard.tsx
-│   │   │   ├── CustomizableDashboard.tsx
-│   │   │   ├── Cameras.tsx
-│   │   │   ├── CameraDetail.tsx
-│   │   │   ├── Groups.tsx
-│   │   │   ├── GroupDetail.tsx
-│   │   │   ├── NetworkScan.tsx
-│   │   │   ├── Reports.tsx
-│   │   │   ├── Settings.tsx
-│   │   │   └── Users.tsx
-│   │   ├── lib/             # Utilities and helpers
-│   │   ├── hooks/           # Custom React hooks
-│   │   └── main.tsx         # Application entry point
+│   │   ├── components/              # Reusable UI (Radix-based)
+│   │   ├── pages/                   # Dashboard, Cameras, Groups, Reports, Settings, Users, etc.
+│   │   ├── hooks/                   # Custom React hooks
+│   │   └── main.tsx
 │   └── index.html
-├── server/                   # Backend Express application
-│   ├── index.ts             # Server entry point
-│   ├── routes.ts            # API route definitions
-│   ├── auth.ts              # Authentication logic
-│   ├── authRoutes.ts        # Auth endpoints
-│   ├── storage.ts           # Database operations
-│   ├── cameraMonitor.ts     # Camera monitoring service
-│   ├── networkScanner.ts    # Network discovery
-│   ├── reliabilityMetrics.ts # MTBF/MTTR calculations
-│   ├── cameraModelDetection.ts
-│   └── db.ts                # Database configuration
-├── shared/                   # Shared code between client/server
-│   └── schema.ts            # Database schema & types
-├── config/                   # Configuration files
-│   └── hive-mind.json       # AI swarm configuration
-├── docs/                     # Documentation
-│   └── hive-mind/           # Hive Mind system docs
-├── .agentic-qe/             # QE Fleet configuration
-│   ├── config/              # Agent configurations
-│   └── data/                # Learning and state data
-├── drizzle.config.ts        # Drizzle ORM configuration
-├── vite.config.ts           # Vite build configuration
-├── tailwind.config.js       # Tailwind CSS configuration
+├── server/                          # Express backend
+│   ├── index.ts                     # Server entry, session/security middleware, service startup
+│   ├── routes.ts                    # Route registrar + HTTP/HTTPS server creation
+│   ├── routes/                      # Modular route files mounted by routes.ts
+│   │   ├── cameraRoutes.ts          #   Camera CRUD, uptime events, manual checks, cert re-pin
+│   │   ├── networkRoutes.ts         #   Subnet/CIDR scan, discovery, bulk add
+│   │   ├── dashboardRoutes.ts       #   Fleet summary
+│   │   ├── groupRoutes.ts           #   Camera groups + members
+│   │   ├── analyticsRoutes.ts       #   People/occupancy analytics
+│   │   ├── settingsRoutes.ts        #   User settings, API keys, webhooks, SendGrid config
+│   │   ├── notificationRoutes.ts    #   SSE stream for live status
+│   │   ├── reportsRoutes.ts         #   Analytics CSV/email exports + schedules
+│   │   └── importExportRoutes.ts    #   CSV import/export
+│   ├── authRoutes.ts                # /api/auth/* (login, register, profile, user mgmt)
+│   ├── auth.ts                      # Passport config, requireAuth/requireAdmin/requireApiKeyOrAuth
+│   ├── defaultUser.ts               # Seed/verify default admin on startup
+│   ├── db.ts                        # SQLite connection + schema migrations + auto-column add
+│   ├── cameraMonitor.ts             # Uptime polling
+│   ├── networkScanner.ts            # Subnet/CIDR scanning
+│   ├── cameraModelDetection.ts      # VAPIX model detection
+│   ├── services/
+│   │   ├── analyticsPoller.ts       # Pulls people/occupancy analytics
+│   │   ├── dataRetention.ts         # Daily cleanup of old events
+│   │   ├── dataAggregation.ts       # Hourly/daily rollups
+│   │   ├── reportScheduler.ts       # node-cron job ("5 * * * *") that emails scheduled reports
+│   │   ├── webhookDelivery.ts       # HMAC-signed webhook fan-out
+│   │   └── email.ts                 # SendGrid client wrapper
+│   └── __tests__/                   # Vitest suites + VAPIX fixtures
+├── shared/
+│   └── schema.ts                    # Drizzle ORM schema + Zod types shared with client
+├── scripts/                         # createAdminUser, resetUserPassword, dedupe-cameras, etc.
+├── drizzle.config.ts
+├── vite.config.ts
 └── package.json
 ```
 
-## 🔌 API Documentation
+## API Reference
 
-### Authentication
+All endpoints return JSON unless noted. Authenticated routes require a session cookie; routes marked **API key** also accept an `X-API-Key` header (see [API Keys](#api-keys-and-webhooks)).
 
-#### POST `/api/auth/register`
-Register a new user account.
+### Authentication (`/api/auth`)
 
-**Request Body**:
-```json
-{
-  "email": "user@example.com",
-  "password": "SecurePassword123",
-  "firstName": "John",
-  "lastName": "Doe"
-}
-```
-
-**Response**: `201 Created`
-```json
-{
-  "id": "uuid",
-  "email": "user@example.com",
-  "firstName": "John",
-  "lastName": "Doe"
-}
-```
-
-#### POST `/api/auth/login`
-Authenticate user and create session.
-
-**Request Body**:
-```json
-{
-  "email": "user@example.com",
-  "password": "SecurePassword123"
-}
-```
-
-**Response**: `200 OK`
-```json
-{
-  "id": "uuid",
-  "email": "user@example.com",
-  "firstName": "John",
-  "lastName": "Doe",
-  "role": "viewer"
-}
-```
-
-#### POST `/api/auth/logout`
-End the current session.
-
-#### GET `/api/auth/me`
-Get the currently authenticated user. Requires authentication.
-
-#### POST `/api/auth/change-password`
-Change the current user's password. Requires authentication.
-
-#### PATCH `/api/auth/me`
-Update the current user's profile (firstName, lastName). Requires authentication.
-
-#### GET `/api/auth/users` (Admin only)
-List all users.
-
-#### POST `/api/auth/users` (Admin only)
-Create a new user with email, password, firstName, lastName, and role.
-
-#### PATCH `/api/auth/users/:id` (Admin only)
-Update a user's details (name, email, role, password).
-
-#### DELETE `/api/auth/users/:id` (Admin only)
-Delete a user. Returns 204 on success.
+| Method | Path | Purpose | Auth |
+|---|---|---|---|
+| `POST` | `/api/auth/register` | Register new user (rate-limited 3/hr) | public |
+| `POST` | `/api/auth/login` | Log in (rate-limited 5/15min) | public |
+| `POST` | `/api/auth/logout` | End session | public |
+| `POST` | `/api/auth/auto-login` | Dev-only auto-login | public, dev-only |
+| `GET` | `/api/auth/me` | Get current user | user |
+| `PATCH` | `/api/auth/me` | Update first/last name | user |
+| `POST` | `/api/auth/change-password` | Change own password | user |
+| `GET` | `/api/auth/users` | List users | admin |
+| `POST` | `/api/auth/users` | Create user (with role) | admin |
+| `PATCH` | `/api/auth/users/:id` | Update user | admin |
+| `DELETE` | `/api/auth/users/:id` | Delete user | admin |
 
 ### Cameras
 
-#### GET `/api/cameras`
-Retrieve all cameras.
+| Method | Path | Purpose | Auth |
+|---|---|---|---|
+| `GET` | `/api/cameras` | List (filter by `model`, `hasPTZ`, `hasAudio`) | user or API key |
+| `GET` | `/api/cameras/:id` | Single camera with provenance | user or API key |
+| `POST` | `/api/cameras` | Create | admin |
+| `PATCH` | `/api/cameras/:id` | Update | admin |
+| `DELETE` | `/api/cameras/:id` | Delete | admin |
+| `POST` | `/api/cameras/:id/check` | Manual probe | user |
+| `POST` | `/api/cameras/:id/detect-model` | VAPIX model detection | admin |
+| `POST` | `/api/cameras/:id/repin-cert` | Accept current TLS cert (TOFU) | admin |
+| `GET` | `/api/cameras/:id/events` | Uptime events (?days=30) | user |
+| `GET` | `/api/cameras/:id/uptime` | Uptime % | user |
+| `GET` | `/api/cameras/uptime/batch` | Uptime % for all cameras | user |
+| `GET` | `/api/uptime/events` | All uptime events fleet-wide | user |
+| `GET` | `/api/uptime/daily` | Daily uptime chart data | user |
 
-**Query Parameters**:
-- `location` (optional) - Filter by location
+### Network Discovery
 
-**Response**: `200 OK`
-```json
-[
-  {
-    "id": "uuid",
-    "name": "Front Entrance Camera",
-    "ipAddress": "192.168.1.100",
-    "location": "Building A - Entrance",
-    "model": "AXIS P3375-LV",
-    "status": "online",
-    "uptime": 99.8,
-    "lastCheck": "2025-11-11T12:00:00Z",
-    "responseTime": 45
-  }
-]
-```
+| Method | Path | Purpose | Auth |
+|---|---|---|---|
+| `POST` | `/api/scan/subnet` | Octet-range scan (e.g. `192.168.1`, `1-254`) | admin |
+| `POST` | `/api/cameras/scan` | CIDR scan (max `/8`) | admin |
+| `POST` | `/api/cameras/discover` | Unified Bonjour + SSDP + HTTP probe | admin |
+| `POST` | `/api/cameras/bulk-add` | Bulk add (≤50/request, rate-limited 20/5min) | admin |
+| `POST` | `/api/cameras/:id/test-connection` | 10s connection test | user |
+| `GET` | `/api/network/interfaces` | Local subnets | user |
 
-#### POST `/api/cameras` (Admin only)
-Add a new camera to monitoring.
+### Groups
 
-**Request Body**:
-```json
-{
-  "name": "Front Entrance Camera",
-  "ipAddress": "192.168.1.100",
-  "location": "Building A - Entrance",
-  "model": "AXIS P3375-LV",
-  "checkInterval": 300
-}
-```
+| Method | Path | Purpose | Auth |
+|---|---|---|---|
+| `GET` | `/api/groups` | List user's groups | user |
+| `POST` | `/api/groups` | Create | admin |
+| `GET` | `/api/groups/:id` | Detail + members | user |
+| `PATCH` | `/api/groups/:id` | Update | admin |
+| `DELETE` | `/api/groups/:id` | Delete | admin |
+| `POST` | `/api/groups/:id/members` | Add cameras (≤100) | admin |
+| `DELETE` | `/api/groups/:id/members/:cameraId` | Remove camera | admin |
 
-**Response**: `201 Created`
+### Dashboard
 
-#### GET `/api/cameras/:id`
-Get detailed information about a specific camera.
+| Method | Path | Purpose | Auth |
+|---|---|---|---|
+| `GET` | `/api/dashboard/summary` | Fleet summary (cached 30s/user) | user |
 
-**Response**: `200 OK`
-```json
-{
-  "id": "uuid",
-  "name": "Front Entrance Camera",
-  "ipAddress": "192.168.1.100",
-  "location": "Building A - Entrance",
-  "model": "AXIS P3375-LV",
-  "status": "online",
-  "uptime": 99.8,
-  "lastCheck": "2025-11-11T12:00:00Z",
-  "responseTime": 45,
-  "reliability": {
-    "mtbf": 720.5,
-    "mttr": 15.2,
-    "availabilityPercentage": 99.8,
-    "failureRate": 0.002
-  }
-}
-```
+### Analytics
 
-#### PUT `/api/cameras/:id` (Admin only)
-Update camera configuration.
-
-#### DELETE `/api/cameras/:id` (Admin only)
-Remove camera from monitoring.
-
-### Camera Status
-
-#### GET `/api/cameras/:id/status-history`
-Get historical status data for a camera.
-
-**Query Parameters**:
-- `startDate` (optional) - Start of date range
-- `endDate` (optional) - End of date range
-- `limit` (optional) - Maximum records to return
-
-**Response**: `200 OK`
-```json
-[
-  {
-    "timestamp": "2025-11-11T12:00:00Z",
-    "status": "online",
-    "responseTime": 45
-  },
-  {
-    "timestamp": "2025-11-11T11:55:00Z",
-    "status": "online",
-    "responseTime": 42
-  }
-]
-```
+| Method | Path | Purpose | Auth |
+|---|---|---|---|
+| `GET` | `/api/analytics/summary` | Fleet-wide analytics | user or API key |
+| `GET` | `/api/cameras/:id/analytics` | `?days=1&eventType=occupancy\|people_in\|people_out\|line_crossing\|avg_dwell_time` | user or API key |
+| `GET` | `/api/cameras/:id/analytics/daily` | Daily history with per-scenario breakdown | user or API key |
 
 ### Reports
 
-#### GET `/api/reports`
-Generate uptime report.
+| Method | Path | Purpose | Auth |
+|---|---|---|---|
+| `GET` | `/api/reports/analytics/export` | CSV download (`?range=1\|7\|30\|90\|365&cameraIds=…`) | user |
+| `POST` | `/api/reports/analytics/email` | Email CSV to current user | user |
+| `GET` | `/api/reports/schedules` | List own schedules | user |
+| `POST` | `/api/reports/schedules` | Create schedule (daily/weekly/monthly) | user |
+| `PATCH` | `/api/reports/schedules/:id` | Update | user |
+| `DELETE` | `/api/reports/schedules/:id` | Delete | user |
+| `POST` | `/api/reports/schedules/:id/run` | Run immediately | user |
 
-**Query Parameters**:
-- `startDate` - Report start date (required)
-- `endDate` - Report end date (required)
-- `cameraIds` (optional) - Comma-separated camera IDs
-- `location` (optional) - Filter by location
-- `format` (optional) - `json` or `csv` (default: json)
+The scheduler is a `node-cron` job running `5 * * * *` (one minute past every hour). It selects rows from `report_schedules` whose `next_run_at <= now` and `active = 1`, builds the report, and sends it via SendGrid.
 
-**Response**: `200 OK`
-```json
-{
-  "period": {
-    "start": "2025-11-01T00:00:00Z",
-    "end": "2025-11-11T23:59:59Z"
-  },
-  "summary": {
-    "totalCameras": 10,
-    "averageUptime": 99.2,
-    "totalDowntime": 120
-  },
-  "cameras": [
-    {
-      "id": "uuid",
-      "name": "Front Entrance Camera",
-      "uptime": 99.8,
-      "downtime": 5,
-      "incidents": 2
-    }
-  ]
-}
+### Settings, API Keys, Webhooks, Email
+
+| Method | Path | Purpose | Auth |
+|---|---|---|---|
+| `GET` | `/api/settings` | User settings (polling interval, retention, cert mode) | user |
+| `PATCH` | `/api/settings` | Update user settings | admin |
+| `POST` | `/api/admin/cleanup` | Manual data retention sweep | admin |
+| `POST` | `/api/settings/api-keys` | Create API key (returns plaintext **once**) | user |
+| `GET` | `/api/settings/api-keys` | List own API keys (prefix only) | user |
+| `DELETE` | `/api/settings/api-keys/:id` | Revoke | user |
+| `POST` | `/api/settings/webhooks` | Create webhook subscription | user |
+| `GET` | `/api/settings/webhooks` | List (secret masked) | user |
+| `DELETE` | `/api/settings/webhooks/:id` | Delete | user |
+| `POST` | `/api/settings/webhooks/:id/test` | Send signed test payload | user |
+| `GET` | `/api/settings/email` | Email config (API key masked) | admin |
+| `PATCH` | `/api/settings/email` | Set SendGrid key, from address, enable | admin |
+| `POST` | `/api/settings/email/test` | Send test email to current user | admin |
+
+### Import / Export
+
+| Method | Path | Purpose | Auth |
+|---|---|---|---|
+| `POST` | `/api/cameras/import` | CSV import | admin |
+| `GET` | `/api/cameras/export` | CSV export of cameras | user |
+| `GET` | `/api/cameras/export/uptime` | 30-day uptime CSV | user |
+
+### Live Notifications
+
+| Method | Path | Purpose | Auth |
+|---|---|---|---|
+| `GET` | `/api/notifications/stream` | Server-Sent Events for status changes (30s keepalive) | user |
+
+### API Keys and Webhooks
+
+API keys are created from the Settings page (or via `POST /api/settings/api-keys`). The plaintext key is returned **once** at creation and stored hashed thereafter. Use it as:
+
+```
+GET /api/cameras
+X-API-Key: ax_<key>
 ```
 
-### Network Scanning
+Webhooks deliver events for camera status changes and analytics updates. Each subscription has a secret; deliveries include an HMAC-SHA256 signature in the `X-Webhook-Signature` header so receivers can verify authenticity. Failed deliveries are retried with backoff and after enough consecutive failures the subscription's `consecutive_failures` counter increments.
 
-#### POST `/api/network/scan` (Admin only)
-Scan network for Axis cameras.
+## Email & SendGrid
 
-**Request Body**:
-```json
-{
-  "ipRange": "192.168.1.0/24",
-  "timeout": 5000
-}
-```
+Outbound email (analytics report delivery, test emails, scheduled report dispatch) uses SendGrid. Configuration is **stored in the database**, not in environment variables.
 
-**Response**: `200 OK`
-```json
-{
-  "discovered": [
-    {
-      "ipAddress": "192.168.1.100",
-      "model": "AXIS P3375-LV",
-      "hostname": "camera-01",
-      "responseTime": 45
-    }
-  ],
-  "scannedIps": 254,
-  "duration": 45000
-}
-```
+1. Log in as an admin and go to **Settings → Email**.
+2. Enter a SendGrid API key, the From email and name, and toggle "Enabled".
+3. Click **Send Test Email** to verify delivery.
 
-## 🔧 Development
+The API key is encrypted at rest. Only its prefix is shown back in the UI. To rotate, paste a new key and save.
 
-### Running Tests
+If email is disabled or the API key is missing, the `POST /api/reports/analytics/email` and scheduled-report dispatch endpoints will mark the attempt with `last_error` rather than crashing.
+
+## Development
+
+### Scripts
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Vite dev server + tsx-powered backend on `http://localhost:5000` |
+| `npm run build` | Vite build (client) → `dist/public`; esbuild bundle (server) → `dist/index.js` |
+| `npm start` | Run the production bundle (`dist/index.js`) with `NODE_ENV=production` |
+| `npm run check` | TypeScript type check (`tsc --noEmit`) |
+| `npm test` | Vitest run (single shot) |
+| `npm run db:push` | Push Drizzle schema to SQLite |
+
+### Database
+
+The SQLite file is created on first run at `data/camera-uptime.db` (or wherever `DATABASE_URL` points). `server/db.ts` enables WAL mode, sets a 256 MB mmap and 64 MB cache, and auto-adds missing columns/indexes on startup so older databases stay compatible without explicit migrations.
+
+To open the schema in Drizzle Studio:
 
 ```bash
-# Run all tests
-npm test
-
-# Run tests in watch mode
-npm run test:watch
-
-# Run tests with UI
-npm run test:ui
-
-# Run coverage
-npm run test:coverage
-```
-
-### Database Migrations
-
-```bash
-# Generate migration
-npx drizzle-kit generate
-
-# Push schema changes
-npm run db:push
-
-# View database in Drizzle Studio
 npx drizzle-kit studio
 ```
 
-### Building for Production
+### Useful scripts (in `scripts/`)
+
+- `createAdminUser.ts` — seed an admin user
+- `verifyAdminUser.ts` — confirm credentials match a stored hash
+- `resetUserPassword.ts` — reset a user's password
+- `dedupe-cameras.cjs` — collapse duplicate camera rows by IP
+- `seedDemoData.ts` — populate demo data
+
+Run any of them with `tsx`:
 
 ```bash
-# Build client and server
-npm run build
-
-# Start production server
-npm start
+npx tsx scripts/createAdminUser.ts
 ```
 
-### Code Quality
+## Contributing
 
-```bash
-# Type checking
-npm run check
-
-# Lint code
-npm run lint
-
-# Format code
-npm run format
-```
-
-### Environment Variables
-
-Create a `.env` file in the root directory:
-
-```env
-# Database
-DATABASE_URL=./data.db
-
-# Server
-NODE_ENV=development
-PORT=5000
-
-# Authentication
-SESSION_SECRET=your-secret-key-here
-
-# Monitoring
-DEFAULT_CHECK_INTERVAL=300000
-DEFAULT_TIMEOUT=5000
-```
-
-## 🌐 Deployment
-
-### Default Credentials
-
-On first startup, a default admin user is created:
-- **Email**: `admin@local`
-- **Password**: `admin123`
-
-Change these immediately after first login via the Settings page.
-
-### Docker
-
-```bash
-# Build image
-docker build -t axis-camera-uptime .
-
-# Run container
-docker run -p 5000:5000 -v $(pwd)/data:/app/data axis-camera-uptime
-```
-
-### Manual Deployment
-
-```bash
-# Build the application
-npm run build
-
-# Set environment to production
-export NODE_ENV=production
-
-# Start server
-npm start
-```
-
-## 🤝 Contributing
-
-Contributions are welcome! Please follow these steps:
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create a feature branch
+3. Make sure `npm run check` and `npm test` pass
+4. Open a pull request
 
-### Development Guidelines
+## License
 
-- Follow TypeScript best practices
-- Write tests for new features
-- Update documentation
-- Follow the existing code style
-- Use meaningful commit messages
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- [Axis Communications](https://www.axis.com/) - For excellent network camera products
-- [Radix UI](https://www.radix-ui.com/) - For accessible UI components
-- [Recharts](https://recharts.org/) - For beautiful data visualization
-- [Drizzle ORM](https://orm.drizzle.team/) - For type-safe database operations
-
-## 📞 Support
-
-- **Issues**: [GitHub Issues](https://github.com/<your-username>/AxisCameraUptime/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/<your-username>/AxisCameraUptime/discussions)
+MIT — see [LICENSE](LICENSE).
