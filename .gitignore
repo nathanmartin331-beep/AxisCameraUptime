@@ -35,6 +35,7 @@ claude-flow
 hive-mind-prompt-*.txt
 sessions/
 data/
+logs/
 
 # RuVector intelligence data
 .ruvector/
