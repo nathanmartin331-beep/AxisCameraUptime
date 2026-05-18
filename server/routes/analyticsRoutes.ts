@@ -151,6 +151,44 @@ router.get("/api/cameras/:id/analytics/daily", requireApiKeyOrAuth, async (req: 
   }
 });
 
+const HOURLY_VALID_DAYS = new Set([1, 7, 30]);
+
+// Camera analytics hourly history
+router.get("/api/cameras/:id/analytics/hourly", requireApiKeyOrAuth, async (req: any, res) => {
+  try {
+    const cameraId = validateId(req.params.id);
+    if (!cameraId) return sendError(res, 400, "Invalid camera ID");
+
+    const days = parseInt(req.query.days as string, 10) || 1;
+    if (!HOURLY_VALID_DAYS.has(days)) {
+      return sendError(res, 400, "days must be one of 1, 7, 30");
+    }
+
+    const VALID_EVENT_TYPES = ["occupancy", "people_in", "people_out", "line_crossing", "avg_dwell_time"];
+    const eventType = (req.query.eventType as string) || "people_in";
+    if (!VALID_EVENT_TYPES.includes(eventType)) {
+      return sendError(res, 400, `Invalid eventType. Must be one of: ${VALID_EVENT_TYPES.join(", ")}`);
+    }
+
+    const camera = await storage.getCameraById(cameraId);
+    if (!camera) return sendError(res, 404, "Camera not found");
+
+    const hourlyTotals = await storage.getAnalyticsHourlyTotals(cameraId, eventType, days);
+    let scenarioTotals: Record<string, Array<{ hour: string; total: number; metadata?: Record<string, any> }>> | undefined;
+    try {
+      const raw = await storage.getAnalyticsHourlyTotalsByScenario(cameraId, eventType, days);
+      if (Object.keys(raw).length > 1) scenarioTotals = raw;
+    } catch (err) {
+      console.error("Error fetching per-scenario hourly totals (non-fatal):", err);
+    }
+
+    res.json({ cameraId, eventType, days, hourlyTotals, scenarioTotals });
+  } catch (error) {
+    console.error("Error fetching hourly analytics:", error);
+    sendError(res, 500, "Failed to fetch hourly analytics");
+  }
+});
+
 // Analytics SSE Streams
 router.get("/api/analytics/stream", requireApiKeyOrAuth, async (req: any, res) => {
   const userId = getUserId(req);
@@ -202,6 +240,19 @@ router.get("/api/analytics/stream", requireApiKeyOrAuth, async (req: any, res) =
         res.write(`id: ${seqId}\ndata: ${JSON.stringify(payload)}\n\n`);
       });
 
+  // Hourly rollup channel — emitted with SSE event:hourly_rollup so the
+  // client can attach a separate handler. No id: because rollup seqIds live
+  // in a different space than live event ids.
+  const unsubscribeRollup = analyticsBroadcaster.subscribeAllRollups((rollup) => {
+    const filtered = filterCameraId
+      ? rollup.cameras.filter((c) => c.cameraId === filterCameraId)
+      : rollup.cameras.filter((c) => userCameraIds.has(c.cameraId));
+    if (filtered.length === 0) return;
+    try {
+      res.write(`event: hourly_rollup\ndata: ${JSON.stringify({ ...rollup, cameras: filtered })}\n\n`);
+    } catch { /* connection may be closed */ }
+  });
+
   // Refresh camera set periodically for long-lived connections (handles new cameras added)
   const refreshInterval = setInterval(async () => {
     try {
@@ -216,6 +267,7 @@ router.get("/api/analytics/stream", requireApiKeyOrAuth, async (req: any, res) =
 
   req.on("close", () => {
     unsubscribe();
+    unsubscribeRollup();
     clearInterval(refreshInterval);
     clearInterval(keepalive);
   });
@@ -254,12 +306,21 @@ router.get("/api/cameras/:id/analytics/stream", requireApiKeyOrAuth, async (req:
     res.write(`id: ${seqId}\ndata: ${JSON.stringify(payload)}\n\n`);
   });
 
+  const unsubscribeRollup = analyticsBroadcaster.subscribeAllRollups((rollup) => {
+    const filtered = rollup.cameras.filter((c) => c.cameraId === cameraId);
+    if (filtered.length === 0) return;
+    try {
+      res.write(`event: hourly_rollup\ndata: ${JSON.stringify({ ...rollup, cameras: filtered })}\n\n`);
+    } catch { /* connection may be closed */ }
+  });
+
   const keepalive = setInterval(() => {
     res.write(": keepalive\n\n");
   }, 30_000);
 
   req.on("close", () => {
     unsubscribe();
+    unsubscribeRollup();
     clearInterval(keepalive);
   });
 });
@@ -319,6 +380,43 @@ router.get("/api/groups/:id/analytics/daily", requireApiKeyOrAuth, async (req: a
   } catch (error) {
     console.error("Error fetching group daily analytics:", error);
     sendError(res, 500, "Failed to fetch group daily analytics");
+  }
+});
+
+// Group analytics hourly history
+router.get("/api/groups/:id/analytics/hourly", requireApiKeyOrAuth, async (req: any, res) => {
+  try {
+    const groupId = validateId(req.params.id);
+    if (!groupId) return sendError(res, 400, "Invalid group ID");
+
+    const days = parseInt(req.query.days as string, 10) || 1;
+    if (!HOURLY_VALID_DAYS.has(days)) {
+      return sendError(res, 400, "days must be one of 1, 7, 30");
+    }
+
+    const VALID_EVENT_TYPES = ["occupancy", "people_in", "people_out", "line_crossing", "avg_dwell_time"];
+    const eventType = (req.query.eventType as string) || "people_in";
+    if (!VALID_EVENT_TYPES.includes(eventType)) {
+      return sendError(res, 400, `Invalid eventType. Must be one of: ${VALID_EVENT_TYPES.join(", ")}`);
+    }
+
+    const group = await storage.getGroupById(groupId);
+    if (!group) return sendError(res, 404, "Group not found");
+    if (group.userId !== getUserId(req)) return sendError(res, 403, "Forbidden");
+
+    const members = await storage.getGroupMembers(groupId);
+    const memberIds = members.map((m) => m.id);
+
+    const hourlyTotals = await storage.getGroupAnalyticsHourlyTotals(memberIds, eventType, days);
+    if (req.query.perCamera === "true") {
+      const perCameraTotals = await storage.getGroupAnalyticsHourlyTotalsPerCamera(memberIds, eventType, days);
+      res.json({ groupId, eventType, days, hourlyTotals, perCamera: perCameraTotals });
+    } else {
+      res.json({ groupId, eventType, days, hourlyTotals });
+    }
+  } catch (error) {
+    console.error("Error fetching group hourly analytics:", error);
+    sendError(res, 500, "Failed to fetch group hourly analytics");
   }
 });
 
@@ -500,7 +598,7 @@ router.get("/api/groups/:id/analytics/stream", requireApiKeyOrAuth, async (req: 
 
   // Initial subscription
   const initialMembers = await storage.getGroupMembers(groupId);
-  const memberIdSet = new Set(initialMembers.map((m) => m.id));
+  let memberIdSet = new Set(initialMembers.map((m) => m.id));
 
   // Replay missed events on reconnect (Last-Event-ID support)
   const lastEventId = parseInt(req.headers['last-event-id'] as string);
@@ -545,8 +643,18 @@ router.get("/api/groups/:id/analytics/stream", requireApiKeyOrAuth, async (req: 
       const freshIds = new Set(freshMembers.map((m) => m.id));
       unsubscribeRemovedCameras(freshIds);
       subscribeToCameras(freshMembers.map((m) => m.id));
+      memberIdSet = freshIds;
     } catch { /* ignore refresh errors */ }
   }, 60_000);
+
+  // Forward hourly rollup events filtered to current group members.
+  const unsubscribeRollup = analyticsBroadcaster.subscribeAllRollups((rollup) => {
+    const filtered = rollup.cameras.filter((c) => memberIdSet.has(c.cameraId));
+    if (filtered.length === 0) return;
+    try {
+      res.write(`event: hourly_rollup\ndata: ${JSON.stringify({ ...rollup, groupId, cameras: filtered })}\n\n`);
+    } catch { /* connection may be closed */ }
+  });
 
   // 30s keepalive
   const keepalive = setInterval(() => {
@@ -559,6 +667,7 @@ router.get("/api/groups/:id/analytics/stream", requireApiKeyOrAuth, async (req: 
     for (const unsub of subscriptions.values()) unsub();
     subscriptions.clear();
     cameraState.clear();
+    unsubscribeRollup();
     clearInterval(refreshInterval);
     clearInterval(keepalive);
   });

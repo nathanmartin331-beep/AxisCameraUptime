@@ -236,6 +236,8 @@ export interface IStorage {
   getLatestAnalyticsEventsByScenario(cameraId: string, eventType: string): Promise<AnalyticsEvent[]>;
   getAnalyticsDailyTotals(cameraId: string, eventType: string, days: number): Promise<Array<{ date: string; total: number; metadata?: Record<string, any> }>>;
   getAnalyticsDailyTotalsByScenario(cameraId: string, eventType: string, days: number): Promise<Record<string, Array<{ date: string; total: number; metadata?: Record<string, any> }>>>;
+  getAnalyticsHourlyTotals(cameraId: string, eventType: string, days: number): Promise<Array<{ hour: string; total: number; metadata?: Record<string, any> }>>;
+  getAnalyticsHourlyTotalsByScenario(cameraId: string, eventType: string, days: number): Promise<Record<string, Array<{ hour: string; total: number; metadata?: Record<string, any> }>>>;
   getLatestAnalyticsPerCamera(cameraIds: string[], eventTypes: string[]): Promise<Map<string, Map<string, { value: number; metadata?: Record<string, any> }>>>;
   getGroupCurrentOccupancy(groupId: string): Promise<{ total: number; cameras: Array<{ id: string; name: string; occupancy: number }> }>;
   getGroupAnalyticsSummary(groupId: string, startDate: Date, endDate: Date): Promise<{
@@ -246,6 +248,8 @@ export interface IStorage {
   }>;
   getGroupAnalyticsDailyTotals(memberIds: string[], eventType: string, days: number): Promise<Array<{ date: string; total: number }>>;
   getGroupAnalyticsDailyTotalsPerCamera(memberIds: string[], eventType: string, days: number): Promise<Record<string, Array<{ date: string; total: number }>>>;
+  getGroupAnalyticsHourlyTotals(memberIds: string[], eventType: string, days: number): Promise<Array<{ hour: string; total: number }>>;
+  getGroupAnalyticsHourlyTotalsPerCamera(memberIds: string[], eventType: string, days: number): Promise<Record<string, Array<{ hour: string; total: number }>>>;
   getFleetAnalyticsSummary(userId: string): Promise<{
     groups: Array<{
       groupId: string;
@@ -1436,6 +1440,167 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
+  // Hour bucket: ISO UTC string at the top of the hour, e.g. 2026-05-18T14:00:00.000Z
+  // Uses epoch seconds floored to the hour so it matches analytics_hourly_summary.hour_start.
+  async getAnalyticsHourlyTotals(
+    cameraId: string,
+    eventType: string,
+    days: number,
+  ): Promise<Array<{ hour: string; total: number; metadata?: Record<string, any> }>> {
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    const startTs = Math.floor(startDate.getTime() / 1000);
+    const endTs = Math.floor(endDate.getTime() / 1000);
+
+    const hourMap = new Map<string, { total: number; metadata?: Record<string, any> }>();
+
+    // Tier 1: closed hours from analytics_hourly_summary (sum max_value across scenarios per hour)
+    const hourlyRows = sqlite.prepare(`
+      SELECT hour_start, SUM(max_value) AS total, MAX(metadata) AS metadata
+      FROM analytics_hourly_summary
+      WHERE camera_id = ? AND event_type = ? AND hour_start >= ? AND hour_start <= ?
+      GROUP BY hour_start
+    `).all(cameraId, eventType, startTs, endTs) as Array<{ hour_start: number; total: number; metadata: string | null }>;
+
+    for (const row of hourlyRows) {
+      const hourKey = new Date(row.hour_start * 1000).toISOString();
+      let meta: Record<string, any> | undefined;
+      if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
+      hourMap.set(hourKey, { total: row.total ?? 0, metadata: meta });
+    }
+
+    // Tier 2: raw events (most recent ~6h). Dedupe per (scenario, timestamp), sum
+    // across scenarios at each timestamp, then take max combined value per hour.
+    const rawEvents = await db
+      .select()
+      .from(analyticsEvents)
+      .where(
+        and(
+          eq(analyticsEvents.cameraId, cameraId),
+          eq(analyticsEvents.eventType, eventType),
+          gte(analyticsEvents.timestamp, new Date(startTs * 1000)),
+          lte(analyticsEvents.timestamp, new Date(endTs * 1000)),
+        ),
+      )
+      .orderBy(analyticsEvents.timestamp);
+
+    const perScenarioTs = new Map<string, Map<number, { value: number; metadata?: Record<string, any> }>>();
+    for (const evt of rawEvents) {
+      const scenario = (evt.metadata as Record<string, any>)?.scenario || "default";
+      const ts = evt.timestamp.getTime();
+      if (!perScenarioTs.has(scenario)) perScenarioTs.set(scenario, new Map());
+      const tsMap = perScenarioTs.get(scenario)!;
+      const existing = tsMap.get(ts);
+      if (!existing || evt.value > existing.value) {
+        tsMap.set(ts, { value: evt.value, metadata: evt.metadata ?? undefined });
+      }
+    }
+
+    const perTimestamp = new Map<number, { sum: number; metadata?: Record<string, any> }>();
+    perScenarioTs.forEach((tsMap) => {
+      tsMap.forEach((data, ts) => {
+        const existing = perTimestamp.get(ts);
+        if (existing) {
+          existing.sum += data.value;
+        } else {
+          perTimestamp.set(ts, { sum: data.value, metadata: data.metadata });
+        }
+      });
+    });
+
+    perTimestamp.forEach((data, ts) => {
+      const hourStartSec = Math.floor(ts / 1000 / 3600) * 3600;
+      const hourKey = new Date(hourStartSec * 1000).toISOString();
+      const existing = hourMap.get(hourKey);
+      if (!existing || data.sum > existing.total) {
+        hourMap.set(hourKey, { total: data.sum, metadata: data.metadata });
+      }
+    });
+
+    return Array.from(hourMap.entries())
+      .map(([hour, data]) => ({ hour, ...data }))
+      .sort((a, b) => a.hour.localeCompare(b.hour));
+  }
+
+  async getAnalyticsHourlyTotalsByScenario(
+    cameraId: string,
+    eventType: string,
+    days: number,
+  ): Promise<Record<string, Array<{ hour: string; total: number; metadata?: Record<string, any> }>>> {
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    const startTs = Math.floor(startDate.getTime() / 1000);
+    const endTs = Math.floor(endDate.getTime() / 1000);
+
+    const scenarioMap = new Map<string, Map<string, { total: number; metadata?: Record<string, any> }>>();
+    function ensureScenario(scenario: string) {
+      if (!scenarioMap.has(scenario)) scenarioMap.set(scenario, new Map());
+      return scenarioMap.get(scenario)!;
+    }
+
+    // Tier 1: closed hours
+    const hourlyRows = sqlite.prepare(`
+      SELECT hour_start, max_value, metadata, COALESCE(scenario, 'default') AS scenario
+      FROM analytics_hourly_summary
+      WHERE camera_id = ? AND event_type = ? AND hour_start >= ? AND hour_start <= ?
+    `).all(cameraId, eventType, startTs, endTs) as Array<{ hour_start: number; max_value: number; metadata: string | null; scenario: string }>;
+
+    for (const row of hourlyRows) {
+      const hourKey = new Date(row.hour_start * 1000).toISOString();
+      let meta: Record<string, any> | undefined;
+      if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
+      ensureScenario(row.scenario).set(hourKey, { total: row.max_value ?? 0, metadata: meta });
+    }
+
+    // Tier 2: raw events grouped per scenario, max per hour
+    const rawEvents = await db
+      .select()
+      .from(analyticsEvents)
+      .where(
+        and(
+          eq(analyticsEvents.cameraId, cameraId),
+          eq(analyticsEvents.eventType, eventType),
+          gte(analyticsEvents.timestamp, new Date(startTs * 1000)),
+          lte(analyticsEvents.timestamp, new Date(endTs * 1000)),
+        ),
+      )
+      .orderBy(analyticsEvents.timestamp);
+
+    const perScenarioTs = new Map<string, Map<number, { value: number; metadata?: Record<string, any> }>>();
+    for (const evt of rawEvents) {
+      const scenario = (evt.metadata as Record<string, any>)?.scenario || "default";
+      const ts = evt.timestamp.getTime();
+      if (!perScenarioTs.has(scenario)) perScenarioTs.set(scenario, new Map());
+      const tsMap = perScenarioTs.get(scenario)!;
+      const existing = tsMap.get(ts);
+      if (!existing || evt.value > existing.value) {
+        tsMap.set(ts, { value: evt.value, metadata: evt.metadata ?? undefined });
+      }
+    }
+
+    perScenarioTs.forEach((tsMap, scenario) => {
+      const hmap = ensureScenario(scenario);
+      tsMap.forEach((data, ts) => {
+        const hourStartSec = Math.floor(ts / 1000 / 3600) * 3600;
+        const hourKey = new Date(hourStartSec * 1000).toISOString();
+        const existing = hmap.get(hourKey);
+        if (!existing || data.value > existing.total) {
+          hmap.set(hourKey, { total: data.value, metadata: data.metadata });
+        }
+      });
+    });
+
+    const result: Record<string, Array<{ hour: string; total: number; metadata?: Record<string, any> }>> = {};
+    scenarioMap.forEach((hmap, scenario) => {
+      result[scenario] = Array.from(hmap.entries())
+        .map(([hour, data]) => ({ hour, ...data }))
+        .sort((a, b) => a.hour.localeCompare(b.hour));
+    });
+    return result;
+  }
+
   /**
    * Get the latest analytics event per camera per event type in a single query.
    * Replaces N individual getLatestAnalyticsEvent calls with one GROUP BY query.
@@ -1905,6 +2070,175 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
+  async getGroupAnalyticsHourlyTotals(
+    memberIds: string[],
+    eventType: string,
+    days: number,
+  ): Promise<Array<{ hour: string; total: number }>> {
+    if (memberIds.length === 0) return [];
+
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    const startTs = Math.floor(startDate.getTime() / 1000);
+    const endTs = Math.floor(endDate.getTime() / 1000);
+    const placeholders = memberIds.map(() => "?").join(",");
+
+    const hourMap = new Map<string, number>();
+
+    // Tier 1: hourly summary — SUM(max_value) across cameras and scenarios per hour
+    const hourlyRows = sqlite.prepare(`
+      SELECT hour_start, SUM(max_value) AS total
+      FROM analytics_hourly_summary
+      WHERE camera_id IN (${placeholders}) AND event_type = ? AND hour_start >= ? AND hour_start <= ?
+      GROUP BY hour_start
+    `).all(...memberIds, eventType, startTs, endTs) as Array<{ hour_start: number; total: number }>;
+
+    for (const row of hourlyRows) {
+      const hourKey = new Date(row.hour_start * 1000).toISOString();
+      hourMap.set(hourKey, (hourMap.get(hourKey) || 0) + (row.total ?? 0));
+    }
+
+    // Tier 2: raw events — dedupe per camera per scenario per timestamp, sum across
+    // scenarios for that camera at each timestamp, take max per hour per camera,
+    // then sum across cameras per hour.
+    const rawRows = sqlite.prepare(`
+      SELECT camera_id, timestamp, value, metadata
+      FROM analytics_events
+      WHERE camera_id IN (${placeholders}) AND event_type = ? AND timestamp >= ? AND timestamp <= ?
+    `).all(...memberIds, eventType, startDate.toISOString(), endDate.toISOString()) as Array<{
+      camera_id: string; timestamp: string; value: number; metadata: string | null;
+    }>;
+
+    const perCamera = new Map<string, Map<string, Map<number, number>>>();
+    for (const row of rawRows) {
+      let meta: Record<string, any> | undefined;
+      if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
+      const scenario = meta?.scenario || "default";
+      const ts = new Date(row.timestamp).getTime();
+      if (!perCamera.has(row.camera_id)) perCamera.set(row.camera_id, new Map());
+      const scenarioMap = perCamera.get(row.camera_id)!;
+      if (!scenarioMap.has(scenario)) scenarioMap.set(scenario, new Map());
+      const tsMap = scenarioMap.get(scenario)!;
+      const existing = tsMap.get(ts);
+      if (existing === undefined || row.value > existing) tsMap.set(ts, row.value);
+    }
+
+    const perHourCombined = new Map<string, number>();
+    for (const [, scenarioMap] of perCamera) {
+      const cameraTsSums = new Map<number, number>();
+      for (const [, tsMap] of scenarioMap) {
+        for (const [ts, val] of tsMap) {
+          cameraTsSums.set(ts, (cameraTsSums.get(ts) || 0) + val);
+        }
+      }
+      const cameraHourMax = new Map<string, number>();
+      for (const [ts, sum] of cameraTsSums) {
+        const hourStartSec = Math.floor(ts / 1000 / 3600) * 3600;
+        const hourKey = new Date(hourStartSec * 1000).toISOString();
+        const existing = cameraHourMax.get(hourKey);
+        if (existing === undefined || sum > existing) cameraHourMax.set(hourKey, sum);
+      }
+      for (const [hourKey, hourMax] of cameraHourMax) {
+        perHourCombined.set(hourKey, (perHourCombined.get(hourKey) || 0) + hourMax);
+      }
+    }
+
+    for (const [hourKey, rawTotal] of perHourCombined) {
+      const existing = hourMap.get(hourKey) || 0;
+      if (rawTotal > existing) hourMap.set(hourKey, rawTotal);
+    }
+
+    return Array.from(hourMap.entries())
+      .map(([hour, total]) => ({ hour, total }))
+      .sort((a, b) => a.hour.localeCompare(b.hour));
+  }
+
+  async getGroupAnalyticsHourlyTotalsPerCamera(
+    memberIds: string[],
+    eventType: string,
+    days: number,
+  ): Promise<Record<string, Array<{ hour: string; total: number }>>> {
+    if (memberIds.length === 0) return {};
+
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    const startTs = Math.floor(startDate.getTime() / 1000);
+    const endTs = Math.floor(endDate.getTime() / 1000);
+    const placeholders = memberIds.map(() => "?").join(",");
+
+    const cameraHourly = new Map<string, Map<string, number>>();
+    function ensure(camId: string) {
+      if (!cameraHourly.has(camId)) cameraHourly.set(camId, new Map());
+      return cameraHourly.get(camId)!;
+    }
+
+    // Tier 1: hourly summary per camera (SUM across scenarios within a camera at each hour)
+    const hourlyRows = sqlite.prepare(`
+      SELECT camera_id, hour_start, SUM(max_value) AS total
+      FROM analytics_hourly_summary
+      WHERE camera_id IN (${placeholders}) AND event_type = ? AND hour_start >= ? AND hour_start <= ?
+      GROUP BY camera_id, hour_start
+    `).all(...memberIds, eventType, startTs, endTs) as Array<{ camera_id: string; hour_start: number; total: number }>;
+
+    for (const row of hourlyRows) {
+      const hourKey = new Date(row.hour_start * 1000).toISOString();
+      ensure(row.camera_id).set(hourKey, row.total ?? 0);
+    }
+
+    // Tier 2: raw events (< 6h), dedupe per (camera, scenario, ts), sum across scenarios, max per hour
+    const rawRows = sqlite.prepare(`
+      SELECT camera_id, timestamp, value, metadata
+      FROM analytics_events
+      WHERE camera_id IN (${placeholders}) AND event_type = ? AND timestamp >= ? AND timestamp <= ?
+    `).all(...memberIds, eventType, startDate.toISOString(), endDate.toISOString()) as Array<{
+      camera_id: string; timestamp: string; value: number; metadata: string | null;
+    }>;
+
+    const perCameraRaw = new Map<string, Map<string, Map<number, number>>>();
+    for (const row of rawRows) {
+      let meta: Record<string, any> | undefined;
+      if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
+      const scenario = meta?.scenario || "default";
+      const ts = new Date(row.timestamp).getTime();
+      if (!perCameraRaw.has(row.camera_id)) perCameraRaw.set(row.camera_id, new Map());
+      const scenarioMap = perCameraRaw.get(row.camera_id)!;
+      if (!scenarioMap.has(scenario)) scenarioMap.set(scenario, new Map());
+      const tsMap = scenarioMap.get(scenario)!;
+      const existing = tsMap.get(ts);
+      if (existing === undefined || row.value > existing) tsMap.set(ts, row.value);
+    }
+
+    for (const [camId, scenarioMap] of perCameraRaw) {
+      const cameraTsSums = new Map<number, number>();
+      for (const [, tsMap] of scenarioMap) {
+        for (const [ts, val] of tsMap) {
+          cameraTsSums.set(ts, (cameraTsSums.get(ts) || 0) + val);
+        }
+      }
+      const cameraHourMax = new Map<string, number>();
+      for (const [ts, sum] of cameraTsSums) {
+        const hourStartSec = Math.floor(ts / 1000 / 3600) * 3600;
+        const hourKey = new Date(hourStartSec * 1000).toISOString();
+        const existing = cameraHourMax.get(hourKey);
+        if (existing === undefined || sum > existing) cameraHourMax.set(hourKey, sum);
+      }
+      const m = ensure(camId);
+      for (const [hourKey, hourMax] of cameraHourMax) {
+        if (hourMax > (m.get(hourKey) || 0)) m.set(hourKey, hourMax);
+      }
+    }
+
+    const result: Record<string, Array<{ hour: string; total: number }>> = {};
+    for (const [camId, hourMap] of cameraHourly) {
+      result[camId] = Array.from(hourMap.entries())
+        .map(([hour, total]) => ({ hour, total }))
+        .sort((a, b) => a.hour.localeCompare(b.hour));
+    }
+    return result;
+  }
+
   async getFleetAnalyticsSummary(userId: string): Promise<{
     groups: Array<{
       groupId: string;
@@ -2257,6 +2591,38 @@ export class DatabaseStorage implements IStorage {
     while (true) {
       const result = sqlite.prepare(
         `DELETE FROM analytics_events WHERE rowid IN (SELECT rowid FROM analytics_events WHERE camera_id IN (${placeholders}) AND timestamp <= ? LIMIT ?)`
+      ).run(...cameraIds, ts, BATCH_SIZE);
+      totalDeleted += result.changes;
+      if (result.changes < BATCH_SIZE) break;
+    }
+    return totalDeleted;
+  }
+
+  async deleteOldUptimeHourlyForCameras(cameraIds: string[], beforeDate: Date): Promise<number> {
+    if (cameraIds.length === 0) return 0;
+    let totalDeleted = 0;
+    const BATCH_SIZE = 10000;
+    const placeholders = cameraIds.map(() => '?').join(',');
+    const ts = Math.floor(beforeDate.getTime() / 1000);
+    while (true) {
+      const result = sqlite.prepare(
+        `DELETE FROM uptime_hourly_summary WHERE rowid IN (SELECT rowid FROM uptime_hourly_summary WHERE camera_id IN (${placeholders}) AND hour_start <= ? LIMIT ?)`
+      ).run(...cameraIds, ts, BATCH_SIZE);
+      totalDeleted += result.changes;
+      if (result.changes < BATCH_SIZE) break;
+    }
+    return totalDeleted;
+  }
+
+  async deleteOldAnalyticsHourlyForCameras(cameraIds: string[], beforeDate: Date): Promise<number> {
+    if (cameraIds.length === 0) return 0;
+    let totalDeleted = 0;
+    const BATCH_SIZE = 10000;
+    const placeholders = cameraIds.map(() => '?').join(',');
+    const ts = Math.floor(beforeDate.getTime() / 1000);
+    while (true) {
+      const result = sqlite.prepare(
+        `DELETE FROM analytics_hourly_summary WHERE rowid IN (SELECT rowid FROM analytics_hourly_summary WHERE camera_id IN (${placeholders}) AND hour_start <= ? LIMIT ?)`
       ).run(...cameraIds, ts, BATCH_SIZE);
       totalDeleted += result.changes;
       if (result.changes < BATCH_SIZE) break;

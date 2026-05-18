@@ -11,6 +11,7 @@
 
 import cron from "node-cron";
 import { sqlite } from "../db";
+import { analyticsBroadcaster } from "./analyticsEventBroadcaster";
 
 let aggregationStarted = false;
 
@@ -95,6 +96,37 @@ async function runHourlyAggregation() {
 
     console.log(`[Aggregation] Analytics hourly: ${(analyticsInserted as any).changes ?? 0} summaries upserted`);
 
+    // Broadcast the most-recently-closed hour as a single SSE rollup event so
+    // subscribed clients can refresh hourly views without polling. We pick the
+    // hour boundary at-or-before the cutoff: that's the hour that fully closed
+    // during this rollup pass.
+    try {
+      const latestClosedHourSec = Math.floor(cutoffTs / 3600) * 3600;
+      const rollupRows = sqlite.prepare(`
+        SELECT camera_id, event_type, SUM(max_value) AS total
+        FROM analytics_hourly_summary
+        WHERE hour_start = ?
+        GROUP BY camera_id, event_type
+      `).all(latestClosedHourSec) as Array<{ camera_id: string; event_type: string; total: number }>;
+
+      if (rollupRows.length > 0) {
+        const cameraMap = new Map<string, Record<string, number>>();
+        for (const row of rollupRows) {
+          if (!cameraMap.has(row.camera_id)) cameraMap.set(row.camera_id, {});
+          cameraMap.get(row.camera_id)![row.event_type] = row.total ?? 0;
+        }
+        const cameras = Array.from(cameraMap.entries()).map(([cameraId, byEvent]) => ({ cameraId, byEvent }));
+        analyticsBroadcaster.broadcastHourlyRollup({
+          type: "hourly_rollup",
+          hourStart: new Date(latestClosedHourSec * 1000).toISOString(),
+          cameras,
+        });
+        console.log(`[Aggregation] Hourly rollup broadcast: ${cameras.length} cameras for hour ${new Date(latestClosedHourSec * 1000).toISOString()}`);
+      }
+    } catch (err) {
+      console.error("[Aggregation] Hourly rollup broadcast failed (non-fatal):", err);
+    }
+
     // Delete aggregated raw rows in batches
     let uptimeDeleted = 0;
     while (true) {
@@ -122,7 +154,9 @@ async function runHourlyAggregation() {
 
 /**
  * Aggregate hourly summaries older than 48 hours into daily summaries.
- * After aggregation, delete the hourly rows that were rolled up.
+ * Hourly rows are retained for the user-configured hourly retention window
+ * (default 30 days) so they can be served by the hourly API and emailed
+ * reports. Pruning of old hourly rows is handled by dataRetention.ts.
  */
 async function runDailyAggregation() {
   const cutoff = new Date();
@@ -179,27 +213,7 @@ async function runDailyAggregation() {
     `).run(cutoffTs);
 
     console.log(`[Aggregation] Analytics daily: ${(analyticsInserted as any).changes ?? 0} summaries upserted`);
-
-    // Delete rolled-up hourly rows in batches
-    let uptimeDeleted = 0;
-    while (true) {
-      const result = sqlite.prepare(
-        `DELETE FROM uptime_hourly_summary WHERE rowid IN (SELECT rowid FROM uptime_hourly_summary WHERE hour_start <= ? LIMIT 10000)`
-      ).run(cutoffTs);
-      uptimeDeleted += result.changes;
-      if (result.changes < 10000) break;
-    }
-
-    let analyticsDeleted = 0;
-    while (true) {
-      const result = sqlite.prepare(
-        `DELETE FROM analytics_hourly_summary WHERE rowid IN (SELECT rowid FROM analytics_hourly_summary WHERE hour_start <= ? LIMIT 10000)`
-      ).run(cutoffTs);
-      analyticsDeleted += result.changes;
-      if (result.changes < 10000) break;
-    }
-
-    console.log(`[Aggregation] Daily rollup complete: deleted ${uptimeDeleted} uptime + ${analyticsDeleted} analytics hourly rows`);
+    console.log(`[Aggregation] Daily rollup complete (hourly rows retained for hourly API/reports)`);
   } catch (error) {
     console.error("[Aggregation] Error during daily aggregation:", error);
   }

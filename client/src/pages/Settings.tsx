@@ -22,6 +22,7 @@ interface UserSettingsData {
   userId: string;
   pollingInterval: number | null;
   dataRetentionDays: number | null;
+  hourlyRetentionDays: number | null;
   emailNotifications: boolean | null;
   defaultCertValidationMode: string | null;
   globalCaCert: string | null;
@@ -33,6 +34,7 @@ export default function Settings() {
   const [pollingInterval, setPollingInterval] = useState("5");
   const [emailNotifications, setEmailNotifications] = useState(false);
   const [dataRetention, setDataRetention] = useState("90");
+  const [hourlyRetention, setHourlyRetention] = useState("30");
   const [isSaving, setIsSaving] = useState(false);
   const [isCleaningUp, setIsCleaningUp] = useState(false);
   const [defaultCertMode, setDefaultCertMode] = useState("none");
@@ -60,6 +62,7 @@ export default function Settings() {
       setPollingInterval(String(settings.pollingInterval ?? 5));
       setEmailNotifications(settings.emailNotifications ?? false);
       setDataRetention(String(settings.dataRetentionDays ?? 90));
+      setHourlyRetention(String(settings.hourlyRetentionDays ?? 30));
       setDefaultCertMode(settings.defaultCertValidationMode ?? "none");
       setGlobalCaCert(settings.globalCaCert ?? "");
     }
@@ -102,6 +105,7 @@ export default function Settings() {
       await apiRequest("PATCH", "/api/settings", {
         pollingInterval: parseInt(pollingInterval),
         dataRetentionDays: parseInt(dataRetention),
+        hourlyRetentionDays: parseInt(hourlyRetention),
         emailNotifications,
         defaultCertValidationMode: defaultCertMode,
         globalCaCert: globalCaCert || null,
@@ -458,6 +462,27 @@ export default function Settings() {
               </Select>
               <p className="text-xs text-muted-foreground">
                 How long to keep historical uptime data (default: 90 days)
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="hourly-retention">Hourly Analytics Retention (days)</Label>
+              <Select value={hourlyRetention} onValueChange={setHourlyRetention} disabled={settingsLoading}>
+                <SelectTrigger id="hourly-retention" data-testid="select-hourly-retention">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="7">7 days</SelectItem>
+                  <SelectItem value="14">14 days</SelectItem>
+                  <SelectItem value="30">30 days</SelectItem>
+                  <SelectItem value="60">60 days</SelectItem>
+                  <SelectItem value="90">90 days</SelectItem>
+                  <SelectItem value="180">180 days</SelectItem>
+                  <SelectItem value="365">365 days</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                How long to keep per-hour analytics rollups for the hourly API and emailed reports (default: 30 days).
               </p>
             </div>
 

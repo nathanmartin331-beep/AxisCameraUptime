@@ -39,6 +39,8 @@ ensureColumn('cameras', 'cert_validation_mode', "TEXT NOT NULL DEFAULT 'none'");
 ensureColumn('cameras', 'cert_mismatch', "INTEGER NOT NULL DEFAULT 0");
 ensureColumn('user_settings', 'default_cert_validation_mode', "TEXT NOT NULL DEFAULT 'none'");
 ensureColumn('user_settings', 'global_ca_cert', 'TEXT');
+ensureColumn('user_settings', 'hourly_retention_days', 'INTEGER DEFAULT 30');
+ensureColumn('report_schedules', 'granularity', "TEXT NOT NULL DEFAULT 'daily'");
 
 // Migrate existing cameras: verifySslCert=true → certValidationMode='ca'
 try {
@@ -105,6 +107,7 @@ sqlite.exec(`
     name TEXT NOT NULL,
     report_type TEXT NOT NULL DEFAULT 'analytics',
     range_days INTEGER NOT NULL,
+    granularity TEXT NOT NULL DEFAULT 'daily',
     camera_ids TEXT,
     frequency TEXT NOT NULL,
     day_of_week INTEGER,

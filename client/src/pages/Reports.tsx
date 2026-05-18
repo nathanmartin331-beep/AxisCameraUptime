@@ -19,11 +19,17 @@ interface Camera {
   location?: string;
 }
 
+const HOURLY_VALID_RANGES = new Set(["1", "7", "30"]);
+
 export default function Reports() {
   const { toast } = useToast();
   const [timeRange, setTimeRange] = useState("30");
   const [selectedCamera, setSelectedCamera] = useState<string>("all");
   const [locationFilter, setLocationFilter] = useState<string>("all");
+  const [granularity, setGranularity] = useState<"daily" | "hourly">("daily");
+
+  // When switching to hourly, snap range to 30d if a wider one is selected.
+  const effectiveRange = granularity === "hourly" && !HOURLY_VALID_RANGES.has(timeRange) ? "30" : timeRange;
 
   const { data: cameras = [] } = useQuery<Camera[]>({
     queryKey: ["/api/cameras"],
@@ -106,7 +112,8 @@ export default function Reports() {
 
   const handleAnalyticsExport = async () => {
     const params = new URLSearchParams();
-    params.set("range", timeRange);
+    params.set("range", effectiveRange);
+    params.set("granularity", granularity);
     if (reportCameraIds && reportCameraIds.length > 0) {
       params.set("cameraIds", reportCameraIds.join(","));
     }
@@ -122,7 +129,8 @@ export default function Reports() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `analytics-${timeRange}d-${format(new Date(), "yyyy-MM-dd")}.csv`;
+      const prefix = granularity === "hourly" ? "analytics-hourly" : "analytics";
+      a.download = `${prefix}-${effectiveRange}d-${format(new Date(), "yyyy-MM-dd")}.csv`;
       a.click();
       window.URL.revokeObjectURL(url);
     } catch (e: any) {
@@ -132,15 +140,21 @@ export default function Reports() {
 
   const emailAnalyticsMutation = useMutation({
     mutationFn: async () => {
-      const body: Record<string, unknown> = { range: parseInt(timeRange, 10) };
+      const body: Record<string, unknown> = {
+        range: parseInt(effectiveRange, 10),
+        granularity,
+      };
       if (reportCameraIds && reportCameraIds.length > 0) {
         body.cameraIds = reportCameraIds;
       }
       const res = await apiRequest("POST", "/api/reports/analytics/email", body);
-      return (await res.json()) as { message: string; rowCount: number };
+      return (await res.json()) as { message: string; rowCount: number; hourlyRowCount?: number };
     },
     onSuccess: (data) => {
-      toast({ title: "Report sent", description: `${data.message} (${data.rowCount} rows)` });
+      const detail = data.hourlyRowCount !== undefined
+        ? `${data.rowCount} daily + ${data.hourlyRowCount} hourly rows`
+        : `${data.rowCount} rows`;
+      toast({ title: "Report sent", description: `${data.message} (${detail})` });
     },
     onError: (error: Error) => {
       toast({ variant: "destructive", title: "Email failed", description: error.message });
@@ -299,7 +313,7 @@ export default function Reports() {
                 </SelectContent>
               </Select>
 
-              <Select value={timeRange} onValueChange={setTimeRange}>
+              <Select value={effectiveRange} onValueChange={setTimeRange}>
                 <SelectTrigger className="w-32" data-testid="select-time-range">
                   <SelectValue placeholder="Time range" />
                 </SelectTrigger>
@@ -307,8 +321,18 @@ export default function Reports() {
                   <SelectItem value="1">Today</SelectItem>
                   <SelectItem value="7">7 Days</SelectItem>
                   <SelectItem value="30">30 Days</SelectItem>
-                  <SelectItem value="90">90 Days</SelectItem>
-                  <SelectItem value="365">365 Days</SelectItem>
+                  {granularity === "daily" && <SelectItem value="90">90 Days</SelectItem>}
+                  {granularity === "daily" && <SelectItem value="365">365 Days</SelectItem>}
+                </SelectContent>
+              </Select>
+
+              <Select value={granularity} onValueChange={(v) => setGranularity(v as "daily" | "hourly")}>
+                <SelectTrigger className="w-36" data-testid="select-granularity">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="daily">Daily totals</SelectItem>
+                  <SelectItem value="hourly">Hourly breakdown</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -317,8 +341,8 @@ export default function Reports() {
         <CardContent>
           <UptimeChart
             cameraId={selectedCamera === "all" ? "all" : selectedCamera}
-            days={parseInt(timeRange)}
-            title={`${timeRange}-Day Uptime Trend`}
+            days={parseInt(effectiveRange)}
+            title={`${effectiveRange}-Day Uptime Trend`}
             description={
               selectedCamera === "all"
                 ? `${filteredCameras.length} camera${filteredCameras.length !== 1 ? 's' : ''}${locationFilter !== "all" ? ` in ${locationFilter}` : ''}`
@@ -335,8 +359,11 @@ export default function Reports() {
             <CardTitle>Analytics Report</CardTitle>
           </div>
           <CardDescription>
-            Daily line-crossing, occupancy, and people-counting totals — one row per camera, day, and scenario.
+            {granularity === "hourly"
+              ? "Hourly breakdown of line-crossing, occupancy, and people-counting totals — one row per camera, hour, and scenario (in addition to the daily summary)."
+              : "Daily line-crossing, occupancy, and people-counting totals — one row per camera, day, and scenario."}{" "}
             Uses the time range selected above, scoped to {reportScopeLabel}.
+            {granularity === "hourly" && " Hourly reports support 1, 7, or 30 day ranges."}
           </CardDescription>
         </CardHeader>
         <CardContent>

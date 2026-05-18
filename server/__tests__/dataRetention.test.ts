@@ -8,6 +8,8 @@ vi.mock('../storage', () => ({
     getAllCameras: vi.fn(),
     deleteOldUptimeEventsForCameras: vi.fn(),
     deleteOldAnalyticsEventsForCameras: vi.fn(),
+    deleteOldUptimeHourlyForCameras: vi.fn(),
+    deleteOldAnalyticsHourlyForCameras: vi.fn(),
   },
 }));
 
@@ -53,6 +55,8 @@ describe('Data Retention Service', () => {
     ]);
     vi.mocked(storage.deleteOldUptimeEventsForCameras).mockResolvedValue(5);
     vi.mocked(storage.deleteOldAnalyticsEventsForCameras).mockResolvedValue(3);
+    vi.mocked(storage.deleteOldUptimeHourlyForCameras).mockResolvedValue(0);
+    vi.mocked(storage.deleteOldAnalyticsHourlyForCameras).mockResolvedValue(0);
 
     await runRetentionCleanup();
 
@@ -63,12 +67,21 @@ describe('Data Retention Service', () => {
     const callDate = vi.mocked(storage.deleteOldUptimeEventsForCameras).mock.calls[0][1] as Date;
     const daysAgo = (Date.now() - callDate.getTime()) / (1000 * 60 * 60 * 24);
     expect(daysAgo).toBeCloseTo(90, 0);
+
+    // Hourly retention defaults to 30 days
+    expect(storage.deleteOldAnalyticsHourlyForCameras).toHaveBeenCalledWith(
+      ['cam-1', 'cam-2'],
+      expect.any(Date)
+    );
+    const hourlyDate = vi.mocked(storage.deleteOldAnalyticsHourlyForCameras).mock.calls[0][1] as Date;
+    const hourlyDaysAgo = (Date.now() - hourlyDate.getTime()) / (1000 * 60 * 60 * 24);
+    expect(hourlyDaysAgo).toBeCloseTo(30, 0);
   });
 
   it('should respect per-user retention settings', async () => {
     (__mockUserSettingsRows as any[]).push(
-      { userId: 'user-a', dataRetentionDays: 30 },
-      { userId: 'user-b', dataRetentionDays: 180 },
+      { userId: 'user-a', dataRetentionDays: 30, hourlyRetentionDays: 7 },
+      { userId: 'user-b', dataRetentionDays: 180, hourlyRetentionDays: 60 },
     );
     vi.mocked(storage.getAllCameras).mockResolvedValue([
       { id: 'cam-a1', userId: 'user-a' } as any,
@@ -77,6 +90,8 @@ describe('Data Retention Service', () => {
     ]);
     vi.mocked(storage.deleteOldUptimeEventsForCameras).mockResolvedValue(0);
     vi.mocked(storage.deleteOldAnalyticsEventsForCameras).mockResolvedValue(0);
+    vi.mocked(storage.deleteOldUptimeHourlyForCameras).mockResolvedValue(0);
+    vi.mocked(storage.deleteOldAnalyticsHourlyForCameras).mockResolvedValue(0);
 
     await runRetentionCleanup();
 
@@ -100,6 +115,12 @@ describe('Data Retention Service', () => {
     const userBDate = vi.mocked(storage.deleteOldUptimeEventsForCameras).mock.calls[1][1] as Date;
     const daysAgoB = (Date.now() - userBDate.getTime()) / (1000 * 60 * 60 * 24);
     expect(daysAgoB).toBeCloseTo(180, 0);
+
+    // Per-user hourly retention: user-a = 7d, user-b = 60d
+    const userAHourly = vi.mocked(storage.deleteOldAnalyticsHourlyForCameras).mock.calls[0][1] as Date;
+    const userBHourly = vi.mocked(storage.deleteOldAnalyticsHourlyForCameras).mock.calls[1][1] as Date;
+    expect((Date.now() - userAHourly.getTime()) / (1000 * 60 * 60 * 24)).toBeCloseTo(7, 0);
+    expect((Date.now() - userBHourly.getTime()) / (1000 * 60 * 60 * 24)).toBeCloseTo(60, 0);
   });
 
   it('should handle errors gracefully without crashing', async () => {
@@ -110,13 +131,15 @@ describe('Data Retention Service', () => {
   });
 
   it('should process cameras from users without explicit settings using default 90d', async () => {
-    (__mockUserSettingsRows as any[]).push({ userId: 'user-c', dataRetentionDays: 60 });
+    (__mockUserSettingsRows as any[]).push({ userId: 'user-c', dataRetentionDays: 60, hourlyRetentionDays: 14 });
     vi.mocked(storage.getAllCameras).mockResolvedValue([
       { id: 'cam-c1', userId: 'user-c' } as any,
       { id: 'cam-d1', userId: 'user-d' } as any, // no settings row
     ]);
     vi.mocked(storage.deleteOldUptimeEventsForCameras).mockResolvedValue(0);
     vi.mocked(storage.deleteOldAnalyticsEventsForCameras).mockResolvedValue(0);
+    vi.mocked(storage.deleteOldUptimeHourlyForCameras).mockResolvedValue(0);
+    vi.mocked(storage.deleteOldAnalyticsHourlyForCameras).mockResolvedValue(0);
 
     await runRetentionCleanup();
 

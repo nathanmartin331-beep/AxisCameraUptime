@@ -30,6 +30,7 @@ interface Schedule {
   name: string;
   reportType: string;
   rangeDays: number;
+  granularity: "daily" | "hourly";
   cameraIds: string[] | null;
   frequency: "daily" | "weekly" | "monthly";
   dayOfWeek: number | null;
@@ -50,11 +51,14 @@ const RANGE_OPTIONS = [
   { value: 365, label: "Last 365 days" },
 ];
 
+const HOURLY_RANGE_VALUES = new Set([1, 7, 30]);
+
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 interface FormState {
   name: string;
   rangeDays: number;
+  granularity: "daily" | "hourly";
   frequency: "daily" | "weekly" | "monthly";
   dayOfWeek: number;
   dayOfMonth: number;
@@ -69,6 +73,7 @@ function defaultForm(): FormState {
   return {
     name: "",
     rangeDays: 7,
+    granularity: "daily",
     frequency: "daily",
     dayOfWeek: 1,
     dayOfMonth: 1,
@@ -132,6 +137,7 @@ export default function ScheduledReportsSection() {
       setForm({
         name: editing.name,
         rangeDays: editing.rangeDays,
+        granularity: editing.granularity ?? "daily",
         frequency: editing.frequency,
         dayOfWeek: editing.dayOfWeek ?? 1,
         dayOfMonth: editing.dayOfMonth ?? 1,
@@ -152,6 +158,7 @@ export default function ScheduledReportsSection() {
       const body: Record<string, unknown> = {
         name: form.name.trim(),
         rangeDays: form.rangeDays,
+        granularity: form.granularity,
         frequency: form.frequency,
         hourLocal: form.hourLocal,
         timezone: form.timezone,
@@ -274,9 +281,11 @@ export default function ScheduledReportsSection() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {RANGE_OPTIONS.map((o) => (
-                          <SelectItem key={o.value} value={String(o.value)}>{o.label}</SelectItem>
-                        ))}
+                        {RANGE_OPTIONS
+                          .filter((o) => form.granularity === "daily" || HOURLY_RANGE_VALUES.has(o.value))
+                          .map((o) => (
+                            <SelectItem key={o.value} value={String(o.value)}>{o.label}</SelectItem>
+                          ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -297,6 +306,30 @@ export default function ScheduledReportsSection() {
                       </SelectContent>
                     </Select>
                   </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Granularity</Label>
+                  <Select
+                    value={form.granularity}
+                    onValueChange={(v) => {
+                      const g = v as "daily" | "hourly";
+                      setForm((f) => ({
+                        ...f,
+                        granularity: g,
+                        // Snap range to 30 if switching to hourly while on 90/365
+                        rangeDays: g === "hourly" && !HOURLY_RANGE_VALUES.has(f.rangeDays) ? 30 : f.rangeDays,
+                      }));
+                    }}
+                  >
+                    <SelectTrigger data-testid="select-schedule-granularity">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="daily">Daily totals</SelectItem>
+                      <SelectItem value="hourly">Hourly breakdown (≤30d)</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 {form.frequency === "weekly" && (
@@ -483,6 +516,7 @@ export default function ScheduledReportsSection() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <div className="font-medium truncate">{s.name}</div>
                     <Badge variant="outline">{RANGE_OPTIONS.find(r => r.value === s.rangeDays)?.label ?? `${s.rangeDays}d`}</Badge>
+                    {s.granularity === "hourly" && <Badge variant="outline">Hourly</Badge>}
                     <Badge variant="outline">
                       {s.cameraIds && s.cameraIds.length > 0
                         ? `${s.cameraIds.length} camera${s.cameraIds.length === 1 ? "" : "s"}`

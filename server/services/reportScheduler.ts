@@ -8,7 +8,7 @@
 
 import cron from "node-cron";
 import { storage } from "../storage";
-import { buildAnalyticsReport, type ReportRange } from "./analyticsReport";
+import { buildAnalyticsReport, type ReportRange, type ReportGranularity } from "./analyticsReport";
 import { sendMail } from "./email";
 import { computeNextRunAt, type Frequency } from "./scheduleTime";
 import type { ReportSchedule } from "@shared/schema";
@@ -54,22 +54,34 @@ export async function runSchedule(schedule: ReportSchedule): Promise<void> {
   }
 
   try {
+    const granularity = (schedule.granularity as ReportGranularity | undefined) ?? "daily";
     const report = await buildAnalyticsReport({
       rangeDays: schedule.rangeDays as ReportRange,
       cameraIds: schedule.cameraIds ?? undefined,
+      granularity,
     });
 
-    const filename = `analytics-${schedule.rangeDays}d-${report.generatedAt.toISOString().slice(0, 10)}.csv`;
+    const dateSlug = report.generatedAt.toISOString().slice(0, 10);
+    const attachments: Array<{ filename: string; content: string; type: string }> = [
+      { filename: `analytics-${schedule.rangeDays}d-${dateSlug}.csv`, content: report.csv, type: "text/csv" },
+    ];
+    if (granularity === "hourly" && report.hourlyCsv) {
+      attachments.push({
+        filename: `analytics-hourly-${schedule.rangeDays}d-${dateSlug}.csv`,
+        content: report.hourlyCsv,
+        type: "text/csv",
+      });
+    }
 
     await sendMail({
       to: user.email,
-      subject: `[Scheduled] ${schedule.name} — ${schedule.rangeDays}d analytics`,
+      subject: `[Scheduled] ${schedule.name} — ${schedule.rangeDays}d analytics${granularity === "hourly" ? " (with hourly breakdown)" : ""}`,
       html: report.html,
-      attachments: [{ filename, content: report.csv, type: "text/csv" }],
+      attachments,
     });
 
     await markRun(schedule, null);
-    console.log(`[ReportScheduler] Sent "${schedule.name}" to ${user.email} (${report.rows.length} rows)`);
+    console.log(`[ReportScheduler] Sent "${schedule.name}" to ${user.email} (${report.rows.length} daily${granularity === "hourly" ? ` + ${report.hourlyRows?.length ?? 0} hourly` : ""} rows)`);
   } catch (err: any) {
     const sgMessage = err?.response?.body?.errors?.[0]?.message;
     const msg = sgMessage || err?.message || "Unknown error";

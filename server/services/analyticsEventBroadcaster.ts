@@ -14,7 +14,14 @@ type AnalyticsPayload = {
   events: Array<{ eventType: string; value: number; metadata?: Record<string, any> | null }>;
 };
 
+export type HourlyRollupPayload = {
+  type: "hourly_rollup";
+  hourStart: string;
+  cameras: Array<{ cameraId: string; byEvent: Record<string, number> }>;
+};
+
 type Callback = (payload: AnalyticsPayload, seqId: number) => void;
+type RollupCallback = (payload: HourlyRollupPayload, seqId: number) => void;
 
 class AnalyticsEventBroadcaster {
   private cameraListeners = new Map<string, Set<Callback>>();
@@ -23,6 +30,12 @@ class AnalyticsEventBroadcaster {
   private nextSeqId = 1;
   private ringBuffer: Array<{ id: number; payload: AnalyticsPayload }> = [];
   private static MAX_BUFFER = 1000;
+
+  // Hourly rollup channel — separate seqId space, separate ring buffer.
+  // SSE handlers subscribe alongside live events and emit with SSE event:hourly_rollup.
+  private rollupListeners = new Set<RollupCallback>();
+  private nextRollupSeqId = 1;
+  private rollupBuffer: Array<{ id: number; payload: HourlyRollupPayload }> = [];
 
   /** Subscribe to events for a specific camera. Returns an unsubscribe function. */
   subscribe(cameraId: string, cb: Callback): () => void {
@@ -86,6 +99,33 @@ class AnalyticsEventBroadcaster {
     const oldest = this.ringBuffer[0].id;
     if (lastId < oldest - 1) return null; // gap too large
     return this.ringBuffer.filter(e => e.id > lastId);
+  }
+
+  /** Subscribe to hourly rollup events (fleet-wide). Returns an unsubscribe function. */
+  subscribeAllRollups(cb: RollupCallback): () => void {
+    this.rollupListeners.add(cb);
+    return () => { this.rollupListeners.delete(cb); };
+  }
+
+  /** Broadcast a closed-hour rollup to all rollup subscribers. */
+  broadcastHourlyRollup(payload: HourlyRollupPayload): void {
+    const seqId = this.nextRollupSeqId++;
+
+    this.rollupBuffer.push({ id: seqId, payload });
+    if (this.rollupBuffer.length > AnalyticsEventBroadcaster.MAX_BUFFER) {
+      this.rollupBuffer.shift();
+    }
+
+    for (const cb of this.rollupListeners) {
+      try { cb(payload, seqId); } catch { /* subscriber error — don't break others */ }
+    }
+  }
+
+  getRollupsSince(lastId: number): Array<{ id: number; payload: HourlyRollupPayload }> | null {
+    if (this.rollupBuffer.length === 0) return null;
+    const oldest = this.rollupBuffer[0].id;
+    if (lastId < oldest - 1) return null;
+    return this.rollupBuffer.filter(e => e.id > lastId);
   }
 }
 

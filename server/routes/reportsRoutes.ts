@@ -5,7 +5,9 @@ import { sendError, validateId, getUserId } from "./shared";
 import {
   buildAnalyticsReport,
   SUPPORTED_RANGES,
+  SUPPORTED_HOURLY_RANGES,
   type ReportRange,
+  type ReportGranularity,
 } from "../services/analyticsReport";
 import { sendMail, EmailNotConfiguredError } from "../services/email";
 import { storage } from "../storage";
@@ -29,35 +31,59 @@ function parseCameraIds(raw: unknown): string[] | null {
   return ids;
 }
 
-// GET /api/reports/analytics/export?range=30&cameraIds=a,b,c
+function parseGranularity(raw: unknown): ReportGranularity | null {
+  if (raw === undefined || raw === null || raw === "") return "daily";
+  if (raw === "daily" || raw === "hourly") return raw;
+  return null;
+}
+
+// GET /api/reports/analytics/export?range=30&cameraIds=a,b,c&granularity=daily|hourly
 router.get("/api/reports/analytics/export", requireAuth, async (req: any, res) => {
   try {
     const range = parseRange(req.query.range);
     if (!range) return sendError(res, 400, "range must be one of 1, 7, 30, 90, 365");
 
+    const granularity = parseGranularity(req.query.granularity);
+    if (!granularity) return sendError(res, 400, "granularity must be 'daily' or 'hourly'");
+    if (granularity === "hourly" && !(SUPPORTED_HOURLY_RANGES as number[]).includes(range)) {
+      return sendError(res, 400, `Hourly reports support only ${SUPPORTED_HOURLY_RANGES.join("/")} day ranges`);
+    }
+
     const cameraIds = parseCameraIds(req.query.cameraIds);
     if (cameraIds === null) return sendError(res, 400, "Invalid cameraIds");
 
-    const report = await buildAnalyticsReport({ rangeDays: range, cameraIds });
+    const report = await buildAnalyticsReport({ rangeDays: range, cameraIds, granularity });
 
-    const filename = `analytics-${range}d-${report.generatedAt.toISOString().slice(0, 10)}.csv`;
-    res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.send(report.csv);
+    if (granularity === "hourly" && report.hourlyCsv) {
+      const filename = `analytics-hourly-${range}d-${report.generatedAt.toISOString().slice(0, 10)}.csv`;
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.send(report.hourlyCsv);
+    } else {
+      const filename = `analytics-${range}d-${report.generatedAt.toISOString().slice(0, 10)}.csv`;
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.send(report.csv);
+    }
   } catch (error: any) {
     console.error("Error exporting analytics report:", error);
     sendError(res, 500, error.message || "Failed to export analytics report");
   }
 });
 
-// POST /api/reports/analytics/email  body: { range, cameraIds? }
+// POST /api/reports/analytics/email  body: { range, cameraIds?, granularity? }
 router.post("/api/reports/analytics/email", requireAuth, async (req: any, res) => {
   try {
     const bodySchema = z.object({
       range: z.union([z.literal(1), z.literal(7), z.literal(30), z.literal(90), z.literal(365)]),
       cameraIds: z.array(z.string().min(1).max(128)).optional(),
+      granularity: z.enum(["daily", "hourly"]).optional(),
     });
     const body = bodySchema.parse(req.body ?? {});
+    const granularity: ReportGranularity = body.granularity ?? "daily";
+    if (granularity === "hourly" && !(SUPPORTED_HOURLY_RANGES as number[]).includes(body.range)) {
+      return sendError(res, 400, `Hourly reports support only ${SUPPORTED_HOURLY_RANGES.join("/")} day ranges`);
+    }
 
     const userEmail = req.user?.email;
     if (!userEmail) return sendError(res, 400, "Your account has no email address on file");
@@ -65,20 +91,37 @@ router.post("/api/reports/analytics/email", requireAuth, async (req: any, res) =
     const report = await buildAnalyticsReport({
       rangeDays: body.range,
       cameraIds: body.cameraIds,
+      granularity,
     });
 
-    const filename = `analytics-${body.range}d-${report.generatedAt.toISOString().slice(0, 10)}.csv`;
+    const dateSlug = report.generatedAt.toISOString().slice(0, 10);
+    const dailyName = `analytics-${body.range}d-${dateSlug}.csv`;
+    const attachments: Array<{ filename: string; content: string; type: string }> = [
+      { filename: dailyName, content: report.csv, type: "text/csv" },
+    ];
+    if (granularity === "hourly" && report.hourlyCsv) {
+      attachments.push({
+        filename: `analytics-hourly-${body.range}d-${dateSlug}.csv`,
+        content: report.hourlyCsv,
+        type: "text/csv",
+      });
+    }
+
+    const subjectSuffix = granularity === "hourly"
+      ? `${body.range}d (${report.rows.length} daily + ${report.hourlyRows?.length ?? 0} hourly rows)`
+      : `${body.range}d (${report.rows.length} rows)`;
 
     await sendMail({
       to: userEmail,
-      subject: `Analytics report — ${body.range}d (${report.rows.length} rows)`,
+      subject: `Analytics report — ${subjectSuffix}`,
       html: report.html,
-      attachments: [{ filename, content: report.csv, type: "text/csv" }],
+      attachments,
     });
 
     res.json({
       message: `Analytics report emailed to ${userEmail}`,
       rowCount: report.rows.length,
+      hourlyRowCount: report.hourlyRows?.length,
       cameraCount: report.cameraCount,
     });
   } catch (error: any) {
@@ -97,6 +140,7 @@ const RANGE_VALUES = [1, 7, 30, 90, 365] as const;
 const scheduleBaseSchema = z.object({
   name: z.string().min(1).max(120),
   rangeDays: z.union([z.literal(1), z.literal(7), z.literal(30), z.literal(90), z.literal(365)]),
+  granularity: z.enum(["daily", "hourly"]).optional(),
   cameraIds: z.array(z.string().min(1).max(128)).max(1000).nullable().optional(),
   frequency: z.enum(["daily", "weekly", "monthly"]),
   dayOfWeek: z.number().int().min(0).max(6).optional(),
@@ -117,6 +161,9 @@ function validateFrequencyFields(input: z.infer<typeof scheduleBaseSchema>): str
     new Intl.DateTimeFormat("en-US", { timeZone: input.timezone });
   } catch {
     return `Invalid timezone: ${input.timezone}`;
+  }
+  if (input.granularity === "hourly" && !(SUPPORTED_HOURLY_RANGES as number[]).includes(input.rangeDays)) {
+    return `Hourly schedules support only ${SUPPORTED_HOURLY_RANGES.join("/")} day ranges`;
   }
   return null;
 }
@@ -150,6 +197,7 @@ router.post("/api/reports/schedules", requireAuth, async (req: any, res) => {
       name: body.name,
       reportType: "analytics",
       rangeDays: body.rangeDays,
+      granularity: body.granularity ?? "daily",
       cameraIds: body.cameraIds ?? null,
       frequency: body.frequency,
       dayOfWeek: body.dayOfWeek ?? null,
@@ -185,6 +233,8 @@ router.patch("/api/reports/schedules/:id", requireAuth, async (req: any, res) =>
       dayOfWeek: body.dayOfWeek ?? existing.dayOfWeek ?? undefined,
       dayOfMonth: body.dayOfMonth ?? existing.dayOfMonth ?? undefined,
       timezone: body.timezone ?? existing.timezone,
+      granularity: (body.granularity ?? existing.granularity) as ReportGranularity,
+      rangeDays: body.rangeDays ?? (existing.rangeDays as ReportRange),
     };
 
     if (merged.frequency === "weekly" && merged.dayOfWeek === undefined) {
@@ -197,6 +247,9 @@ router.patch("/api/reports/schedules/:id", requireAuth, async (req: any, res) =>
       new Intl.DateTimeFormat("en-US", { timeZone: merged.timezone });
     } catch {
       return sendError(res, 400, `Invalid timezone: ${merged.timezone}`);
+    }
+    if (merged.granularity === "hourly" && !(SUPPORTED_HOURLY_RANGES as number[]).includes(merged.rangeDays)) {
+      return sendError(res, 400, `Hourly schedules support only ${SUPPORTED_HOURLY_RANGES.join("/")} day ranges`);
     }
 
     const cadenceChanged =

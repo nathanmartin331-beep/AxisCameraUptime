@@ -35,10 +35,12 @@ async function runRetentionCleanup() {
     // Process each user's retention setting individually
     const allSettings = await db.select().from(userSettings);
 
-    // Build a map of userId → retentionDays
+    // Build maps of userId → retentionDays
     const userRetention = new Map<string, number>();
+    const userHourlyRetention = new Map<string, number>();
     for (const s of allSettings) {
       userRetention.set(s.userId, s.dataRetentionDays ?? 90);
+      userHourlyRetention.set(s.userId, s.hourlyRetentionDays ?? 30);
     }
 
     // Get all users who have cameras (including those without explicit settings)
@@ -52,24 +54,35 @@ async function runRetentionCleanup() {
 
     let totalUptimeDeleted = 0;
     let totalAnalyticsDeleted = 0;
+    let totalUptimeHourlyDeleted = 0;
+    let totalAnalyticsHourlyDeleted = 0;
 
     for (const [userId, cameraIds] of userCameraIds) {
       const retentionDays = userRetention.get(userId) ?? 90;
+      const hourlyRetentionDays = userHourlyRetention.get(userId) ?? 30;
+
       const beforeDate = new Date();
       beforeDate.setDate(beforeDate.getDate() - retentionDays);
 
+      const hourlyBeforeDate = new Date();
+      hourlyBeforeDate.setDate(hourlyBeforeDate.getDate() - hourlyRetentionDays);
+
       const uptimeDeleted = await storage.deleteOldUptimeEventsForCameras(cameraIds, beforeDate);
       const analyticsDeleted = await storage.deleteOldAnalyticsEventsForCameras(cameraIds, beforeDate);
+      const uptimeHourlyDeleted = await storage.deleteOldUptimeHourlyForCameras(cameraIds, hourlyBeforeDate);
+      const analyticsHourlyDeleted = await storage.deleteOldAnalyticsHourlyForCameras(cameraIds, hourlyBeforeDate);
 
       totalUptimeDeleted += uptimeDeleted;
       totalAnalyticsDeleted += analyticsDeleted;
+      totalUptimeHourlyDeleted += uptimeHourlyDeleted;
+      totalAnalyticsHourlyDeleted += analyticsHourlyDeleted;
 
-      if (uptimeDeleted > 0 || analyticsDeleted > 0) {
-        console.log(`[Retention] User ${userId}: deleted ${uptimeDeleted} uptime + ${analyticsDeleted} analytics events (retention: ${retentionDays}d)`);
+      if (uptimeDeleted > 0 || analyticsDeleted > 0 || uptimeHourlyDeleted > 0 || analyticsHourlyDeleted > 0) {
+        console.log(`[Retention] User ${userId}: deleted ${uptimeDeleted} uptime + ${analyticsDeleted} analytics events (${retentionDays}d); ${uptimeHourlyDeleted} uptime + ${analyticsHourlyDeleted} analytics hourly summaries (${hourlyRetentionDays}d)`);
       }
     }
 
-    console.log(`[Retention] Cleanup complete: ${totalUptimeDeleted} uptime events, ${totalAnalyticsDeleted} analytics events deleted`);
+    console.log(`[Retention] Cleanup complete: ${totalUptimeDeleted} uptime + ${totalAnalyticsDeleted} analytics events; ${totalUptimeHourlyDeleted} uptime + ${totalAnalyticsHourlyDeleted} analytics hourly summaries deleted`);
   } catch (error) {
     console.error("[Retention] Error during cleanup:", error);
   }

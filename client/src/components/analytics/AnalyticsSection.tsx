@@ -4,9 +4,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BarChart3, Users, ArrowDownToLine, ArrowUpFromLine, GitBranchPlus } from "lucide-react";
 import { AnalyticsCard, SCENARIO_COLORS } from "./LiveAnalyticsCard";
 import DailyTrendsChart from "./DailyTrendsChart";
+import HourlyTrendsChart from "./HourlyTrendsChart";
 
 interface AnalyticsResponse {
   latest: { eventType: string; value: number; timestamp: string; metadata?: Record<string, any> } | null;
@@ -52,6 +54,7 @@ interface AnalyticsSectionProps {
 export default function AnalyticsSection({ cameraId, hasOccupancy, hasCrossline, dataProvenance }: AnalyticsSectionProps) {
   const [cardVisibility, setCardVisibility] = useState<Record<AnalyticsCardKey, boolean>>(loadVisibility);
   const [trendDays, setTrendDays] = useState(7);
+  const [trendGranularity, setTrendGranularity] = useState<"daily" | "hourly">("daily");
 
   const toggleCard = useCallback((key: AnalyticsCardKey) => {
     setCardVisibility(prev => {
@@ -302,13 +305,28 @@ export default function AnalyticsSection({ cameraId, hasOccupancy, hasCrossline,
         </Card>
       )}
 
-      <DailyTrendsChart
-        dailyEntering={dailyEntering}
-        dailyExiting={dailyExiting}
-        dailyLineCrossing={dailyLineCrossing}
-        trendDays={trendDays}
-        onTrendDaysChange={setTrendDays}
-      />
+      {hasCrossline && (
+        <div className="flex items-center justify-end">
+          <Tabs value={trendGranularity} onValueChange={(v) => setTrendGranularity(v as "daily" | "hourly")}>
+            <TabsList className="h-8">
+              <TabsTrigger value="daily" className="text-xs px-3 h-6">Daily</TabsTrigger>
+              <TabsTrigger value="hourly" className="text-xs px-3 h-6">Hourly</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </div>
+      )}
+
+      {trendGranularity === "daily" ? (
+        <DailyTrendsChart
+          dailyEntering={dailyEntering}
+          dailyExiting={dailyExiting}
+          dailyLineCrossing={dailyLineCrossing}
+          trendDays={trendDays}
+          onTrendDaysChange={setTrendDays}
+        />
+      ) : (
+        <HourlyTrendsChart cameraId={cameraId} hasCrossline={hasCrossline} />
+      )}
     </>
   );
 }
