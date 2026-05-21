@@ -2040,6 +2040,95 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
+  // Group hourly methods follow the same cumulative-counter logic as the per-camera
+  // ones: line_crossing/people_in/people_out are camera cumulative counters, so we
+  // compute deltas per (camera, scenario) before aggregating. occupancy is a snapshot.
+  // See getAnalyticsHourlyTotalsByScenario for the single-camera version.
+
+  // Build cumulative max-per-hour per (camera, scenario) over the extended range
+  // [startTs - 24h, endTs]. The 24h lookback gives the first in-range hour a baseline.
+  private async loadGroupHourlyCumulative(
+    memberIds: string[],
+    eventType: string,
+    extStartTs: number,
+    endTs: number,
+  ): Promise<Map<string, Map<string, Map<number, number>>>> {
+    const placeholders = memberIds.map(() => "?").join(",");
+    const perCamera = new Map<string, Map<string, Map<number, number>>>();
+
+    function set(camId: string, scenario: string, hourSec: number, value: number) {
+      if (!perCamera.has(camId)) perCamera.set(camId, new Map());
+      const scenarioMap = perCamera.get(camId)!;
+      if (!scenarioMap.has(scenario)) scenarioMap.set(scenario, new Map());
+      const hmap = scenarioMap.get(scenario)!;
+      const existing = hmap.get(hourSec);
+      if (existing === undefined || value > existing) hmap.set(hourSec, value);
+    }
+
+    // Tier 1: hourly summaries across the extended window
+    const hourlyRows = sqlite.prepare(`
+      SELECT camera_id, hour_start, max_value, COALESCE(scenario, 'default') AS scenario
+      FROM analytics_hourly_summary
+      WHERE camera_id IN (${placeholders}) AND event_type = ? AND hour_start >= ? AND hour_start <= ?
+    `).all(...memberIds, eventType, extStartTs, endTs) as Array<{
+      camera_id: string; hour_start: number; max_value: number; scenario: string;
+    }>;
+    for (const row of hourlyRows) {
+      set(row.camera_id, row.scenario, row.hour_start, row.max_value ?? 0);
+    }
+
+    // Tier 2: raw events (kept ~6h before hourly rollup), bucket into hours
+    const extStartIso = new Date(extStartTs * 1000).toISOString();
+    const endIso = new Date(endTs * 1000).toISOString();
+    const rawRows = sqlite.prepare(`
+      SELECT camera_id, timestamp, value, metadata
+      FROM analytics_events
+      WHERE camera_id IN (${placeholders}) AND event_type = ? AND timestamp >= ? AND timestamp <= ?
+    `).all(...memberIds, eventType, extStartIso, endIso) as Array<{
+      camera_id: string; timestamp: string; value: number; metadata: string | null;
+    }>;
+    for (const row of rawRows) {
+      let meta: Record<string, any> | undefined;
+      if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
+      const scenario = meta?.scenario || "default";
+      const hourSec = Math.floor(new Date(row.timestamp).getTime() / 1000 / 3600) * 3600;
+      set(row.camera_id, scenario, hourSec, row.value ?? 0);
+    }
+
+    return perCamera;
+  }
+
+  // Convert one (camera, scenario)'s cumulative-max-per-hour map into per-hour deltas.
+  // Returns Map<hourStartSec, deltaValue> restricted to [startTs, endTs].
+  private cumulativeToDeltas(
+    cumulative: Map<number, number>,
+    eventType: string,
+    startTs: number,
+    endTs: number,
+  ): Map<number, number> {
+    const isCounter = eventType === "line_crossing" || eventType === "people_in" || eventType === "people_out";
+    const out = new Map<number, number>();
+    const sorted = Array.from(cumulative.entries()).sort((a, b) => a[0] - b[0]);
+    let prev: number | null = null;
+    for (const [hourSec, value] of sorted) {
+      const inRange = hourSec >= startTs && hourSec <= endTs;
+      let delta: number;
+      if (!isCounter) {
+        delta = value; // occupancy: peak per hour
+      } else if (prev === null) {
+        prev = value;
+        continue; // first observation is baseline, not a delta
+      } else if (value < prev) {
+        delta = value; // counter reset
+      } else {
+        delta = value - prev;
+      }
+      prev = value;
+      if (inRange) out.set(hourSec, delta);
+    }
+    return out;
+  }
+
   async getGroupAnalyticsHourlyTotals(
     memberIds: string[],
     eventType: string,
@@ -2052,71 +2141,20 @@ export class DatabaseStorage implements IStorage {
     startDate.setDate(startDate.getDate() - days);
     const startTs = Math.floor(startDate.getTime() / 1000);
     const endTs = Math.floor(endDate.getTime() / 1000);
-    const placeholders = memberIds.map(() => "?").join(",");
+    const extStartTs = startTs - 86400;
 
+    const perCamera = await this.loadGroupHourlyCumulative(memberIds, eventType, extStartTs, endTs);
+
+    // Sum scenario deltas, then sum across cameras per hour.
     const hourMap = new Map<string, number>();
-
-    // Tier 1: hourly summary — SUM(max_value) across cameras and scenarios per hour
-    const hourlyRows = sqlite.prepare(`
-      SELECT hour_start, SUM(max_value) AS total
-      FROM analytics_hourly_summary
-      WHERE camera_id IN (${placeholders}) AND event_type = ? AND hour_start >= ? AND hour_start <= ?
-      GROUP BY hour_start
-    `).all(...memberIds, eventType, startTs, endTs) as Array<{ hour_start: number; total: number }>;
-
-    for (const row of hourlyRows) {
-      const hourKey = new Date(row.hour_start * 1000).toISOString();
-      hourMap.set(hourKey, (hourMap.get(hourKey) || 0) + (row.total ?? 0));
-    }
-
-    // Tier 2: raw events — dedupe per camera per scenario per timestamp, sum across
-    // scenarios for that camera at each timestamp, take max per hour per camera,
-    // then sum across cameras per hour.
-    const rawRows = sqlite.prepare(`
-      SELECT camera_id, timestamp, value, metadata
-      FROM analytics_events
-      WHERE camera_id IN (${placeholders}) AND event_type = ? AND timestamp >= ? AND timestamp <= ?
-    `).all(...memberIds, eventType, startDate.toISOString(), endDate.toISOString()) as Array<{
-      camera_id: string; timestamp: string; value: number; metadata: string | null;
-    }>;
-
-    const perCamera = new Map<string, Map<string, Map<number, number>>>();
-    for (const row of rawRows) {
-      let meta: Record<string, any> | undefined;
-      if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
-      const scenario = meta?.scenario || "default";
-      const ts = new Date(row.timestamp).getTime();
-      if (!perCamera.has(row.camera_id)) perCamera.set(row.camera_id, new Map());
-      const scenarioMap = perCamera.get(row.camera_id)!;
-      if (!scenarioMap.has(scenario)) scenarioMap.set(scenario, new Map());
-      const tsMap = scenarioMap.get(scenario)!;
-      const existing = tsMap.get(ts);
-      if (existing === undefined || row.value > existing) tsMap.set(ts, row.value);
-    }
-
-    const perHourCombined = new Map<string, number>();
     for (const [, scenarioMap] of perCamera) {
-      const cameraTsSums = new Map<number, number>();
-      for (const [, tsMap] of scenarioMap) {
-        for (const [ts, val] of tsMap) {
-          cameraTsSums.set(ts, (cameraTsSums.get(ts) || 0) + val);
+      for (const [, cumulative] of scenarioMap) {
+        const deltas = this.cumulativeToDeltas(cumulative, eventType, startTs, endTs);
+        for (const [hourSec, delta] of deltas) {
+          const hourKey = new Date(hourSec * 1000).toISOString();
+          hourMap.set(hourKey, (hourMap.get(hourKey) || 0) + delta);
         }
       }
-      const cameraHourMax = new Map<string, number>();
-      for (const [ts, sum] of cameraTsSums) {
-        const hourStartSec = Math.floor(ts / 1000 / 3600) * 3600;
-        const hourKey = new Date(hourStartSec * 1000).toISOString();
-        const existing = cameraHourMax.get(hourKey);
-        if (existing === undefined || sum > existing) cameraHourMax.set(hourKey, sum);
-      }
-      for (const [hourKey, hourMax] of cameraHourMax) {
-        perHourCombined.set(hourKey, (perHourCombined.get(hourKey) || 0) + hourMax);
-      }
-    }
-
-    for (const [hourKey, rawTotal] of perHourCombined) {
-      const existing = hourMap.get(hourKey) || 0;
-      if (rawTotal > existing) hourMap.set(hourKey, rawTotal);
     }
 
     return Array.from(hourMap.entries())
@@ -2136,73 +2174,21 @@ export class DatabaseStorage implements IStorage {
     startDate.setDate(startDate.getDate() - days);
     const startTs = Math.floor(startDate.getTime() / 1000);
     const endTs = Math.floor(endDate.getTime() / 1000);
-    const placeholders = memberIds.map(() => "?").join(",");
+    const extStartTs = startTs - 86400;
 
-    const cameraHourly = new Map<string, Map<string, number>>();
-    function ensure(camId: string) {
-      if (!cameraHourly.has(camId)) cameraHourly.set(camId, new Map());
-      return cameraHourly.get(camId)!;
-    }
-
-    // Tier 1: hourly summary per camera (SUM across scenarios within a camera at each hour)
-    const hourlyRows = sqlite.prepare(`
-      SELECT camera_id, hour_start, SUM(max_value) AS total
-      FROM analytics_hourly_summary
-      WHERE camera_id IN (${placeholders}) AND event_type = ? AND hour_start >= ? AND hour_start <= ?
-      GROUP BY camera_id, hour_start
-    `).all(...memberIds, eventType, startTs, endTs) as Array<{ camera_id: string; hour_start: number; total: number }>;
-
-    for (const row of hourlyRows) {
-      const hourKey = new Date(row.hour_start * 1000).toISOString();
-      ensure(row.camera_id).set(hourKey, row.total ?? 0);
-    }
-
-    // Tier 2: raw events (< 6h), dedupe per (camera, scenario, ts), sum across scenarios, max per hour
-    const rawRows = sqlite.prepare(`
-      SELECT camera_id, timestamp, value, metadata
-      FROM analytics_events
-      WHERE camera_id IN (${placeholders}) AND event_type = ? AND timestamp >= ? AND timestamp <= ?
-    `).all(...memberIds, eventType, startDate.toISOString(), endDate.toISOString()) as Array<{
-      camera_id: string; timestamp: string; value: number; metadata: string | null;
-    }>;
-
-    const perCameraRaw = new Map<string, Map<string, Map<number, number>>>();
-    for (const row of rawRows) {
-      let meta: Record<string, any> | undefined;
-      if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
-      const scenario = meta?.scenario || "default";
-      const ts = new Date(row.timestamp).getTime();
-      if (!perCameraRaw.has(row.camera_id)) perCameraRaw.set(row.camera_id, new Map());
-      const scenarioMap = perCameraRaw.get(row.camera_id)!;
-      if (!scenarioMap.has(scenario)) scenarioMap.set(scenario, new Map());
-      const tsMap = scenarioMap.get(scenario)!;
-      const existing = tsMap.get(ts);
-      if (existing === undefined || row.value > existing) tsMap.set(ts, row.value);
-    }
-
-    for (const [camId, scenarioMap] of perCameraRaw) {
-      const cameraTsSums = new Map<number, number>();
-      for (const [, tsMap] of scenarioMap) {
-        for (const [ts, val] of tsMap) {
-          cameraTsSums.set(ts, (cameraTsSums.get(ts) || 0) + val);
-        }
-      }
-      const cameraHourMax = new Map<string, number>();
-      for (const [ts, sum] of cameraTsSums) {
-        const hourStartSec = Math.floor(ts / 1000 / 3600) * 3600;
-        const hourKey = new Date(hourStartSec * 1000).toISOString();
-        const existing = cameraHourMax.get(hourKey);
-        if (existing === undefined || sum > existing) cameraHourMax.set(hourKey, sum);
-      }
-      const m = ensure(camId);
-      for (const [hourKey, hourMax] of cameraHourMax) {
-        if (hourMax > (m.get(hourKey) || 0)) m.set(hourKey, hourMax);
-      }
-    }
+    const perCamera = await this.loadGroupHourlyCumulative(memberIds, eventType, extStartTs, endTs);
 
     const result: Record<string, Array<{ hour: string; total: number }>> = {};
-    for (const [camId, hourMap] of cameraHourly) {
-      result[camId] = Array.from(hourMap.entries())
+    for (const [camId, scenarioMap] of perCamera) {
+      const cameraHourMap = new Map<string, number>();
+      for (const [, cumulative] of scenarioMap) {
+        const deltas = this.cumulativeToDeltas(cumulative, eventType, startTs, endTs);
+        for (const [hourSec, delta] of deltas) {
+          const hourKey = new Date(hourSec * 1000).toISOString();
+          cameraHourMap.set(hourKey, (cameraHourMap.get(hourKey) || 0) + delta);
+        }
+      }
+      result[camId] = Array.from(cameraHourMap.entries())
         .map(([hour, total]) => ({ hour, total }))
         .sort((a, b) => a.hour.localeCompare(b.hour));
     }
