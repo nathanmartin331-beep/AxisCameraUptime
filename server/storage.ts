@@ -1442,82 +1442,30 @@ export class DatabaseStorage implements IStorage {
 
   // Hour bucket: ISO UTC string at the top of the hour, e.g. 2026-05-18T14:00:00.000Z
   // Uses epoch seconds floored to the hour so it matches analytics_hourly_summary.hour_start.
+  //
+  // line_crossing / people_in / people_out are CUMULATIVE counters from the camera
+  // (not events-per-hour). We convert them to per-hour deltas: delta(h) = max(h) -
+  // max(prev hour). A negative delta (counter reset due to reboot/reconfigure) is
+  // treated as `current` (counter went from 0 to current within the hour). We pull
+  // an extra 24h of summaries before the requested range so the first hour in the
+  // window has a baseline. occupancy is a snapshot gauge (peak per hour is correct).
   async getAnalyticsHourlyTotals(
     cameraId: string,
     eventType: string,
     days: number,
   ): Promise<Array<{ hour: string; total: number; metadata?: Record<string, any> }>> {
-    const endDate = new Date();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
-    const startTs = Math.floor(startDate.getTime() / 1000);
-    const endTs = Math.floor(endDate.getTime() / 1000);
-
+    const perScenario = await this.getAnalyticsHourlyTotalsByScenario(cameraId, eventType, days);
     const hourMap = new Map<string, { total: number; metadata?: Record<string, any> }>();
-
-    // Tier 1: closed hours from analytics_hourly_summary (sum max_value across scenarios per hour)
-    const hourlyRows = sqlite.prepare(`
-      SELECT hour_start, SUM(max_value) AS total, MAX(metadata) AS metadata
-      FROM analytics_hourly_summary
-      WHERE camera_id = ? AND event_type = ? AND hour_start >= ? AND hour_start <= ?
-      GROUP BY hour_start
-    `).all(cameraId, eventType, startTs, endTs) as Array<{ hour_start: number; total: number; metadata: string | null }>;
-
-    for (const row of hourlyRows) {
-      const hourKey = new Date(row.hour_start * 1000).toISOString();
-      let meta: Record<string, any> | undefined;
-      if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
-      hourMap.set(hourKey, { total: row.total ?? 0, metadata: meta });
-    }
-
-    // Tier 2: raw events (most recent ~6h). Dedupe per (scenario, timestamp), sum
-    // across scenarios at each timestamp, then take max combined value per hour.
-    const rawEvents = await db
-      .select()
-      .from(analyticsEvents)
-      .where(
-        and(
-          eq(analyticsEvents.cameraId, cameraId),
-          eq(analyticsEvents.eventType, eventType),
-          gte(analyticsEvents.timestamp, new Date(startTs * 1000)),
-          lte(analyticsEvents.timestamp, new Date(endTs * 1000)),
-        ),
-      )
-      .orderBy(analyticsEvents.timestamp);
-
-    const perScenarioTs = new Map<string, Map<number, { value: number; metadata?: Record<string, any> }>>();
-    for (const evt of rawEvents) {
-      const scenario = (evt.metadata as Record<string, any>)?.scenario || "default";
-      const ts = evt.timestamp.getTime();
-      if (!perScenarioTs.has(scenario)) perScenarioTs.set(scenario, new Map());
-      const tsMap = perScenarioTs.get(scenario)!;
-      const existing = tsMap.get(ts);
-      if (!existing || evt.value > existing.value) {
-        tsMap.set(ts, { value: evt.value, metadata: evt.metadata ?? undefined });
-      }
-    }
-
-    const perTimestamp = new Map<number, { sum: number; metadata?: Record<string, any> }>();
-    perScenarioTs.forEach((tsMap) => {
-      tsMap.forEach((data, ts) => {
-        const existing = perTimestamp.get(ts);
+    for (const rows of Object.values(perScenario)) {
+      for (const r of rows) {
+        const existing = hourMap.get(r.hour);
         if (existing) {
-          existing.sum += data.value;
+          existing.total += r.total;
         } else {
-          perTimestamp.set(ts, { sum: data.value, metadata: data.metadata });
+          hourMap.set(r.hour, { total: r.total, metadata: r.metadata });
         }
-      });
-    });
-
-    perTimestamp.forEach((data, ts) => {
-      const hourStartSec = Math.floor(ts / 1000 / 3600) * 3600;
-      const hourKey = new Date(hourStartSec * 1000).toISOString();
-      const existing = hourMap.get(hourKey);
-      if (!existing || data.sum > existing.total) {
-        hourMap.set(hourKey, { total: data.sum, metadata: data.metadata });
       }
-    });
-
+    }
     return Array.from(hourMap.entries())
       .map(([hour, data]) => ({ hour, ...data }))
       .sort((a, b) => a.hour.localeCompare(b.hour));
@@ -1534,27 +1482,36 @@ export class DatabaseStorage implements IStorage {
     const startTs = Math.floor(startDate.getTime() / 1000);
     const endTs = Math.floor(endDate.getTime() / 1000);
 
-    const scenarioMap = new Map<string, Map<string, { total: number; metadata?: Record<string, any> }>>();
+    // Baseline lookback: extend the range by 24h so the first in-range hour has a
+    // previous-hour value to subtract from. Hourly rows are retained well beyond
+    // 24h (default hourlyRetentionDays=30) so this is safe.
+    const extStartTs = startTs - 86400;
+    const isCounter = eventType === "line_crossing" || eventType === "people_in" || eventType === "people_out";
+
+    // scenario -> hourStartSec -> { value, metadata }  (cumulative max per hour)
+    const perScenario = new Map<string, Map<number, { value: number; metadata?: Record<string, any> }>>();
     function ensureScenario(scenario: string) {
-      if (!scenarioMap.has(scenario)) scenarioMap.set(scenario, new Map());
-      return scenarioMap.get(scenario)!;
+      if (!perScenario.has(scenario)) perScenario.set(scenario, new Map());
+      return perScenario.get(scenario)!;
     }
 
-    // Tier 1: closed hours
+    // Tier 1: hourly summaries across the extended window
     const hourlyRows = sqlite.prepare(`
       SELECT hour_start, max_value, metadata, COALESCE(scenario, 'default') AS scenario
       FROM analytics_hourly_summary
       WHERE camera_id = ? AND event_type = ? AND hour_start >= ? AND hour_start <= ?
-    `).all(cameraId, eventType, startTs, endTs) as Array<{ hour_start: number; max_value: number; metadata: string | null; scenario: string }>;
+    `).all(cameraId, eventType, extStartTs, endTs) as Array<{ hour_start: number; max_value: number; metadata: string | null; scenario: string }>;
 
     for (const row of hourlyRows) {
-      const hourKey = new Date(row.hour_start * 1000).toISOString();
       let meta: Record<string, any> | undefined;
       if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
-      ensureScenario(row.scenario).set(hourKey, { total: row.max_value ?? 0, metadata: meta });
+      ensureScenario(row.scenario).set(row.hour_start, { value: row.max_value ?? 0, metadata: meta });
     }
 
-    // Tier 2: raw events grouped per scenario, max per hour
+    // Tier 2: raw events (kept for ~6h before the hourly rollup); bucket into hours
+    // and take the max per (scenario, hour). Overlays summary values for hours that
+    // haven't been rolled up yet — for the in-flight current hour, summary may
+    // be missing but raw is present.
     const rawEvents = await db
       .select()
       .from(analyticsEvents)
@@ -1562,42 +1519,55 @@ export class DatabaseStorage implements IStorage {
         and(
           eq(analyticsEvents.cameraId, cameraId),
           eq(analyticsEvents.eventType, eventType),
-          gte(analyticsEvents.timestamp, new Date(startTs * 1000)),
+          gte(analyticsEvents.timestamp, new Date(extStartTs * 1000)),
           lte(analyticsEvents.timestamp, new Date(endTs * 1000)),
         ),
       )
       .orderBy(analyticsEvents.timestamp);
 
-    const perScenarioTs = new Map<string, Map<number, { value: number; metadata?: Record<string, any> }>>();
     for (const evt of rawEvents) {
       const scenario = (evt.metadata as Record<string, any>)?.scenario || "default";
-      const ts = evt.timestamp.getTime();
-      if (!perScenarioTs.has(scenario)) perScenarioTs.set(scenario, new Map());
-      const tsMap = perScenarioTs.get(scenario)!;
-      const existing = tsMap.get(ts);
+      const hourStartSec = Math.floor(evt.timestamp.getTime() / 1000 / 3600) * 3600;
+      const hmap = ensureScenario(scenario);
+      const existing = hmap.get(hourStartSec);
       if (!existing || evt.value > existing.value) {
-        tsMap.set(ts, { value: evt.value, metadata: evt.metadata ?? undefined });
+        hmap.set(hourStartSec, { value: evt.value, metadata: evt.metadata ?? undefined });
       }
     }
 
-    perScenarioTs.forEach((tsMap, scenario) => {
-      const hmap = ensureScenario(scenario);
-      tsMap.forEach((data, ts) => {
-        const hourStartSec = Math.floor(ts / 1000 / 3600) * 3600;
-        const hourKey = new Date(hourStartSec * 1000).toISOString();
-        const existing = hmap.get(hourKey);
-        if (!existing || data.value > existing.total) {
-          hmap.set(hourKey, { total: data.value, metadata: data.metadata });
+    const result: Record<string, Array<{ hour: string; total: number; metadata?: Record<string, any> }>> = {};
+
+    perScenario.forEach((hmap, scenario) => {
+      const sortedHours = Array.from(hmap.entries()).sort((a, b) => a[0] - b[0]);
+      const out: Array<{ hour: string; total: number; metadata?: Record<string, any> }> = [];
+
+      let prevValue: number | null = null;
+      for (const [hourStartSec, data] of sortedHours) {
+        const inRange = hourStartSec >= startTs && hourStartSec <= endTs;
+        let total: number;
+        if (!isCounter) {
+          total = data.value; // occupancy: peak per hour
+        } else if (prevValue === null) {
+          total = -1; // skip: no baseline yet
+        } else if (data.value < prevValue) {
+          total = data.value; // counter reset detected
+        } else {
+          total = data.value - prevValue;
         }
-      });
+        prevValue = data.value;
+
+        if (inRange && total >= 0) {
+          out.push({
+            hour: new Date(hourStartSec * 1000).toISOString(),
+            total,
+            metadata: data.metadata,
+          });
+        }
+      }
+
+      result[scenario] = out;
     });
 
-    const result: Record<string, Array<{ hour: string; total: number; metadata?: Record<string, any> }>> = {};
-    scenarioMap.forEach((hmap, scenario) => {
-      result[scenario] = Array.from(hmap.entries())
-        .map(([hour, data]) => ({ hour, ...data }))
-        .sort((a, b) => a.hour.localeCompare(b.hour));
-    });
     return result;
   }
 
