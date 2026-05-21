@@ -28,8 +28,9 @@ export default function Reports() {
   const [locationFilter, setLocationFilter] = useState<string>("all");
   const [granularity, setGranularity] = useState<"daily" | "hourly">("daily");
 
-  // When switching to hourly, snap range to 30d if a wider one is selected.
-  const effectiveRange = granularity === "hourly" && !HOURLY_VALID_RANGES.has(timeRange) ? "30" : timeRange;
+  // Hourly defaults to 24h — emailed/downloaded hour-by-hour rows over a wider
+  // window are noisy. User can still pick 7d/30d from the dropdown.
+  const effectiveRange = granularity === "hourly" && !HOURLY_VALID_RANGES.has(timeRange) ? "1" : timeRange;
 
   const { data: cameras = [] } = useQuery<Camera[]>({
     queryKey: ["/api/cameras"],
@@ -326,7 +327,14 @@ export default function Reports() {
                 </SelectContent>
               </Select>
 
-              <Select value={granularity} onValueChange={(v) => setGranularity(v as "daily" | "hourly")}>
+              <Select
+                value={granularity}
+                onValueChange={(v) => {
+                  const g = v as "daily" | "hourly";
+                  setGranularity(g);
+                  if (g === "hourly") setTimeRange("1");
+                }}
+              >
                 <SelectTrigger className="w-36" data-testid="select-granularity">
                   <SelectValue />
                 </SelectTrigger>

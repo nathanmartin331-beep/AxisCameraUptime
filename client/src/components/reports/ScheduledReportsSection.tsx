@@ -317,8 +317,9 @@ export default function ScheduledReportsSection() {
                       setForm((f) => ({
                         ...f,
                         granularity: g,
-                        // Snap range to 30 if switching to hourly while on 90/365
-                        rangeDays: g === "hourly" && !HOURLY_RANGE_VALUES.has(f.rangeDays) ? 30 : f.rangeDays,
+                        // Hourly defaults to 24h — emailed hour-by-hour rows over a
+                        // wider window are noisy. User can pick 7/30 manually.
+                        rangeDays: g === "hourly" ? 1 : f.rangeDays,
                       }));
                     }}
                   >
