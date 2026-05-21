@@ -62,26 +62,23 @@ export async function runSchedule(schedule: ReportSchedule): Promise<void> {
     });
 
     const dateSlug = report.generatedAt.toISOString().slice(0, 10);
+    const filename = granularity === "hourly"
+      ? `analytics-hourly-${schedule.rangeDays}d-${dateSlug}.csv`
+      : `analytics-${schedule.rangeDays}d-${dateSlug}.csv`;
     const attachments: Array<{ filename: string; content: string; type: string }> = [
-      { filename: `analytics-${schedule.rangeDays}d-${dateSlug}.csv`, content: report.csv, type: "text/csv" },
+      { filename, content: report.csv, type: "text/csv" },
     ];
-    if (granularity === "hourly" && report.hourlyCsv) {
-      attachments.push({
-        filename: `analytics-hourly-${schedule.rangeDays}d-${dateSlug}.csv`,
-        content: report.hourlyCsv,
-        type: "text/csv",
-      });
-    }
 
     await sendMail({
       to: user.email,
-      subject: `[Scheduled] ${schedule.name} — ${schedule.rangeDays}d analytics${granularity === "hourly" ? " (with hourly breakdown)" : ""}`,
+      subject: `[Scheduled] ${schedule.name} — ${schedule.rangeDays}d ${granularity === "hourly" ? "hourly" : "daily"} analytics`,
       html: report.html,
       attachments,
     });
 
     await markRun(schedule, null);
-    console.log(`[ReportScheduler] Sent "${schedule.name}" to ${user.email} (${report.rows.length} daily${granularity === "hourly" ? ` + ${report.hourlyRows?.length ?? 0} hourly` : ""} rows)`);
+    const rowCount = granularity === "hourly" ? (report.hourlyRows?.length ?? 0) : report.rows.length;
+    console.log(`[ReportScheduler] Sent "${schedule.name}" to ${user.email} (${rowCount} ${granularity} rows)`);
   } catch (err: any) {
     const sgMessage = err?.response?.body?.errors?.[0]?.message;
     const msg = sgMessage || err?.message || "Unknown error";

@@ -95,25 +95,20 @@ router.post("/api/reports/analytics/email", requireAuth, async (req: any, res) =
     });
 
     const dateSlug = report.generatedAt.toISOString().slice(0, 10);
-    const dailyName = `analytics-${body.range}d-${dateSlug}.csv`;
+    const filename = granularity === "hourly"
+      ? `analytics-hourly-${body.range}d-${dateSlug}.csv`
+      : `analytics-${body.range}d-${dateSlug}.csv`;
     const attachments: Array<{ filename: string; content: string; type: string }> = [
-      { filename: dailyName, content: report.csv, type: "text/csv" },
+      { filename, content: report.csv, type: "text/csv" },
     ];
-    if (granularity === "hourly" && report.hourlyCsv) {
-      attachments.push({
-        filename: `analytics-hourly-${body.range}d-${dateSlug}.csv`,
-        content: report.hourlyCsv,
-        type: "text/csv",
-      });
-    }
 
-    const subjectSuffix = granularity === "hourly"
-      ? `${body.range}d (${report.rows.length} daily + ${report.hourlyRows?.length ?? 0} hourly rows)`
-      : `${body.range}d (${report.rows.length} rows)`;
+    const subject = granularity === "hourly"
+      ? `Hourly analytics report — ${body.range}d (${report.hourlyRows?.length ?? 0} hourly rows)`
+      : `Analytics report — ${body.range}d (${report.rows.length} rows)`;
 
     await sendMail({
       to: userEmail,
-      subject: `Analytics report — ${subjectSuffix}`,
+      subject,
       html: report.html,
       attachments,
     });
