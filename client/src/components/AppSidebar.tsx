@@ -77,7 +77,7 @@ export function AppSidebar() {
 
   const handleLogout = async () => {
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
-    await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+    await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
     window.location.href = "/";
   };
 

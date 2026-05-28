@@ -83,7 +83,7 @@ export default function Settings() {
       if (firstName) data.firstName = firstName;
       if (lastName) data.lastName = lastName;
       await apiRequest("PATCH", "/api/auth/me", data);
-      await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       toast({
         title: "Profile Updated",
         description: "Your profile has been saved",

@@ -17,7 +17,7 @@ export default function Login() {
     try {
       const res = await apiRequest("POST", "/api/auth/login", { email, password });
       const userData = await res.json();
-      queryClient.setQueryData(["/api/auth/user"], userData);
+      queryClient.setQueryData(["/api/auth/me"], userData);
     } catch (err: any) {
       const msg = err.message?.includes("401")
         ? "Invalid email or password"

@@ -142,7 +142,7 @@ function AppContent() {
                   size="sm"
                   onClick={async () => {
                     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
-                    await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+                    await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
                     window.location.href = "/";
                   }}
                   data-testid="button-logout"
