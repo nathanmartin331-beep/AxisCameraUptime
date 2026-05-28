@@ -23,7 +23,7 @@ export interface AnalyticsReportRow {
 }
 
 export interface AnalyticsHourlyReportRow {
-  hour: string; // ISO UTC
+  hour: string; // ISO UTC bucket start
   cameraName: string;
   location: string;
   scenario: string;
@@ -36,6 +36,9 @@ export interface BuildReportParams {
   cameraIds?: string[];
   eventTypes?: string[];
   granularity?: ReportGranularity;
+  // IANA timezone (e.g. "America/New_York"). Used to bucket daily totals and
+  // render dates/hours in the email + CSV. Defaults to the host's system TZ.
+  timezone?: string;
 }
 
 export interface ReportArtifacts {
@@ -48,6 +51,12 @@ export interface ReportArtifacts {
   granularity: ReportGranularity;
   generatedAt: Date;
   cameraCount: number;
+  timezone: string;
+}
+
+function resolveTimezone(tz?: string): string {
+  if (tz && tz.trim()) return tz.trim();
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
 
 export async function buildAnalyticsReport(params: BuildReportParams): Promise<ReportArtifacts> {
@@ -56,6 +65,7 @@ export async function buildAnalyticsReport(params: BuildReportParams): Promise<R
     throw new Error(`Hourly reports support only ${SUPPORTED_HOURLY_RANGES.join("/")} day ranges`);
   }
 
+  const timezone = resolveTimezone(params.timezone);
   const eventTypes = params.eventTypes?.length ? params.eventTypes : [...DEFAULT_EVENT_TYPES];
 
   const allCameras = await storage.getAllCameras();
@@ -92,6 +102,7 @@ export async function buildAnalyticsReport(params: BuildReportParams): Promise<R
           camera.id,
           eventType,
           params.rangeDays,
+          timezone,
         );
         for (const [scenario, days] of Object.entries(byScenario)) {
           for (const day of days) {
@@ -128,15 +139,16 @@ export async function buildAnalyticsReport(params: BuildReportParams): Promise<R
   return {
     rows: isHourly ? [] : rows,
     hourlyRows: isHourly ? hourlyRows : undefined,
-    csv: isHourly ? renderHourlyCsv(hourlyRows) : renderCsv(rows),
-    hourlyCsv: isHourly ? renderHourlyCsv(hourlyRows) : undefined,
+    csv: isHourly ? renderHourlyCsv(hourlyRows, timezone) : renderCsv(rows),
+    hourlyCsv: isHourly ? renderHourlyCsv(hourlyRows, timezone) : undefined,
     html: isHourly
-      ? renderHourlyHtml(hourlyRows, params.rangeDays)
-      : renderHtml(rows, params.rangeDays),
+      ? renderHourlyHtml(hourlyRows, params.rangeDays, timezone)
+      : renderHtml(rows, params.rangeDays, timezone),
     rangeDays: params.rangeDays,
     granularity,
     generatedAt: new Date(),
     cameraCount: cameras.length,
+    timezone,
   };
 }
 
@@ -158,10 +170,11 @@ function renderCsv(rows: AnalyticsReportRow[]): string {
   return [header, ...body].join("\n");
 }
 
-function renderHourlyCsv(rows: AnalyticsHourlyReportRow[]): string {
-  const header = "Hour,Camera Name,Location,Scenario,Event Type,Count";
+function renderHourlyCsv(rows: AnalyticsHourlyReportRow[], timezone: string): string {
+  const tzAbbr = tzAbbreviation(timezone);
+  const header = `Hour (${tzAbbr}),Camera Name,Location,Scenario,Event Type,Count`;
   const body = rows.map((r) =>
-    [r.hour, r.cameraName, r.location, r.scenario, r.eventType, r.count]
+    [formatHourInTz(r.hour, timezone), r.cameraName, r.location, r.scenario, r.eventType, r.count]
       .map(csvEscape)
       .join(","),
   );
@@ -184,7 +197,46 @@ function rangeLabel(days: ReportRange): string {
   return "the last 365 days";
 }
 
-function renderHtml(rows: AnalyticsReportRow[], rangeDays: ReportRange): string {
+// Short timezone abbreviation (e.g. "EDT") for a given IANA zone. If the
+// runtime can't produce one, falls back to the full IANA name.
+function tzAbbreviation(timezone: string, at: Date = new Date()): string {
+  try {
+    const dtf = new Intl.DateTimeFormat("en-US", { timeZone: timezone, timeZoneName: "short" });
+    const part = dtf.formatToParts(at).find((p) => p.type === "timeZoneName");
+    if (part?.value) return part.value;
+  } catch {
+    /* fall through */
+  }
+  return timezone;
+}
+
+function formatHourInTz(iso: string, timezone: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  try {
+    const dtf = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    const map: Record<string, string> = {};
+    for (const p of dtf.formatToParts(d)) {
+      if (p.type !== "literal") map[p.type] = p.value;
+    }
+    // Intl.DateTimeFormat with hour12: false can produce hour "24" at midnight
+    // in some runtimes; normalize to "00".
+    const hour = map.hour === "24" ? "00" : map.hour;
+    return `${map.year}-${map.month}-${map.day} ${hour}:${map.minute}`;
+  } catch {
+    return iso;
+  }
+}
+
+function renderHtml(rows: AnalyticsReportRow[], rangeDays: ReportRange, timezone: string): string {
   const total = rows.reduce((acc, r) => acc + r.count, 0).toLocaleString();
   const tableRows = rows
     .map(
@@ -205,7 +257,7 @@ function renderHtml(rows: AnalyticsReportRow[], rangeDays: ReportRange): string 
 
   return `<div style="font-family:Arial,sans-serif;color:#111827;">
   <h2 style="margin:0 0 8px 0;">Analytics Report</h2>
-  <p style="margin:0 0 16px 0;color:#374151;">Daily analytics totals for ${rangeLabel(rangeDays)}. Total events: <strong>${total}</strong>.</p>
+  <p style="margin:0 0 16px 0;color:#374151;">Daily analytics totals for ${rangeLabel(rangeDays)} (${htmlEscape(timezone)}). Total events: <strong>${total}</strong>.</p>
   ${emptyMessage}
   ${rows.length > 0 ? `<table style="border-collapse:collapse;font-size:13px;">
     <thead>
@@ -226,24 +278,15 @@ ${tableRows}
 </div>`;
 }
 
-function formatHourUtc(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  const hh = String(d.getUTCHours()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd} ${hh}:00 UTC`;
-}
-
-function renderHourlyHtml(rows: AnalyticsHourlyReportRow[], rangeDays: ReportRange): string {
+function renderHourlyHtml(rows: AnalyticsHourlyReportRow[], rangeDays: ReportRange, timezone: string): string {
   const total = rows.reduce((acc, r) => acc + r.count, 0).toLocaleString();
   const scenarioCount = new Set(rows.map((r) => r.scenario)).size;
+  const tzAbbr = tzAbbreviation(timezone);
 
   if (rows.length === 0) {
     return `<div style="font-family:Arial,sans-serif;color:#111827;">
   <h2 style="margin:0 0 8px 0;">Hourly Analytics Report</h2>
-  <p style="margin:0 0 16px 0;color:#374151;">Per-hour totals by scenario for ${rangeLabel(rangeDays)}.</p>
+  <p style="margin:0 0 16px 0;color:#374151;">Per-hour totals by scenario for ${rangeLabel(rangeDays)} (${htmlEscape(timezone)}).</p>
   <p style="color:#6b7280;">No hourly analytics data recorded for ${rangeLabel(rangeDays)}.</p>
 </div>`;
   }
@@ -255,7 +298,7 @@ function renderHourlyHtml(rows: AnalyticsHourlyReportRow[], rangeDays: ReportRan
   const tableRows = bodyRows
     .map(
       (r) => `<tr>
-  <td style="padding:6px 10px;border:1px solid #e5e7eb;white-space:nowrap;">${htmlEscape(formatHourUtc(r.hour))}</td>
+  <td style="padding:6px 10px;border:1px solid #e5e7eb;white-space:nowrap;">${htmlEscape(formatHourInTz(r.hour, timezone))}</td>
   <td style="padding:6px 10px;border:1px solid #e5e7eb;">${htmlEscape(r.cameraName)}</td>
   <td style="padding:6px 10px;border:1px solid #e5e7eb;">${htmlEscape(r.location)}</td>
   <td style="padding:6px 10px;border:1px solid #e5e7eb;">${htmlEscape(r.scenario)}</td>
@@ -271,11 +314,11 @@ function renderHourlyHtml(rows: AnalyticsHourlyReportRow[], rangeDays: ReportRan
 
   return `<div style="font-family:Arial,sans-serif;color:#111827;">
   <h2 style="margin:0 0 8px 0;">Hourly Analytics Report</h2>
-  <p style="margin:0 0 16px 0;color:#374151;">Per-hour totals by scenario for ${rangeLabel(rangeDays)}. <strong>${rows.length.toLocaleString()}</strong> hourly rows across <strong>${scenarioCount}</strong> scenario${scenarioCount === 1 ? "" : "s"}. Total events: <strong>${total}</strong>.</p>
+  <p style="margin:0 0 16px 0;color:#374151;">Per-hour totals by scenario for ${rangeLabel(rangeDays)} (${htmlEscape(timezone)}). <strong>${rows.length.toLocaleString()}</strong> hourly rows across <strong>${scenarioCount}</strong> scenario${scenarioCount === 1 ? "" : "s"}. Total events: <strong>${total}</strong>.</p>
   <table style="border-collapse:collapse;font-size:13px;">
     <thead>
       <tr style="background:#f3f4f6;">
-        <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;">Hour (UTC)</th>
+        <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;">Hour (${htmlEscape(tzAbbr)})</th>
         <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;">Camera</th>
         <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;">Location</th>
         <th style="padding:6px 10px;border:1px solid #e5e7eb;text-align:left;">Scenario</th>

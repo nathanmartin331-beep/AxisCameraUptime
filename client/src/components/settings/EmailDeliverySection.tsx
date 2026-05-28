@@ -17,6 +17,8 @@ interface EmailConfig {
   emailEnabled: boolean;
   apiKeyPrefix: string | null;
   isConfigured: boolean;
+  reportTimezone: string | null;
+  effectiveReportTimezone: string;
 }
 
 export default function EmailDeliverySection() {
@@ -30,12 +32,14 @@ export default function EmailDeliverySection() {
   const [fromEmail, setFromEmail] = useState("");
   const [fromName, setFromName] = useState("");
   const [enabled, setEnabled] = useState(false);
+  const [reportTimezone, setReportTimezone] = useState("");
 
   useEffect(() => {
     if (config) {
       setFromEmail(config.fromEmail ?? "");
       setFromName(config.fromName ?? "");
       setEnabled(config.emailEnabled);
+      setReportTimezone(config.reportTimezone ?? "");
     }
   }, [config]);
 
@@ -45,6 +49,9 @@ export default function EmailDeliverySection() {
         fromEmail: fromEmail || undefined,
         fromName: fromName || undefined,
         emailEnabled: enabled,
+        // Empty string clears the override; backend stores null and falls back
+        // to the host system timezone.
+        reportTimezone: reportTimezone.trim() || null,
       };
       if (apiKey.trim()) body.apiKey = apiKey.trim();
       const res = await apiRequest("PATCH", "/api/settings/email", body);
@@ -133,6 +140,23 @@ export default function EmailDeliverySection() {
                   data-testid="input-from-name"
                 />
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="report-tz">Report timezone</Label>
+              <Input
+                id="report-tz"
+                value={reportTimezone}
+                placeholder={config?.effectiveReportTimezone ?? "America/New_York"}
+                onChange={(e) => setReportTimezone(e.target.value)}
+                data-testid="input-report-timezone"
+              />
+              <p className="text-xs text-muted-foreground">
+                IANA timezone (e.g. <code>America/New_York</code>) used to render
+                dates and hours in scheduled and on-demand report emails/CSVs.
+                Leave blank to use the host system timezone
+                {config ? <> (<code>{config.effectiveReportTimezone}</code>)</> : null}.
+              </p>
             </div>
 
             <div className="flex items-center justify-between rounded-lg border p-3">

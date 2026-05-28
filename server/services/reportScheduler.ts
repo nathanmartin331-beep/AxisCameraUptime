@@ -55,10 +55,12 @@ export async function runSchedule(schedule: ReportSchedule): Promise<void> {
 
   try {
     const granularity = (schedule.granularity as ReportGranularity | undefined) ?? "daily";
+    const appSettings = await storage.getAppSettings();
     const report = await buildAnalyticsReport({
       rangeDays: schedule.rangeDays as ReportRange,
       cameraIds: schedule.cameraIds ?? undefined,
       granularity,
+      timezone: appSettings.reportTimezone ?? undefined,
     });
 
     const dateSlug = report.generatedAt.toISOString().slice(0, 10);

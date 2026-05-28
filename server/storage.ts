@@ -235,7 +235,7 @@ export interface IStorage {
   getLatestAnalyticsEvent(cameraId: string, eventType: string): Promise<AnalyticsEvent | undefined>;
   getLatestAnalyticsEventsByScenario(cameraId: string, eventType: string): Promise<AnalyticsEvent[]>;
   getAnalyticsDailyTotals(cameraId: string, eventType: string, days: number): Promise<Array<{ date: string; total: number; metadata?: Record<string, any> }>>;
-  getAnalyticsDailyTotalsByScenario(cameraId: string, eventType: string, days: number): Promise<Record<string, Array<{ date: string; total: number; metadata?: Record<string, any> }>>>;
+  getAnalyticsDailyTotalsByScenario(cameraId: string, eventType: string, days: number, timezone?: string): Promise<Record<string, Array<{ date: string; total: number; metadata?: Record<string, any> }>>>;
   getAnalyticsHourlyTotals(cameraId: string, eventType: string, days: number): Promise<Array<{ hour: string; total: number; metadata?: Record<string, any> }>>;
   getAnalyticsHourlyTotalsByScenario(cameraId: string, eventType: string, days: number): Promise<Record<string, Array<{ hour: string; total: number; metadata?: Record<string, any> }>>>;
   getLatestAnalyticsPerCamera(cameraIds: string[], eventTypes: string[]): Promise<Map<string, Map<string, { value: number; metadata?: Record<string, any> }>>>;
@@ -289,7 +289,7 @@ export interface IStorage {
 
   // App-wide settings (singleton)
   getAppSettings(): Promise<AppSettings>;
-  updateAppSettings(patch: Partial<Pick<AppSettings, 'sendgridApiKey' | 'sendgridApiKeyPrefix' | 'fromEmail' | 'fromName' | 'emailEnabled'>>): Promise<AppSettings>;
+  updateAppSettings(patch: Partial<Pick<AppSettings, 'sendgridApiKey' | 'sendgridApiKeyPrefix' | 'fromEmail' | 'fromName' | 'emailEnabled' | 'reportTimezone'>>): Promise<AppSettings>;
 
   // Report schedules
   listReportSchedulesByUser(userId: string): Promise<ReportSchedule[]>;
@@ -1338,7 +1338,8 @@ export class DatabaseStorage implements IStorage {
   async getAnalyticsDailyTotalsByScenario(
     cameraId: string,
     eventType: string,
-    days: number
+    days: number,
+    timezone?: string,
   ): Promise<Record<string, Array<{ date: string; total: number; metadata?: Record<string, any> }>>> {
     const endDate = new Date();
     const startDate = new Date();
@@ -1346,6 +1347,25 @@ export class DatabaseStorage implements IStorage {
     startDate.setHours(0, 0, 0, 0);
     const startTs = Math.floor(startDate.getTime() / 1000);
     const endTs = Math.floor(endDate.getTime() / 1000);
+
+    // Format epoch-ms as YYYY-MM-DD in `timezone`. With no tz, uses host local
+    // time (legacy behavior). Note: analytics_daily_summary's day_start is fixed
+    // at UTC midnight, so for non-UTC timezones the boundary day may shift by
+    // one — this is unavoidable without re-aggregating from raw events.
+    const dateKey = timezone
+      ? (() => {
+          const dtf = new Intl.DateTimeFormat("en-CA", {
+            timeZone: timezone,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+          });
+          return (ms: number) => dtf.format(new Date(ms));
+        })()
+      : (ms: number) => {
+          const d = new Date(ms);
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        };
 
     // scenarioMap: scenario -> dateKey -> { total, metadata }
     const scenarioMap = new Map<string, Map<string, { total: number; metadata?: Record<string, any> }>>();
@@ -1363,12 +1383,11 @@ export class DatabaseStorage implements IStorage {
     `).all(cameraId, eventType, startTs, endTs) as Array<{ day_start: number; max_value: number; metadata: string | null; scenario: string }>;
 
     for (const row of dailyRows) {
-      const d = new Date(row.day_start * 1000);
-      const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const key = dateKey(row.day_start * 1000);
       let meta: Record<string, any> | undefined;
       if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
       const dmap = ensureScenario(row.scenario);
-      dmap.set(dateKey, { total: row.max_value ?? 0, metadata: meta });
+      dmap.set(key, { total: row.max_value ?? 0, metadata: meta });
     }
 
     // 2. Hourly summaries (6h–48h)
@@ -1379,15 +1398,14 @@ export class DatabaseStorage implements IStorage {
     `).all(cameraId, eventType, startTs, endTs) as Array<{ hour_start: number; max_value: number; metadata: string | null; scenario: string }>;
 
     for (const row of hourlyRows) {
-      const d = new Date(row.hour_start * 1000);
-      const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const key = dateKey(row.hour_start * 1000);
       const hourMax = row.max_value ?? 0;
       const dmap = ensureScenario(row.scenario);
-      const existing = dmap.get(dateKey);
+      const existing = dmap.get(key);
       if (!existing || hourMax > existing.total) {
         let meta: Record<string, any> | undefined;
         if (row.metadata) { try { meta = JSON.parse(row.metadata); } catch {} }
-        dmap.set(dateKey, { total: hourMax, metadata: meta });
+        dmap.set(key, { total: hourMax, metadata: meta });
       }
     }
 
@@ -1421,11 +1439,10 @@ export class DatabaseStorage implements IStorage {
     perScenarioTs.forEach((tsMap, scenario) => {
       const dmap = ensureScenario(scenario);
       tsMap.forEach((data, ts) => {
-        const d = new Date(ts);
-        const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-        const existing = dmap.get(dateKey);
+        const key = dateKey(ts);
+        const existing = dmap.get(key);
         if (!existing || data.value > existing.total) {
-          dmap.set(dateKey, { total: data.value, metadata: data.metadata });
+          dmap.set(key, { total: data.value, metadata: data.metadata });
         }
       });
     });
@@ -2330,7 +2347,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateAppSettings(
-    patch: Partial<Pick<AppSettings, 'sendgridApiKey' | 'sendgridApiKeyPrefix' | 'fromEmail' | 'fromName' | 'emailEnabled'>>
+    patch: Partial<Pick<AppSettings, 'sendgridApiKey' | 'sendgridApiKeyPrefix' | 'fromEmail' | 'fromName' | 'emailEnabled' | 'reportTimezone'>>
   ): Promise<AppSettings> {
     await this.getAppSettings();
     const [updated] = await db

@@ -52,7 +52,13 @@ router.get("/api/reports/analytics/export", requireAuth, async (req: any, res) =
     const cameraIds = parseCameraIds(req.query.cameraIds);
     if (cameraIds === null) return sendError(res, 400, "Invalid cameraIds");
 
-    const report = await buildAnalyticsReport({ rangeDays: range, cameraIds, granularity });
+    const appSettings = await storage.getAppSettings();
+    const report = await buildAnalyticsReport({
+      rangeDays: range,
+      cameraIds,
+      granularity,
+      timezone: appSettings.reportTimezone ?? undefined,
+    });
 
     if (granularity === "hourly" && report.hourlyCsv) {
       const filename = `analytics-hourly-${range}d-${report.generatedAt.toISOString().slice(0, 10)}.csv`;
@@ -88,10 +94,12 @@ router.post("/api/reports/analytics/email", requireAuth, async (req: any, res) =
     const userEmail = req.user?.email;
     if (!userEmail) return sendError(res, 400, "Your account has no email address on file");
 
+    const appSettings = await storage.getAppSettings();
     const report = await buildAnalyticsReport({
       rangeDays: body.range,
       cameraIds: body.cameraIds,
       granularity,
+      timezone: appSettings.reportTimezone ?? undefined,
     });
 
     const dateSlug = report.generatedAt.toISOString().slice(0, 10);

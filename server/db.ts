@@ -41,6 +41,7 @@ ensureColumn('user_settings', 'default_cert_validation_mode', "TEXT NOT NULL DEF
 ensureColumn('user_settings', 'global_ca_cert', 'TEXT');
 ensureColumn('user_settings', 'hourly_retention_days', 'INTEGER DEFAULT 30');
 ensureColumn('report_schedules', 'granularity', "TEXT NOT NULL DEFAULT 'daily'");
+ensureColumn('app_settings', 'report_timezone', 'TEXT');
 
 // Migrate existing cameras: verifySslCert=true → certValidationMode='ca'
 try {
@@ -95,6 +96,7 @@ sqlite.exec(`
     from_email TEXT,
     from_name TEXT,
     email_enabled INTEGER DEFAULT 0,
+    report_timezone TEXT,
     updated_at INTEGER
   )
 `);

@@ -289,6 +289,9 @@ router.get("/api/settings/email", requireAdmin, async (_req: any, res) => {
       emailEnabled: cfg.emailEnabled ?? false,
       apiKeyPrefix: cfg.sendgridApiKeyPrefix,
       isConfigured: !!cfg.sendgridApiKey,
+      reportTimezone: cfg.reportTimezone,
+      effectiveReportTimezone:
+        cfg.reportTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
   } catch (error) {
     console.error("Error fetching email settings:", error);
@@ -308,6 +311,8 @@ router.patch("/api/settings/email", requireAdmin, async (req: any, res) => {
       fromEmail: z.string().email().max(254).optional(),
       fromName: z.string().min(1).max(100).optional(),
       emailEnabled: z.boolean().optional(),
+      // Empty string clears the override (falls back to host system timezone).
+      reportTimezone: z.string().max(64).nullable().optional(),
     });
 
     const body = bodySchema.parse(req.body);
@@ -316,6 +321,18 @@ router.patch("/api/settings/email", requireAdmin, async (req: any, res) => {
     if (body.fromEmail !== undefined) patch.fromEmail = body.fromEmail;
     if (body.fromName !== undefined) patch.fromName = body.fromName;
     if (body.emailEnabled !== undefined) patch.emailEnabled = body.emailEnabled;
+
+    if (body.reportTimezone !== undefined) {
+      const tz = body.reportTimezone?.trim() || null;
+      if (tz) {
+        try {
+          new Intl.DateTimeFormat("en-US", { timeZone: tz });
+        } catch {
+          return sendError(res, 400, `Invalid timezone: ${tz}`);
+        }
+      }
+      patch.reportTimezone = tz;
+    }
 
     if (body.apiKey !== undefined) {
       patch.sendgridApiKey = await encryptPassword(body.apiKey);
@@ -329,6 +346,9 @@ router.patch("/api/settings/email", requireAdmin, async (req: any, res) => {
       emailEnabled: updated.emailEnabled ?? false,
       apiKeyPrefix: updated.sendgridApiKeyPrefix,
       isConfigured: !!updated.sendgridApiKey,
+      reportTimezone: updated.reportTimezone,
+      effectiveReportTimezone:
+        updated.reportTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
   } catch (error: any) {
     if (error instanceof z.ZodError) return sendError(res, 400, error.errors[0].message);

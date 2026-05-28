@@ -529,6 +529,10 @@ export const appSettings = sqliteTable("app_settings", {
   fromEmail: text("from_email"),
   fromName: text("from_name"),
   emailEnabled: integer("email_enabled", { mode: "boolean" }).default(false),
+  // IANA timezone (e.g. "America/New_York") used to render dates and hours in
+  // scheduled + on-demand report emails/CSVs. NULL means fall back to the host
+  // Node process's resolved system timezone.
+  reportTimezone: text("report_timezone"),
   updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
