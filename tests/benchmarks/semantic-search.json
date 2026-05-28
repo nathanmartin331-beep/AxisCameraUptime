@@ -1,0 +1,84 @@
+{
+  "name": "semantic-search-baseline",
+  "description": "Smoke benchmark for the claude-flow semantic memory stack. Five short project-specific documents are seeded into the `benchmark` namespace; each query should rank its expected document first via cosine similarity on 384-dim ONNX embeddings.",
+  "created": "2026-05-28",
+  "embedding": {
+    "provider": "local",
+    "model": "Xenova/all-MiniLM-L6-v2",
+    "dimension": 384,
+    "runtime": "@xenova/transformers via @claude-flow/embeddings"
+  },
+  "namespace": "benchmark",
+  "documents": [
+    {
+      "key": "uptime-tracking",
+      "value": "Camera uptime is computed from heartbeat events; cameras missing 3+ consecutive heartbeats are marked offline."
+    },
+    {
+      "key": "analytics-deltas",
+      "value": "analytics_events.value for line_crossing and people_in/out is a cumulative counter on the camera; per-period totals require computing deltas between consecutive samples."
+    },
+    {
+      "key": "hourly-rollups",
+      "value": "Hourly analytics rollups are exposed via REST API, server-sent events stream, and the emailed report; default window is 24h."
+    },
+    {
+      "key": "windows-service",
+      "value": "Production app runs as the AxisCameraUptime Windows service via NSSM, which forces NODE_ENV=production."
+    },
+    {
+      "key": "auth-pattern",
+      "value": "Local admin login uses JWT tokens with refresh; admin@axis.local was seeded as the default development account."
+    }
+  ],
+  "queries": [
+    {
+      "query": "how do I tell if a camera went down",
+      "expected_top_key": "uptime-tracking",
+      "baseline_scores": {
+        "uptime-tracking": 0.75,
+        "analytics-deltas": 0.63,
+        "windows-service": 0.57,
+        "hourly-rollups": 0.56,
+        "auth-pattern": 0.44
+      },
+      "baseline_latency_ms": 331,
+      "rationale": "Query shares only the word `camera` with the top hit; semantic match comes from `heartbeat`/`offline` <-> `went down`."
+    },
+    {
+      "query": "counting people entering and leaving",
+      "expected_top_key": "analytics-deltas",
+      "baseline_scores": {
+        "analytics-deltas": 0.73,
+        "uptime-tracking": 0.57,
+        "hourly-rollups": 0.54,
+        "auth-pattern": 0.48,
+        "windows-service": 0.44
+      },
+      "baseline_latency_ms": 327,
+      "rationale": "Query has zero word overlap; semantic match comes from `line_crossing`/`people_in/out` <-> `entering and leaving`."
+    }
+  ],
+  "reproduce": {
+    "seed": [
+      "claude-flow memory init",
+      "# For each document in `documents[]`:",
+      "claude-flow memory store --key <key> --value <value> --namespace benchmark"
+    ],
+    "run": [
+      "# For each query in `queries[]`:",
+      "claude-flow memory search --query <query>",
+      "# Top-ranked key should equal `expected_top_key`."
+    ],
+    "reset": [
+      "# For each document key:",
+      "claude-flow memory delete --key <key> --namespace benchmark"
+    ]
+  },
+  "pass_criteria": {
+    "rank_1_match": "For every query, the top-scoring result key must equal `expected_top_key`.",
+    "score_drift_warn_pct": 10,
+    "score_drift_fail_pct": 25,
+    "notes": "Baseline scores are observation-only; embedding models and similarity normalization may shift them across versions. Track rank-1 match strictly; warn/fail on score drift only as a regression signal."
+  }
+}
