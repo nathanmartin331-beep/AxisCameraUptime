@@ -2010,6 +2010,70 @@ async function cleanupStaleAnalyticsPaths(): Promise<void> {
 }
 
 /**
+ * Periodically re-discover AOA scenarios for cameras that already have a working
+ * Object Analytics path, so crossing-line scenarios ADDED / renamed / removed on
+ * the camera AFTER its initial probe are picked up automatically.
+ *
+ * Why this exists: the polling loop reads the STORED scenario list
+ * (caps.analytics.objectAnalyticsScenarios) and only ever queries those IDs.
+ * Until now that list was refreshed only by a manual "re-detect". A multi-sensor
+ * camera that gained a second sensor's crossing lines after its first probe kept
+ * streaming only the originally-detected scenarios — observed on the P3748-PLVE
+ * at 10.19.1.115: 2 of 4 lines streamed until a manual re-detect added scenarios
+ * 3/4. This runs a lightweight getConfiguration on the stored AOA path and
+ * persists the scenario list only when it actually changed.
+ */
+async function refreshAoaScenarios(): Promise<void> {
+  let allCameras: any[];
+  try {
+    allCameras = await db.select().from(cameras);
+  } catch (err: any) {
+    console.log(`[Analytics] Scenario refresh: camera load failed: ${err.message}`);
+    return;
+  }
+
+  for (const camera of allCameras) {
+    const caps = camera.capabilities as CameraCapabilities | null;
+    const path = caps?.analytics?.objectAnalyticsApiPath;
+    // Only cameras with a getConfiguration-capable AOA path. event2 / soap-events
+    // paths don't expose a scenario config, so there's nothing to refresh there.
+    if (!caps?.analytics?.objectAnalytics || !path) continue;
+    const configCapable =
+      path.includes("control.cgi") ||
+      path.includes("analytics-metadata-config") ||
+      path.includes("analytics_metadata_config");
+    if (!configCapable) continue;
+
+    try {
+      const password = await decryptPassword(camera.encryptedPassword);
+      const conn = getConnectionInfo(camera);
+      const configJson = await tryAoaPost(
+        camera.ipAddress, camera.username, password, path, "getConfiguration", 8000, conn
+      );
+      if (!configJson) continue;
+      const scenarios = extractAoaScenarios(configJson);
+      if (scenarios.length === 0) continue;
+
+      const prev = caps.analytics.objectAnalyticsScenarios || [];
+      const sig = (arr: Array<{ id?: number; name: string }>) =>
+        arr.map((s) => `${s.id ?? "?"}:${s.name}`).sort().join("|");
+      if (sig(scenarios) === sig(prev)) continue; // unchanged — skip the write
+
+      const updatedCaps = JSON.parse(JSON.stringify(caps));
+      updatedCaps.analytics.objectAnalyticsScenarios = scenarios;
+      await db.update(cameras).set({ capabilities: updatedCaps }).where(eq(cameras.id, camera.id));
+      console.log(
+        `[Analytics] Scenario refresh on ${camera.ipAddress}: ${prev.length} -> ${scenarios.length} ` +
+        `scenarios (${scenarios.map((s) => s.name).join(", ")})`
+      );
+    } catch {
+      // Best-effort; the next cycle retries. A camera briefly unreachable must
+      // never disturb its stored scenarios.
+    }
+  }
+}
+
+/**
  * Start the analytics polling service.
  * Polls every 1 minute (configurable via ANALYTICS_POLL_INTERVAL env var).
  */
@@ -2043,6 +2107,18 @@ export function startAnalyticsPolling() {
   });
 
   console.log(`[Analytics] Staggered polling: ${ANALYTICS_NUM_COHORTS} cohorts, ${ANALYTICS_COHORT_STAGGER_MS}ms apart`);
+
+  // Auto-refresh AOA scenarios so crossing lines added on a camera after its
+  // initial probe are picked up without a manual re-detect. Runs once ~60s after
+  // startup (fast catch-up on restart), then every AOA_SCENARIO_REFRESH_MINUTES
+  // (default 30; set 0 to disable).
+  const scenarioRefreshMin = parseInt(process.env.AOA_SCENARIO_REFRESH_MINUTES || "30", 10);
+  if (scenarioRefreshMin > 0) {
+    setTimeout(() => { void refreshAoaScenarios(); }, 60_000);
+    const refreshTimer = setInterval(() => { void refreshAoaScenarios(); }, scenarioRefreshMin * 60_000);
+    refreshTimer.unref?.();
+    console.log(`[Analytics] AOA scenario auto-refresh every ${scenarioRefreshMin} min`);
+  }
 }
 
 // Export for manual triggering
