@@ -64,6 +64,12 @@ export const createCameraSchema = insertCameraSchema
   .omit({ encryptedPassword: true, userId: true })
   .extend({
     password: z.string().min(1, "Password is required"),
+    // Forms send port as a string (or "" when blank); coerce to a number and
+    // let blank fall back to the column default. Covers all add-camera entry points.
+    port: z.preprocess(
+      (v) => (v === "" || v == null ? undefined : Number(v)),
+      z.number().int().min(1).max(65535).optional(),
+    ),
   });
 
 // Allowed fields for camera PATCH updates

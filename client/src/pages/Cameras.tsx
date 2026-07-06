@@ -106,7 +106,7 @@ export default function Cameras() {
         location: data.location,
         notes: data.notes,
         protocol: data.protocol,
-        port: data.port ? parseInt(data.port, 10) : undefined,
+        port: data.port,
         certValidationMode: data.certValidationMode,
       };
       return await apiRequest("POST", "/api/cameras", payload);
